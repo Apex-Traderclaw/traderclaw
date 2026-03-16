@@ -237,12 +237,6 @@ function normalizeLane(input) {
   return input === "event-driven" ? "event-driven" : "quick-local";
 }
 
-function shellQuoteForDisplay(value) {
-  const raw = String(value ?? "");
-  if (raw.length === 0) return "''";
-  return `'${raw.replace(/'/g, `'\\''`)}'`;
-}
-
 export class InstallerStepEngine {
   constructor(modeConfig, options = {}, hooks = {}) {
     this.modeConfig = modeConfig;
@@ -493,7 +487,7 @@ export class InstallerStepEngine {
       args.push("--gateway-base-url", gatewayBaseUrl);
     }
 
-    const command = [this.modeConfig.cliName, ...args].map((part) => shellQuoteForDisplay(part)).join(" ");
+    const command = [this.modeConfig.cliName, ...args].join(" ");
     return {
       pending: true,
       command,

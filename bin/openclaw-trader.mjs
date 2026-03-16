@@ -775,9 +775,24 @@ async function cmdSetup(args) {
       process.exit(1);
     }
 
-    const active = getNestedBool(getRes.data, "active");
-    if (active !== true) {
-      printError(`  Credential verification returned active=${String(active)}. Setup is blocked until active=true.`);
+    const credentialList = Array.isArray(getRes.data?.credentials) ? getRes.data.credentials : [];
+    const normalizedGatewayBaseUrl = (gatewayBaseUrl || "").replace(/\/+$/, "");
+    let matchingCredentials = credentialList.filter((entry) => {
+      const entryUrl = typeof entry?.gatewayBaseUrl === "string" ? entry.gatewayBaseUrl.replace(/\/+$/, "") : "";
+      return entryUrl && entryUrl === normalizedGatewayBaseUrl;
+    });
+    if (matchingCredentials.length === 0) {
+      matchingCredentials = credentialList;
+    }
+
+    const hasActiveCredential = matchingCredentials.some((entry) => entry && entry.active === true);
+    const legacyActive = getNestedBool(getRes.data, "active");
+    const active = hasActiveCredential || legacyActive === true;
+
+    if (!active) {
+      printError(
+        `  Credential verification did not find an active credential (matched=${matchingCredentials.length}, total=${credentialList.length}, legacyActive=${String(legacyActive)}).`,
+      );
       printWarn("  The orchestrator could not confirm reachability of your gateway URL.");
       printWarn("  Ensure the URL is publicly reachable and rerun: traderclaw setup");
       process.exit(1);
