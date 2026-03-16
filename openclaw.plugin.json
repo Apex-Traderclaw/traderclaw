@@ -1,0 +1,97 @@
+{
+  "id": "solana-trader",
+  "name": "Solana Trader",
+  "description": "Autonomous Solana memecoin trading agent plugin — connects OpenClaw to a trading orchestrator for scanning, analysis, risk management, and execution.",
+  "skills": ["skills/solana-trader"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["orchestratorUrl"],
+    "properties": {
+      "orchestratorUrl": {
+        "type": "string",
+        "description": "Base URL of the trading orchestrator API"
+      },
+      "walletId": {
+        "type": "string",
+        "format": "uuid",
+        "description": "Wallet ID (UUID string) for this agent's trading account"
+      },
+      "apiKey": {
+        "type": "string",
+        "description": "API key obtained from signup or https://traderclaw.ai/register"
+      },
+      "externalUserId": {
+        "type": "string",
+        "description": "External user ID for signup (auto-generated if not provided)"
+      },
+      "refreshToken": {
+        "type": "string",
+        "description": "Refresh token from last session (auto-populated after authentication)"
+      },
+      "walletPublicKey": {
+        "type": "string",
+        "description": "Solana wallet public key (auto-populated after session establishment)"
+      },
+      "walletPrivateKey": {
+        "type": "string",
+        "description": "Solana wallet private key in base58 (only needed for re-auth when wallet already exists on account)"
+      },
+      "apiTimeout": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 120000,
+        "default": 30000,
+        "description": "HTTP request timeout in milliseconds"
+      },
+      "agentId": {
+        "type": "string",
+        "description": "Agent ID for event-to-agent forwarding (e.g., 'main'). When set, subscriptions automatically include this agentId so the orchestrator forwards stream events to your Gateway via /v1/responses."
+      }
+    }
+  },
+  "uiHints": {
+    "orchestratorUrl": {
+      "label": "Orchestrator URL",
+      "placeholder": "https://api.traderclaw.ai"
+    },
+    "walletId": {
+      "label": "Wallet ID",
+      "placeholder": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    },
+    "apiKey": {
+      "label": "API Key",
+      "placeholder": "oc_xxx",
+      "sensitive": true
+    },
+    "externalUserId": {
+      "label": "External User ID",
+      "placeholder": "agent_user_123",
+      "advanced": true
+    },
+    "refreshToken": {
+      "label": "Refresh Token",
+      "sensitive": true,
+      "advanced": true
+    },
+    "walletPublicKey": {
+      "label": "Wallet Public Key",
+      "advanced": true
+    },
+    "walletPrivateKey": {
+      "label": "Wallet Private Key",
+      "placeholder": "base58 encoded private key",
+      "sensitive": true,
+      "advanced": true
+    },
+    "apiTimeout": {
+      "label": "API Timeout (ms)",
+      "advanced": true
+    },
+    "agentId": {
+      "label": "Agent ID",
+      "placeholder": "main",
+      "advanced": true
+    }
+  }
+}

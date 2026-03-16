@@ -1,0 +1,10 @@
+*.ts
+!dist/**/*.js
+!bin/**/*.mjs
+tsconfig.json
+build.mjs
+tests/
+src/
+bin/cli.ts
+.gitignore
+node_modules/

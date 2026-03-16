@@ -1,0 +1,57 @@
+{
+  "name": "traderclaw-v1",
+  "version": "1.0.7",
+  "description": "TraderClaw V1 — autonomous Solana memecoin trading agent plugin for OpenClaw",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "bin": {
+    "traderclaw": "./bin/openclaw-trader.mjs"
+  },
+  "files": [
+    "dist/",
+    "bin/*.mjs",
+    "skills/",
+    "config/",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "traderclaw",
+    "openclaw",
+    "solana",
+    "memecoin",
+    "trading",
+    "agent",
+    "plugin"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.0",
+    "esbuild": "^0.24.0"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": ["./dist/index.js"]
+  }
+}
