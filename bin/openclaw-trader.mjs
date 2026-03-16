@@ -52,6 +52,14 @@ function commandExists(cmd) {
   }
 }
 
+function getCommandOutput(cmd) {
+  try {
+    return execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], shell: true }).trim();
+  } catch {
+    return null;
+  }
+}
+
 function maskKey(key) {
   if (!key || key.length <= 8) return "****";
   return key.slice(0, 4) + "..." + key.slice(-4);
