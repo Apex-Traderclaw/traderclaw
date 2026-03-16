@@ -88,6 +88,22 @@ function privilegeRemediationMessage(cmd, args = [], customLines = []) {
   return lines.join("\n");
 }
 
+function gatewayTimeoutRemediation() {
+  return [
+    "Gateway bootstrap timed out waiting for health checks.",
+    "Run these commands in terminal, then click Start Installation again:",
+    "1) openclaw gateway status --json || true",
+    "2) openclaw gateway probe || true",
+    "3) openclaw gateway stop || true",
+    "4) openclaw gateway install",
+    "5) openclaw gateway restart",
+    "6) openclaw gateway status --json",
+    "7) tailscale funnel --bg 18789",
+    "8) tailscale funnel status",
+    "If gateway still fails on a low-memory VM, add swap or use a larger staging size (>=2GB RAM recommended).",
+  ].join("\n");
+}
+
 function runCommandWithEvents(cmd, args = [], opts = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
@@ -412,9 +428,21 @@ export class InstallerStepEngine {
       }
       if (!this.options.skipGatewayBootstrap) {
         await this.runStep("gateway_bootstrap", "Starting OpenClaw gateway and Funnel", async () => {
-          await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "install"]);
-          await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "restart"]);
-          return this.runFunnel();
+          try {
+            await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "install"]);
+            await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "restart"]);
+            return this.runFunnel();
+          } catch (err) {
+            const text = `${err?.message || ""}\n${err?.stderr || ""}\n${err?.stdout || ""}`.toLowerCase();
+            if (
+              text.includes("gateway restart timed out")
+              || text.includes("timed out after 60s waiting for health checks")
+              || text.includes("waiting for gateway port")
+            ) {
+              throw new Error(gatewayTimeoutRemediation());
+            }
+            throw err;
+          }
         });
       }
 
