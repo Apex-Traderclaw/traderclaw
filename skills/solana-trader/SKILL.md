@@ -83,6 +83,16 @@ Full processing instructions are in Step 1.5b below.
 
 **Exception:** If the incoming message starts with `CRON_JOB:`, skip this startup sequence entirely and go directly to the "CRON_JOB Recognition" section.
 
+### Preferred startup path (runtime-gated)
+
+Call the runtime startup gate first:
+
+```
+Call solana_startup_gate({ autoFixGateway: true, force: true })
+```
+
+Treat any `ok: false` step as a hard stop. Report the failing steps clearly and do not continue.
+
 ### Startup Step 1: Verify System Connectivity
 
 ```
@@ -146,6 +156,16 @@ If the kill switch is active, enter Position Defense Mode immediately (see Step 
 
 **After all 4 startup steps complete → proceed to the trading loop (Step 0: INTERRUPT CHECK).**
 
+### Startup Step 5: Forwarding Probe (recommended)
+
+Run a synthetic forwarding probe to confirm `/v1/responses` wake-path health:
+
+```
+Call solana_gateway_forward_probe({ agentId: "main", source: "startup_sequence" })
+```
+
+If this probe fails, continue with caution for heartbeat-buffer processing but report that event-driven wake reliability is degraded.
+
 ---
 
 ## Mode System
@@ -172,8 +192,7 @@ All values are internal targets that must still comply with server policy caps.
 | Rapid drawdown defense trigger | -20% on any position | -15% on any position |
 | Partial profit trigger | +40–60% (optional) | +25–50% (take partial quickly) |
 | Exploration ratio | 20% experimental / 80% proven | 50% experimental / 50% proven |
-| Minor weight evolution after | ≥5 closed trades | ≥3 closed trades |
-| Major weight evolution after | ≥10 closed trades | ≥10 closed trades |
+| Weight evolution (minimum trades) | ≥20 closed trades | ≥20 closed trades |
 | Max weight delta per update | ±0.10 | ±0.15 |
 | Weight floor | 0.02 | 0.01 |
 | Weight cap | 0.40 | 0.50 |
@@ -262,7 +281,7 @@ There is no context loss from this separation. Cron outputs flow into the persis
 ```
 1. WAKE UP — heartbeat timer, discovery event, or alpha webhook
        ↓
-2. Step 0: INTERRUPT CHECK — identify wake-up trigger, check kill switch, check dead money
+2. Step 0: INTERRUPT CHECK — identify wake-up trigger, check kill switch, check dead money, STRATEGY INTEGRITY CHECK
        ↓
 3. Step 1: SCAN — call solana_scan for broad discovery, process Bitquery subscriptions
        ↓
@@ -274,13 +293,19 @@ There is no context loss from this separation. Cron outputs flow into the persis
        ↓
 7. Step 4: DECIDE — apply mode thresholds, allocate capital, set stop-loss/take-profit
        ↓
-8. Step 5: EXECUTE — call solana_trade, respect Execution Policy Engine vetoes
+8. Step 5: PRECHECK — validate with policy engine
        ↓
-9. Step 6: MONITOR POSITIONS — check exits, trailing stops, dead money, partial takes
+9. Step 5.5: DECISION JOURNAL — write pre-trade rationale to memory BEFORE executing
        ↓
-10. Step 7: MEMORY & LEARN — log decisions, update trade journal, persist observations
+10. Step 6: EXECUTE — call solana_trade, respect Execution Policy Engine vetoes
        ↓
-11. SLEEP — wait for next heartbeat or event-driven wake-up
+11. Step 7: MONITOR POSITIONS — check exits, trailing stops, dead money, partial takes
+       ↓
+12. Step 8: REVIEW — honest post-trade journaling (inline: outcome tags, deep: cron)
+       ↓
+13. Step 8.5: STRUCTURED LEARNING LOG — decision-level learning entries (on errors/misses/surprises)
+       ↓
+14. SLEEP — wait for next heartbeat or event-driven wake-up
 ```
 
 ---
@@ -323,6 +348,24 @@ When woken by a heartbeat, discovery subscription, or alpha signal, you already 
 1. `solana_positions` — current open positions and unrealized PnL
 2. `solana_killswitch_status` — is kill switch active?
 3. `solana_capital_status` — portfolio health, daily usage, daily loss
+4. `solana_strategy_state` — current feature weights (for Strategy Integrity Check below)
+
+**Strategy Integrity Check (lightweight, every cycle):**
+
+After gathering portfolio state and strategy weights, run a quick self-audit before proceeding:
+
+1. Read the current feature weights from `solana_strategy_state`.
+2. Recall your last 3–5 trade decisions from this session (or from `solana_memory_search` with query `"pre_trade_rationale"` for the most recent entries).
+3. Compare: did your recent decisions align with your highest-weighted features? Specifically:
+   - If `volume_momentum` is your top weight but you've been entering low-volume tokens → drift detected.
+   - If `risk_inverse` is weighted ≥0.15 but you've been skipping risk checks or entering high-risk tokens → drift detected.
+   - If `liquidity_depth` is weighted ≥0.15 but you've been entering thin pools → drift detected.
+   - If you overrode your own model on 2+ of the last 5 decisions (e.g., "confidence was below threshold but I entered anyway") → drift detected.
+4. If drift is detected:
+   - Log via `solana_memory_write` with tag `strategy_drift_warning` including: which weight was violated, what the actual decision was, and why it diverged.
+   - Do NOT stop trading — this is informational, not a kill switch.
+   - The next `strategy_evolution` cron run will pick up `strategy_drift_warning` entries and investigate whether the weights need adjustment or the agent needs to re-commit to its model.
+5. If no drift: proceed normally. This check should take < 5 seconds of reasoning.
 
 Enter **Position Defense Mode** immediately if ANY of these are true:
 
@@ -491,6 +534,14 @@ Subsequent heartbeats:
 ```
 
 If `solana_alpha_subscribe` returns an error or you lose the WebSocket connection, the buffer will be empty but webhook signals still arrive. Re-subscribe on the next heartbeat cycle.
+
+If buffered signals stay empty for multiple heartbeat cycles, run:
+
+```
+Call solana_gateway_forward_probe({ agentId: "main", source: "heartbeat_recovery" })
+```
+
+Then call `solana_alpha_subscribe({ agentId: "main" })` again and continue polling `solana_alpha_signals`.
 
 **Signal priority classification:**
 
@@ -990,6 +1041,64 @@ Call `solana_trade_precheck` with your intended trade parameters.
 
 ---
 
+### Step 5.5: DECISION JOURNAL — Write Rationale BEFORE Executing
+
+> **The WAL Rule (Write-Ahead Log):** You MUST journal your decision rationale BEFORE placing a trade. Not after. Not "soon." BEFORE. The trade execution call is the LAST thing you do — the journal entry comes first.
+
+**Why this matters:** After a trade is placed, hindsight bias immediately distorts your memory of why you entered. You'll remember the confidence score being higher than it was, the red flags being smaller than they were. By writing the rationale first, you capture the true decision state — which is the most valuable data for the `strategy_evolution` cron to learn from.
+
+**Mandatory pre-trade journal entry:** Before every `solana_trade_execute` call, write a `solana_memory_write` entry with tag `pre_trade_rationale` containing:
+
+```
+Token: <symbol> (<mint address>)
+Side: <buy/sell>
+Size: <sizeSol> SOL (<X% of capital>)
+Confidence: <score> (threshold was <threshold>)
+Management: <LOCAL_MANAGED/SERVER_MANAGED>
+
+WHY THIS TOKEN:
+- <What discovery path surfaced it — scan, alpha signal, subscription event?>
+- <What lifecycle stage? FRESH/EMERGING/ESTABLISHED>
+- <Key thesis: the 1-2 sentence reason this is a good trade>
+
+WHY THIS SIZE:
+- <Base size from mode range>
+- <Adjustments applied: risk cap, precheck cap, liquidity cap, reduction triggers>
+- <Final size after all adjustments>
+
+EXIT PLAN:
+- SL: <X%> | TP levels: <[X, Y, Z]%> | Trailing: <X%>
+- <What specific condition would make you exit early?>
+
+WHAT COULD GO WRONG:
+- <Top 1-2 risks you're accepting>
+- <What red flags you noticed but decided to proceed despite>
+
+FEATURE SCORES (from your weighted model):
+- volume_momentum: <raw score>
+- buy_pressure: <raw score>
+- liquidity_depth: <raw score>
+- holder_quality: <raw score>
+- flow_divergence: <raw score>
+- token_maturity: <raw score>
+- risk_inverse: <raw score>
+
+ALPHA SOURCE (if applicable):
+- Source: <name> | Score: <systemScore> | Reputation: <0-100>
+```
+
+**After the trade executes,** you will later compare this pre-trade rationale against the actual outcome during `solana_trade_review`. This creates a feedback loop: your pre-trade reasoning is auditable, and the `strategy_evolution` cron can search `pre_trade_rationale` entries to find systematic reasoning errors.
+
+**For sells:** A shorter rationale is acceptable — tag with `pre_exit_rationale`:
+```
+Token: <symbol> | Side: sell | Size: <sizeSol>
+EXIT REASON: <stop-loss hit / take-profit / flow reversal / dead money / defense mode / manual>
+CURRENT PnL: <X% / X SOL>
+HELD FOR: <duration>
+```
+
+---
+
 ### Step 6: EXECUTE — Place the Trade
 
 Call `solana_trade_execute` with:
@@ -1084,40 +1193,9 @@ Use `solana_trades` to look up past trade IDs and details when reviewing. Use `s
 - Whether you detected any FOMO, revenge trading, or tilt in your decision
 - What you would do differently next time
 
-**Use consistent tags** (pass to `solana_memory_write`):
-- `momentum_win` — entered on momentum, exited profitably
-- `rug_escape` — detected rug risk, exited early
-- `chop_loss` — lost in sideways/choppy action
-- `late_entry` — entered too late in the move
-- `over_size` — position was too large for the setup
-- `bad_liquidity` — liquidity was insufficient for clean exit
-- `policy_denied` — trade or exit denied by policy engine
-- `regime_shift` — market regime changed during position
-- `thesis_correct` — overall thesis was right
-- `thesis_wrong` — overall thesis was wrong
-- `house_money_win` — extracted initial capital, rode house money to profit
-- `house_money_stopped` — house money position stopped out (still net positive)
-- `dead_money` — exited flat position to redeploy capital
-- `fomo_entry` — entered because of FOMO, not analysis (be honest)
-- `meta_rotation` — narrative/meta shift affected the position
-- `anti_rug_save` — anti-rug heuristics prevented a bad entry
-- `serial_deployer` — identified serial deployer pattern
+**Use consistent tags** — see the **Memory Tag Vocabulary** section for the complete tag reference. Use Trade Outcome tags for general reviews, Alpha-Specific tags for alpha-sourced positions (include source name in notes), and Self-Improvement tags for the learning engine.
 
-**Alpha-specific outcome tags** — use these when reviewing positions that were sourced from alpha signals. When closing an alpha-sourced position, always include the source name in the review notes and apply both general tags (from above) AND the relevant alpha-specific tags below:
-
-- `alpha_signal_win` — entered based on alpha signal, trade was profitable
-- `alpha_signal_loss` — entered based on alpha signal, trade was a loss
-- `alpha_clustering_win` — multiple independent sources called this token AND it was a winner
-- `alpha_stale_skip` — skipped a signal because it was too old (>90 min CRITICAL/HIGH, >60 min MEDIUM) or token already moved significantly
-- `alpha_source_quality` — journal entry about source reputation tracking or observations
-- `alpha_source_win` — a specific source's call led to a winning trade (include source name in notes)
-- `alpha_source_loss` — a specific source's call led to a losing trade (include source name in notes)
-- `alpha_risk_alert` — received a `kind: risk` signal on a held position
-- `alpha_exit_signal` — received a `kind: exit` signal on a held position
-- `alpha_front_run` — detected potential front-running: whale activity before the alpha call appeared
-- `alpha_skipped_regret` — skipped an alpha call that would have been profitable. Journal what made you skip (staleness? low score? weak confluence?) and learn from the miss. Was your skip criteria too conservative?
-- `alpha_skipped_correct` — skipped an alpha call that didn't work out. Good discipline — reinforce this behavior. Journal what red flags correctly kept you out.
-- `alpha_push_received` — agent was woken up by a push/webhook alpha signal rather than discovering it via buffer poll. Use to track push vs pull signal quality over time — do webhook-delivered signals outperform buffer-polled ones?
+When closing an alpha-sourced position, apply both general Trade Outcome tags AND the relevant Alpha-Specific tags.
 
 **Learning from inaction (use `solana_memory_write`, NOT `solana_trade_review`):**
 
@@ -1135,15 +1213,97 @@ Never distort outcomes. Your future strategy evolution depends on honest data.
 
 ---
 
+### Step 8.5: STRUCTURED LEARNING LOG — Decision-Level Learning
+
+> **Beyond win/loss tagging.** Trade reviews (Step 8) capture WHAT happened. The Structured Learning Log captures WHY you made a wrong decision, WHAT pattern you missed, or WHERE your reasoning broke down. This is the difference between tracking outcomes and improving the decision-making process itself.
+
+**When to create a learning entry:**
+
+Create a structured learning entry via `solana_memory_write` whenever any of these occur:
+
+1. **Wrong decision** — You entered a trade that lost, and you can identify a specific reasoning error (not just "market moved against me")
+2. **Missed signal** — You skipped a token that subsequently pumped, and you can identify what your filters missed
+3. **Strategy failure** — Your feature weights predicted a winner but it was a loser (or vice versa) — the model itself was wrong, not just the trade
+4. **Repeated mistake** — You notice you're making the same type of error again (entering too late, ignoring liquidity warnings, trusting low-reputation sources)
+5. **Near miss** — Your anti-rug check or risk analysis saved you from a bad trade, but you almost entered — document what nearly fooled you
+6. **Surprise outcome** — A trade worked or failed for completely unexpected reasons that your model doesn't currently capture
+
+**Entry format** — use tag `learning_entry` plus the area tag (see below):
+
+```
+LEARNING ENTRY: <ID>
+Priority: <P1/P2/P3>
+Area: <area_tag>
+Status: <open/investigating/resolved>
+See Also: <comma-separated IDs of related entries, if any>
+
+WHAT HAPPENED:
+<1-2 sentences describing the event>
+
+WHY IT WENT WRONG (or: WHAT I MISSED):
+<Root cause analysis — be specific. "Market was bad" is not a root cause.>
+
+EVIDENCE:
+<Token address, trade ID, feature scores, alpha source, timestamps — whatever makes this entry searchable>
+
+PATTERN CHECK:
+<Is this the first time, or have you seen this before? Search memory for similar entries.>
+<If recurring: link to previous entry IDs and note the recurrence count.>
+
+SUGGESTED ADJUSTMENT:
+<What should change? A weight? A filter threshold? A decision heuristic? A scanning behavior?>
+<Be specific but do NOT create hard rules — suggest soft adjustments that the strategy_evolution cron can evaluate.>
+```
+
+**Entry ID scheme:** `LRN-YYYYMMDD-NNN` (e.g., `LRN-20260315-001`). Increment NNN per day. The ID is written in the entry text — it is not a tool field. This makes entries searchable and linkable.
+
+**Priority levels:**
+
+| Priority | When to Use |
+|---|---|
+| `P3` | Minor insight or one-off mistake, no immediate action needed |
+| `P2` | Clear reasoning error that affected one trade outcome, or moderate capital loss |
+| `P1` | Recurring pattern (2+ linked entries), significant capital loss, or systematic flaw that keeps costing money |
+
+**Area tags** (use alongside `learning_entry`):
+
+| Tag | Area |
+|---|---|
+| `learning_entry_sizing` | Position sizing errors — too large, too small, wrong adjustments |
+| `learning_entry_timing` | Entry/exit timing errors — too early, too late, chased momentum |
+| `learning_entry_analysis` | Analysis errors — missed red flags, misread data, wrong lifecycle classification |
+| `learning_entry_model` | Feature weight model errors — weights predicted wrong, model blind spot |
+| `learning_entry_alpha` | Alpha signal processing errors — trusted wrong source, missed convergence, stale signal |
+| `learning_entry_risk` | Risk management errors — ignored warnings, wrong management mode, inadequate SL |
+| `learning_entry_meta` | Narrative/meta errors — wrong narrative call, missed rotation, overcommitted to dying meta |
+| `learning_entry_execution` | Execution errors — wrong slippage, missed precheck warnings, duplicate trade |
+
+**Linking related entries:**
+
+When you create a new entry and find a related past entry via `solana_memory_search`, add its ID to the `See Also` field. This creates a chain the `strategy_evolution` cron uses for recurring pattern detection. Example:
+
+```
+See Also: LRN-20260312-003, LRN-20260314-001
+```
+
+If linking to a past entry increases the chain to 3+ entries on the same theme, bump the new entry's priority to `P1` — this is a confirmed recurring pattern.
+
+**Resolution:** When a learning entry leads to a strategy adjustment (weight change, filter tweak, behavioral change), update a follow-up entry with status `resolved` and reference the strategy version where the fix was applied:
+
+```
+Resolution: Applied in strategy v1.4.0 — increased liquidity_depth weight from 0.18 to 0.24.
+Resolved by: strategy_evolution cron, LRN-20260315-001 chain (3 linked entries on thin-pool losses).
+```
+
+---
+
 ### Step 9: EVOLVE — Strategy Weight Update
 
 > **Cron cadence only.** This step runs every 4-6 hours via the `strategy_evolution` cron job in an isolated session. It does NOT run during the heartbeat fast loop. The fast loop reads current weights via `solana_strategy_state` but never updates them. All weight updates happen here, in the cron session, where you have full context to do deep retrospective analysis without competing with real-time trading.
 
 Evolve your weights only after accumulating enough closed trade reviews.
 
-**Minimum trades before evolution:**
-- Minor adjustments (small weight shifts): ≥5 closes (HARDENED) or ≥3 closes (DEGEN)
-- Major strategy shifts (large weight changes, new features): ≥10 closes (both modes)
+**Minimum trades before evolution:** ≥20 closed trades since the last strategy update. If insufficient, skip weight updates but still run Recurring Pattern Detection and Named Pattern Recognition.
 
 **Evolution process:**
 1. Call `solana_journal_summary` — review win rate, patterns, recent performance
@@ -1160,6 +1320,153 @@ Evolve your weights only after accumulating enough closed trade reviews.
 - No weight above cap: 0.40 (HARDENED) or 0.50 (DEGEN)
 - Sum of all weights must be approximately 1.0 (0.95–1.05 acceptable)
 - Always increment `strategyVersion` (e.g., v1.2.0 → v1.3.0 for minor, v1.2.0 → v2.0.0 for major)
+
+#### Anti-Drift Protocol (ADL) — Prevent Strategy Drift
+
+Before computing any weight adjustment, apply these anti-drift checks. The priority ordering for all evolution decisions is: **Stability > Explainability > Reusability > Novelty**.
+
+**ADL rules — 7 checks:**
+1. **No complexity for complexity's sake.** Never add weight to a feature just because it's "interesting" or "might help." Every weight change must be justified by measurable trade outcome data. If you can't point to specific trades where the change would have improved results, don't make the change.
+2. **No unverifiable changes.** If a proposed weight shift is based on reasoning you can't trace back to actual trade outcomes (e.g., "I feel like momentum is more important"), reject it. The evidence must be in your journal, trade reviews, or learning entries.
+3. **Stability first.** A strategy that produces consistent 55% win rate is better than one that swings between 70% and 30%. Prefer small, incremental adjustments that maintain consistency over dramatic shifts that might increase upside but also increase variance.
+4. **Explainability test.** For every proposed weight change, you must be able to write one sentence explaining WHY in terms of trade outcomes. If you can't explain it simply, the change is too speculative.
+5. **Weight velocity check.** Before adjusting any weight, search `solana_memory_search` with query `"strategy_evolution"` to review the last 3 evolution cycles. If a specific weight has **changed direction 3+ times** in recent evolutions (up → down → up, or down → up → down), **freeze that weight** for this cycle. Log with tag `weight_velocity_freeze`:
+   ```
+   WEIGHT VELOCITY FREEZE: <feature_key>
+   History: v1.2.0 increased to 0.22, v1.3.0 decreased to 0.18, v1.4.0 increased to 0.21
+   Reason: Oscillating — insufficient data to determine true direction. Freezing at current value until 10+ more trades provide clearer signal.
+   ```
+   A weight that keeps oscillating means the evidence is inconclusive — the correct response is to hold steady, not to keep adjusting.
+6. **Reversion check.** If a weight was changed in the last evolution cycle and the win rate has not improved (or has worsened), revert the change before making new adjustments. Don't stack speculative changes on top of unproven ones.
+7. **Floor/cap enforcement.** After computing any proposed weight, clamp it to the configured bounds before proceeding. HARDENED mode: floor 0.02, cap 0.40. DEGEN mode: floor 0.01, cap 0.50. If a proposed weight would breach the floor or cap, clamp it and log why. This is a hard constraint — never propose a weight outside these bounds, even if trade data suggests it. The floor prevents any signal component from being effectively zeroed out; the cap prevents over-concentration on a single signal.
+
+#### Value-First Modification (VFM) — Score Before You Change
+
+Before applying any weight update via `solana_strategy_update`, score EACH proposed weight change on three dimensions. Only apply changes that pass.
+
+**VFM scoring (per proposed weight change):**
+
+| Dimension | Question | Score |
+|---|---|---|
+| **Frequency** | How often did this feature fire (positively or negatively) in the trades since the last evolution? | High (>60% of trades): +2 / Medium (30–60%): +1 / Low (<30%): 0 |
+| **Failure Reduction** | Does changing this weight reduce losses based on actual evidence? Count how many losing trades would have been filtered or sized differently. | Clear reduction (3+ trades): +2 / Some evidence (1-2 trades): +1 / No evidence: 0 |
+| **Self-Cost** | Does this change make the model harder to reason about? Does it create dependencies between weights or obscure the decision logic? | No complexity added: +1 / Minor complexity: 0 / Adds confusion: -1 |
+
+**Threshold:** A proposed change must score **≥ 3** (out of 5 possible) to be applied. Changes scoring 1–2 are logged but deferred to the next evolution cycle with a note about what additional evidence would justify them. Changes scoring 0 are rejected.
+
+**The golden rule:** Ask yourself: "Will this change allow future-me to make better trading decisions with less cognitive cost?" If the answer isn't clearly yes, don't make the change.
+
+**VFM log entry** — after scoring, write a `solana_memory_write` entry with tag `vfm_scorecard`:
+```
+VFM SCORECARD — Strategy Evolution v1.X.0 → v1.Y.0
+
+PROPOSED CHANGES:
+1. volume_momentum: 0.20 → 0.24 (+0.04)
+   Frequency: +2 (fired in 8/12 trades)
+   Failure Reduction: +2 (3 losses had low volume_momentum — would have been filtered)
+   Self-Cost: +1 (straightforward increase, no complexity)
+   TOTAL: 5/5 → APPROVED
+
+2. holder_quality: 0.15 → 0.10 (-0.05)
+   Frequency: +1 (relevant in 5/12 trades)
+   Failure Reduction: +1 (1 loss had poor holder quality that was ignored)
+   Self-Cost: 0 (decreasing a weight is simple, but may miss rare but important holder-quality signals)
+   TOTAL: 2/5 → DEFERRED (need more trades with holder_quality as a primary factor)
+
+APPLIED: [volume_momentum +0.04]
+DEFERRED: [holder_quality -0.05]
+REJECTED: []
+```
+
+#### Recurring Pattern Detection — Find Systematic Mistakes
+
+During every `strategy_evolution` cron run, BEFORE computing weight adjustments, run the pattern detection phase:
+
+1. **Search for learning entries:** `solana_memory_search` with query `"learning_entry"` — retrieve all structured learning log entries since the last evolution cycle. **Group entries by area tag** (e.g., all `learning_entry_timing` entries together, all `learning_entry_sizing` entries together) to identify which areas have the most failures.
+
+2. **Check for linked chains:** Look for entries with `See Also` references. If 3+ entries are linked on the same theme, this is a **confirmed recurring pattern**. Common recurring patterns to watch for:
+   - Same deployer keeps burning you (search for deployer addresses across entries)
+   - Same entry timing mistake (e.g., always entering FRESH tokens in the first 10 minutes when volume is front-loaded)
+   - Same alpha source keeps producing losers (cross-reference with source reputation)
+   - Same liquidity trap (entering thin pools, getting slipped on exit)
+   - Same narrative rotation miss (overcommitting to dying metas)
+
+3. **Check for drift warnings:** `solana_memory_search` with query `"strategy_drift_warning"` — if the fast loop's Strategy Integrity Check has logged drift warnings, investigate:
+   - Which weights are being ignored in practice?
+   - Is the agent's actual decision behavior misaligned with its stated model?
+   - If drift is consistently toward the same direction (e.g., always ignoring risk_inverse), the weights may need adjustment to match reality — or the agent needs to recommit to its model.
+
+4. **Feed patterns into weight reasoning:** Recurring patterns should directly inform weight adjustments. Examples:
+   - "3 linked entries on thin-pool losses → increase `liquidity_depth` weight"
+   - "4 entries on late entries → reconsider how `volume_momentum` scores tokens that have already moved significantly"
+   - "2 drift warnings about ignoring `holder_quality` → either increase the weight to force attention, or investigate if the feature is truly uninformative"
+
+5. **Log pattern detection results** with tag `pattern_detection`:
+   ```
+   PATTERN DETECTION — Strategy Evolution v1.X.0
+   
+   RECURRING PATTERNS FOUND:
+   1. Thin-pool exit slippage (3 linked entries: LRN-20260312-003, LRN-20260314-001, LRN-20260315-002)
+      Impact: ~0.8 SOL total loss from exit slippage on pools < $80K
+      Suggested: Increase liquidity_depth weight, tighten pool-depth minimum
+   
+   2. Late entry on EMERGING tokens (2 linked entries: LRN-20260313-001, LRN-20260315-001)
+      Impact: 2 losses where token had already moved +150% before entry
+      Suggested: Add volume_momentum decay factor for tokens that have already run significantly
+   
+   DRIFT WARNINGS: 1 warning about ignoring risk_inverse on high-confidence trades
+   
+   NO PATTERN (isolated entries): LRN-20260314-002 (one-off surprise outcome)
+   ```
+
+6. **Resolve learning entries:** After a strategy evolution cycle addresses a recurring pattern, create a follow-up memory entry marking the linked learning entries as `resolved` with the strategy version where the fix was applied.
+
+#### Named Strategy Patterns — Recognize and Catalog Winning Setups
+
+During each `strategy_evolution` cron run, AFTER weight adjustments, run the pattern recognition loop:
+
+1. **Search for winning trade clusters:** Use `solana_memory_search` with query `"momentum_win"`, `"house_money_win"`, `"thesis_correct"` and `solana_trades` to find your recent winning trades.
+
+2. **Look for recurring winning conditions:** Do 3+ winning trades share a common setup? Examples:
+   - "Low-holder FRESH token + alpha signal convergence + high buy_pressure → 3x+ winner" 
+   - "EMERGING token during hot meta + flow_divergence spike + source reputation >80 → consistent 50%+ gains"
+   - "Post-rug-scare recovery on ESTABLISHED token with locked LP → reliable 30-50% bounce"
+
+3. **Name the pattern:** When you identify a recurring winning setup, give it a memorable name and journal it with tag `named_pattern`:
+   ```
+   NAMED PATTERN: "Fresh Alpha Convergence"
+   ID: PAT-001
+   Win Rate: 75% (6 wins / 2 losses across 8 trades)
+   Avg PnL: +2.3 SOL per trade
+   
+   SETUP CONDITIONS:
+   - Token age: < 2 hours (FRESH or early EMERGING)
+   - Discovery: Alpha signal AND on-chain discovery independently surface the same token
+   - buy_pressure score: > 0.7
+   - holder_quality: > 0.5 (not too concentrated)
+   - LP: burned or locked (mandatory)
+   - Source reputation: ≥ 60
+   
+   TYPICAL ENTRY:
+   - Size: Exploratory (3-8% depending on mode)
+   - Management: LOCAL_MANAGED (custom exit logic for fast-moving tokens)
+   - Expected hold: 30 min – 4 hours
+   
+   EDGE: Convergence of independent signals creates high conviction. Two completely separate discovery paths arriving at the same token = strong organic interest signal.
+   
+   ANTI-PATTERN (when this setup FAILS):
+   - Coordinated shill detected (5+ channels, same language, ~10 min window)
+   - Volume front-loaded >70% in first 15 minutes
+   - Deployer has serial rug history
+   ```
+
+4. **Use named patterns in the fast loop:** During Step 4 (DECIDE), when analyzing a candidate, search memory for `named_pattern` entries. If the current candidate matches a named pattern's conditions, note it in your reasoning — this is a recognized winning setup. It doesn't override your weighted model, but it provides additional confidence context.
+
+5. **Evolve named patterns:** Patterns are not permanent. On each `strategy_evolution` cycle, review existing named patterns:
+   - If a pattern's win rate drops below 50% over the last 10 trades → mark it as `cooling` and reduce its confidence influence
+   - If a pattern hasn't fired in 2+ weeks → mark it as `dormant` (metas rotate, patterns go stale)
+   - If a pattern's win rate rises above 70% over 15+ trades → mark it as `proven` and increase its confidence influence
+   - Never delete patterns — they may come back when market conditions rotate. Mark them as dormant instead.
 
 **Evolution reasoning examples:**
 - "volume_momentum predicted 8 of 10 winners → increase from 0.20 to 0.26"
@@ -1191,7 +1498,7 @@ Your discovery subscriptions (Step 1.75) should evolve alongside your strategy w
    - If convergence events (discovery + alpha signal on same token) have a significantly higher win rate → prioritize reacting to convergence over single-source signals
    - If your HARDENED mode win rate is better with fewer subscriptions → reduce discovery subscription count and focus on quality over quantity
 
-3. Log all filter evolution decisions via `solana_memory_write` with tag `filter_evolution`:
+3. Log all filter evolution decisions via `solana_memory_write` with tag `discovery_filter_evolution`:
    ```
    "Reduced pumpFunTokenCreation analysis depth from full 5-tool cycle to 2-tool quick screen (snapshot + risk). 
    Reason: 92% of new launches failed risk check within first 2 tools. Full cycle was wasting 40+ seconds per reject."
@@ -1252,25 +1559,35 @@ When you receive a `CRON_JOB:` message, execute ONLY the specified job below. Do
 
 **Schedule:** Every 4 hours (`0 */4 * * *`)
 
-**Purpose:** Run Step 9 (EVOLVE) logic — review trade journal, compute weight adjustments based on which features predicted winners vs losers, update strategy state. Also run discovery filter evolution.
+**Purpose:** Run Step 9 (EVOLVE) logic — the full self-improvement cycle: recurring pattern detection, drift investigation, ADL/VFM-validated weight adjustments, named pattern recognition, and discovery filter evolution.
 
-**Gating condition:** Only update weights if there are enough new closed trades since the last evolution. Thresholds are mode-dependent:
-- Minor adjustments: ≥5 closes (HARDENED) or ≥3 closes (DEGEN)
-- Major strategy shifts: ≥10 closes (both modes)
+**Gating condition:** Weight changes require ≥20 closed trades since the last strategy update. Check via `solana_journal_summary` and `solana_strategy_state` (for current mode and last version). If insufficient trades, log "strategy_evolution: skipped weight update, insufficient new trades (N since last run)" via `solana_memory_write`.
 
-Check via `solana_journal_summary` and `solana_strategy_state` (for current mode and last version). If insufficient trades, log "strategy_evolution: skipped, insufficient new trades (N since last run)" via `solana_memory_write` and exit.
+**However:** Always run the full cron even with fewer than 20 trades. Recurring Pattern Detection (Step 1) and Named Pattern Recognition (Step 6) operate on learning entries and memory, not just trade count. Only weight updates (Steps 3-5) require the trade count gate.
 
 **Tools:**
 1. `solana_journal_summary` — review win rate, patterns, recent performance
 2. `solana_strategy_state` — read current weights and version
-3. `solana_memory_search` — find outcome patterns (query: "momentum_win", "bad_liquidity", "late_entry", etc.)
+3. `solana_memory_search` — find outcome patterns, learning entries, drift warnings, named patterns
 4. `solana_trades` — review recent closed trades for detailed analysis
 5. `solana_strategy_update` — write new weights with incremented version
-6. `solana_memory_write` — log evolution reasoning with tag `strategy_evolution`
+6. `solana_memory_write` — log evolution reasoning, pattern detection results, VFM scorecards, named patterns
 
-**Outputs:** Updated feature weights in strategy state, evolution reasoning in memory.
+**Execution order (all sub-steps defined in Step 9 above):**
+1. **Recurring Pattern Detection** — search for linked learning entries, identify chains, investigate drift warnings
+2. **ADL checks** — apply anti-drift rules, check weight velocity, reversion check
+3. **Compute proposed weight changes** — based on trade outcomes, patterns, and learning entries
+4. **VFM scoring** — score each proposed change, apply only those scoring ≥3
+5. **Apply weights** — validate guardrails, then `solana_strategy_update` with incremented version. Before calling `solana_strategy_update`, verify all guardrails pass and log the check:
+   ```
+   Guardrails check: maxDeltaOk=true, sumWeightsOk=true, minTradesOk=true, floorCapOk=true
+   ```
+   If any check fails, do NOT apply weights. Log which check failed and why.
+6. **Named Pattern Recognition** — search for recurring winning setups, catalog new patterns, evolve existing ones
+7. **Discovery filter evolution** — evaluate subscription performance
+8. **Log everything** — pattern detection results, VFM scorecard, evolution reasoning, named pattern updates
 
-**Also runs:** Discovery filter evolution (see Step 9 section) — evaluate subscription performance, adjust discovery strategy based on which subscription sources produced winners vs losers.
+**Outputs:** Updated feature weights in strategy state, pattern detection results, VFM scorecard, named pattern updates, evolution reasoning — all in memory. Resolved learning entries where applicable.
 
 ---
 
@@ -1686,6 +2003,92 @@ Use:
 - Per-upgrade max SOL cost
 - Cooldown period between purchases
 - Wallet balance health check
+
+---
+
+## Memory Tag Vocabulary
+
+Complete reference of all tags used when writing memory entries. Use consistent tags to enable pattern detection, self-improvement, and strategy evolution.
+
+### Trade Outcome Tags (used with `solana_trade_review` and `solana_memory_write`)
+
+| Tag | Purpose |
+|---|---|
+| `momentum_win` | Entered on momentum, exited profitably |
+| `rug_escape` | Detected rug risk, exited early |
+| `chop_loss` | Lost in sideways/choppy action |
+| `late_entry` | Entered too late in the move |
+| `over_size` | Position was too large for the setup |
+| `bad_liquidity` | Liquidity was insufficient for clean exit |
+| `policy_denied` | Trade or exit denied by policy engine |
+| `regime_shift` | Market regime changed during position |
+| `thesis_correct` | Overall thesis was right |
+| `thesis_wrong` | Overall thesis was wrong |
+| `house_money_win` | Extracted initial capital, rode house money to profit |
+| `house_money_stopped` | House money position stopped out (still net positive) |
+| `dead_money` | Exited flat position to redeploy capital |
+| `fomo_entry` | Entered because of FOMO, not analysis |
+| `meta_rotation` | Narrative/meta shift affected the position |
+| `anti_rug_save` | Anti-rug heuristics prevented a bad entry |
+| `serial_deployer` | Identified serial deployer pattern |
+
+### Alpha-Specific Tags
+
+| Tag | Purpose |
+|---|---|
+| `alpha_signal_win` | Entered based on alpha signal, profitable |
+| `alpha_signal_loss` | Entered based on alpha signal, loss |
+| `alpha_clustering_win` | Multiple independent sources called this token AND it was a winner |
+| `alpha_stale_skip` | Skipped a signal because it was too old or token already moved |
+| `alpha_source_quality` | Journal entry about source reputation tracking |
+| `alpha_source_win` | Specific source's call led to a winning trade |
+| `alpha_source_loss` | Specific source's call led to a losing trade |
+| `alpha_risk_alert` | Received a `kind: risk` signal on a held position |
+| `alpha_exit_signal` | Received a `kind: exit` signal on a held position |
+| `alpha_front_run` | Detected front-running: whale activity before the alpha call |
+| `alpha_skipped_regret` | Skipped an alpha call that would have been profitable |
+| `alpha_skipped_correct` | Skipped an alpha call that didn't work out |
+| `alpha_push_received` | Agent woken by push/webhook alpha signal |
+
+### Self-Improvement Tags (used by Steps 0, 5.5, 8.5, 9)
+
+| Tag | Purpose |
+|---|---|
+| `pre_trade_rationale` | Decision journal entry BEFORE trade execution (Step 5.5) |
+| `pre_exit_rationale` | Exit decision journal entry BEFORE sell execution (Step 5.5) |
+| `learning_entry` | Structured learning log entry for decision-level analysis (Step 8.5) |
+| `learning_entry_sizing` | Learning entry about position sizing errors |
+| `learning_entry_timing` | Learning entry about entry/exit timing errors |
+| `learning_entry_analysis` | Learning entry about analysis/red-flag errors |
+| `learning_entry_model` | Learning entry about feature weight model blind spots |
+| `learning_entry_alpha` | Learning entry about alpha signal processing errors |
+| `learning_entry_risk` | Learning entry about risk management errors |
+| `learning_entry_meta` | Learning entry about narrative/meta errors |
+| `learning_entry_execution` | Learning entry about execution errors |
+| `strategy_drift_warning` | Strategy Integrity Check detected behavior misaligned with weights (Step 0) |
+| `weight_velocity_freeze` | Weight oscillating, frozen for this evolution cycle (Step 9 ADL) |
+| `vfm_scorecard` | Value-First Modification scoring record (Step 9 VFM) |
+| `pattern_detection` | Recurring pattern detection results from strategy_evolution cron (Step 9) |
+| `named_pattern` | Recognized and cataloged winning trade setup (Step 9) |
+| `strategy_evolution` | Strategy evolution reasoning log (Step 9) |
+| `discovery_filter_evolution` | Discovery filter parameter updates from strategy_evolution cron (Step 9) |
+
+### System Tags
+
+| Tag | Purpose |
+|---|---|
+| `defense_mode` | Position Defense Mode activation journal |
+| `defense_recovery` | Defense Mode auto-recovery log |
+| `killswitch_activated` | Kill switch activation tracking |
+| `killswitch_auto_recovery` | Kill switch auto-recovery log |
+| `signal_convergence` | Independent discovery paths converged on same token |
+| `source_reputation` | Source reputation recalculation results |
+| `daily_report` | Daily performance report |
+| `dead_money_sweep` | Dead money sweep cron results |
+| `subscription_cleanup` | Subscription cleanup cron results |
+| `meta_rotation` | Meta rotation analysis results |
+| `deployer_profile` | Deployer profiling results |
+| `regime_change` | Market regime transition log |
 
 ---
 

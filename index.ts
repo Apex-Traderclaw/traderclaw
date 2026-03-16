@@ -15,6 +15,8 @@ interface PluginConfig {
   walletPrivateKey?: string;
   apiTimeout?: number;
   agentId?: string;
+  gatewayBaseUrl?: string;
+  gatewayToken?: string;
 }
 
 function parseConfig(raw: unknown): PluginConfig {
@@ -31,7 +33,21 @@ function parseConfig(raw: unknown): PluginConfig {
   const walletPrivateKey = typeof obj.walletPrivateKey === "string" ? obj.walletPrivateKey : undefined;
   const apiTimeout = typeof obj.apiTimeout === "number" ? obj.apiTimeout : 30000;
   const agentId = typeof obj.agentId === "string" ? obj.agentId : undefined;
-  return { orchestratorUrl, walletId, apiKey, externalUserId, refreshToken, walletPublicKey, walletPrivateKey, apiTimeout, agentId };
+  const gatewayBaseUrl = typeof obj.gatewayBaseUrl === "string" ? obj.gatewayBaseUrl : undefined;
+  const gatewayToken = typeof obj.gatewayToken === "string" ? obj.gatewayToken : undefined;
+  return {
+    orchestratorUrl,
+    walletId,
+    apiKey,
+    externalUserId,
+    refreshToken,
+    walletPublicKey,
+    walletPrivateKey,
+    apiTimeout,
+    agentId,
+    gatewayBaseUrl,
+    gatewayToken,
+  };
 }
 
 const solanaTraderPlugin = {
@@ -292,7 +308,7 @@ const solanaTraderPlugin = {
       execute: wrapExecute(async (_id, params) => {
         const headers: Record<string, string> = {};
         if (params.idempotencyKey) {
-          headers["x-idempotency-key"] = params.idempotencyKey;
+          headers["x-idempotency-key"] = String(params.idempotencyKey);
         }
         return post("/api/trade/execute", {
           tokenAddress: params.tokenAddress,
@@ -889,6 +905,252 @@ const solanaTraderPlugin = {
       },
     });
 
+    type StartupStepName =
+      | "solana_system_status"
+      | "solana_gateway_credentials_get"
+      | "solana_alpha_subscribe"
+      | "solana_capital_status"
+      | "solana_positions"
+      | "solana_killswitch_status";
+    type StartupStepResult = {
+      step: StartupStepName;
+      ok: boolean;
+      ts: number;
+      error?: string;
+      details?: Record<string, unknown>;
+    };
+    let startupGateRunning: Promise<{
+      ok: boolean;
+      ts: number;
+      steps: StartupStepResult[];
+      summary: {
+        passed: number;
+        failed: number;
+      };
+    }> | null = null;
+    let startupGateState: {
+      ok: boolean;
+      ts: number;
+      steps: StartupStepResult[];
+    } = {
+      ok: false,
+      ts: 0,
+      steps: [],
+    };
+    let lastForwardProbeState: {
+      ok: boolean;
+      ts: number;
+      result: Record<string, unknown>;
+    } | null = null;
+    const getActiveCredential = (payload: unknown) => {
+      if (!payload || typeof payload !== "object") return null;
+      const credentials = (payload as { credentials?: unknown[] }).credentials;
+      if (!Array.isArray(credentials)) return null;
+      const preferredAgentId = config.agentId || "main";
+      const active = credentials.find((entry) =>
+        entry &&
+        typeof entry === "object" &&
+        Boolean((entry as { active?: boolean }).active) &&
+        (((entry as { agentId?: string | null }).agentId || "main") === preferredAgentId),
+      ) || credentials.find((entry) =>
+        entry &&
+        typeof entry === "object" &&
+        Boolean((entry as { active?: boolean }).active),
+      );
+      return active && typeof active === "object" ? (active as Record<string, unknown>) : null;
+    };
+    const runForwardProbe = async ({
+      agentId,
+      source = "plugin_probe",
+    }: {
+      agentId?: string;
+      source?: string;
+    } = {}) => {
+      const payload = await post("/api/agents/gateway-forward-probe", {
+        agentId: agentId || config.agentId || "main",
+        source,
+      });
+      const result = (payload && typeof payload === "object" ? payload : {}) as Record<string, unknown>;
+      const ok = Boolean(result.ok);
+      lastForwardProbeState = {
+        ok,
+        ts: Date.now(),
+        result,
+      };
+      return result;
+    };
+    const runStartupGate = async ({
+      autoFixGateway = true,
+      force = false,
+    }: {
+      autoFixGateway?: boolean;
+      force?: boolean;
+    } = {}) => {
+      if (startupGateRunning && !force) return startupGateRunning;
+      startupGateRunning = (async () => {
+        const steps: StartupStepResult[] = [];
+        const pushStep = (entry: StartupStepResult) => steps.push(entry);
+
+        try {
+          await get("/api/system/status");
+          pushStep({
+            step: "solana_system_status",
+            ok: true,
+            ts: Date.now(),
+          });
+        } catch (err) {
+          pushStep({
+            step: "solana_system_status",
+            ok: false,
+            ts: Date.now(),
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+
+        let gatewayStepOk = false;
+        try {
+          const creds = (await get("/api/agents/gateway-credentials")) as Record<string, unknown>;
+          let activeCredential = getActiveCredential(creds);
+          if (!activeCredential && autoFixGateway) {
+            const gatewayBaseUrl = String(config.gatewayBaseUrl || "").trim();
+            const gatewayToken = String(config.gatewayToken || "").trim();
+            if (gatewayBaseUrl && gatewayToken) {
+              const body: Record<string, unknown> = {
+                gatewayBaseUrl,
+                gatewayToken,
+                active: true,
+              };
+              if (config.agentId) body.agentId = config.agentId;
+              await put("/api/agents/gateway-credentials", body);
+            }
+          }
+          const refreshed = (await get("/api/agents/gateway-credentials")) as Record<string, unknown>;
+          activeCredential = getActiveCredential(refreshed);
+          gatewayStepOk = Boolean(activeCredential);
+          if (!gatewayStepOk) {
+            throw new Error("Gateway credentials are missing or inactive");
+          }
+          pushStep({
+            step: "solana_gateway_credentials_get",
+            ok: true,
+            ts: Date.now(),
+            details: {
+              active: true,
+              agentId: String(activeCredential?.agentId || config.agentId || "main"),
+              gatewayBaseUrl: String(activeCredential?.gatewayBaseUrl || ""),
+            },
+          });
+        } catch (err) {
+          pushStep({
+            step: "solana_gateway_credentials_get",
+            ok: false,
+            ts: Date.now(),
+            error: err instanceof Error ? err.message : String(err),
+            details: {
+              hasConfiguredGatewayBaseUrl: Boolean(config.gatewayBaseUrl),
+              hasConfiguredGatewayToken: Boolean(config.gatewayToken),
+            },
+          });
+        }
+
+        try {
+          const effectiveAgentId = config.agentId || "main";
+          if (effectiveAgentId && alphaStreamManager.getAgentId() !== effectiveAgentId) {
+            alphaStreamManager.setAgentId(effectiveAgentId);
+          }
+          alphaStreamManager.setSubscriberType("agent");
+          const subscribed = await alphaStreamManager.subscribe();
+          pushStep({
+            step: "solana_alpha_subscribe",
+            ok: Boolean(subscribed?.subscribed),
+            ts: Date.now(),
+            details: {
+              agentId: effectiveAgentId,
+              premiumAccess: subscribed?.premiumAccess || false,
+              tier: subscribed?.tier || "",
+            },
+          });
+        } catch (err) {
+          pushStep({
+            step: "solana_alpha_subscribe",
+            ok: false,
+            ts: Date.now(),
+            error: err instanceof Error ? err.message : String(err),
+            details: {
+              skippedBecauseGatewayFailed: !gatewayStepOk,
+            },
+          });
+        }
+
+        try {
+          await get(`/api/capital/status?walletId=${walletId}`);
+          pushStep({
+            step: "solana_capital_status",
+            ok: true,
+            ts: Date.now(),
+          });
+        } catch (err) {
+          pushStep({
+            step: "solana_capital_status",
+            ok: false,
+            ts: Date.now(),
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+
+        try {
+          await get(`/api/wallet/positions?walletId=${walletId}`);
+          pushStep({
+            step: "solana_positions",
+            ok: true,
+            ts: Date.now(),
+          });
+        } catch (err) {
+          pushStep({
+            step: "solana_positions",
+            ok: false,
+            ts: Date.now(),
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+
+        try {
+          await get(`/api/killswitch/status?walletId=${walletId}`);
+          pushStep({
+            step: "solana_killswitch_status",
+            ok: true,
+            ts: Date.now(),
+          });
+        } catch (err) {
+          pushStep({
+            step: "solana_killswitch_status",
+            ok: false,
+            ts: Date.now(),
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+
+        const passed = steps.filter((step) => step.ok).length;
+        const failed = steps.length - passed;
+        startupGateState = {
+          ok: failed === 0,
+          ts: Date.now(),
+          steps,
+        };
+        return {
+          ok: startupGateState.ok,
+          ts: startupGateState.ts,
+          steps,
+          summary: { passed, failed },
+        };
+      })()
+        .finally(() => {
+          startupGateRunning = null;
+        });
+
+      return startupGateRunning;
+    };
+
     api.registerTool({
       name: "solana_alpha_subscribe",
       description: "Subscribe to the SpyFly alpha signal stream via WebSocket. Starts receiving real-time alpha signals (TG/Discord channel calls) into the buffer. Call once on first heartbeat — stays connected with auto-reconnect. Pass agentId to enable event-to-agent forwarding — orchestrator delivers each alpha signal to your Gateway via /v1/responses in addition to buffering. Returns subscription status, tier, and premium access level.",
@@ -989,6 +1251,51 @@ const solanaTraderPlugin = {
       execute: wrapExecute(async () => get("/api/system/status")),
     });
 
+    api.registerTool({
+      name: "solana_startup_gate",
+      description: "Run the mandatory startup sequence and return deterministic pass/fail results per step. Optionally auto-fixes gateway credentials if gatewayBaseUrl and gatewayToken are present in plugin config.",
+      parameters: Type.Object({
+        autoFixGateway: Type.Optional(Type.Boolean({ description: "If true (default), auto-register gateway credentials when missing and config includes gatewayBaseUrl + gatewayToken." })),
+        force: Type.Optional(Type.Boolean({ description: "If true, always run the startup checks now even if a recent run exists." })),
+      }),
+      execute: wrapExecute(async (_id, params) =>
+        runStartupGate({
+          autoFixGateway: params.autoFixGateway !== undefined ? Boolean(params.autoFixGateway) : true,
+          force: Boolean(params.force),
+        }),
+      ),
+    });
+
+    api.registerTool({
+      name: "solana_gateway_forward_probe",
+      description: "Run a synthetic orchestrator-to-gateway forwarding probe for /v1/responses and return latency plus failure diagnostics.",
+      parameters: Type.Object({
+        agentId: Type.Optional(Type.String({ description: "Agent ID to probe (default: plugin config agentId or 'main')." })),
+        source: Type.Optional(Type.String({ description: "Probe source label for diagnostics." })),
+      }),
+      execute: wrapExecute(async (_id, params) =>
+        runForwardProbe({
+          agentId: params.agentId ? String(params.agentId) : undefined,
+          source: params.source ? String(params.source) : "plugin_probe_tool",
+        }),
+      ),
+    });
+
+    api.registerTool({
+      name: "solana_runtime_status",
+      description: "Return plugin runtime diagnostics including startup-gate cache, alpha stream status, and latest forwarding probe result.",
+      parameters: Type.Object({}),
+      execute: wrapExecute(async () => ({
+        startupGate: startupGateState,
+        alphaStream: {
+          subscribed: alphaStreamManager.isSubscribed(),
+          stats: alphaStreamManager.getStats(),
+          bufferSize: alphaBuffer.getBufferSize(),
+        },
+        lastForwardProbe: lastForwardProbeState,
+      })),
+    });
+
     api.registerService({
       id: "solana-trader-session",
       start: async () => {
@@ -1044,11 +1351,41 @@ const solanaTraderPlugin = {
             `[solana-trader] /api/system/status unreachable: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
+
+        try {
+          const startupGate = await runStartupGate({ autoFixGateway: true, force: true });
+          api.logger.info(
+            `[solana-trader] Startup gate completed: ok=${startupGate.ok}, passed=${startupGate.summary.passed}, failed=${startupGate.summary.failed}`,
+          );
+          if (!startupGate.ok) {
+            api.logger.warn(
+              `[solana-trader] Startup gate failures: ${JSON.stringify(startupGate.steps.filter((step) => !step.ok))}`,
+            );
+          }
+        } catch (err) {
+          api.logger.warn(
+            `[solana-trader] Startup gate run failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+
+        try {
+          const probe = await runForwardProbe({
+            agentId: config.agentId || "main",
+            source: "service_startup",
+          });
+          api.logger.info(
+            `[solana-trader] Forward probe result: ${JSON.stringify(probe)}`,
+          );
+        } catch (err) {
+          api.logger.warn(
+            `[solana-trader] Forward probe failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       },
     });
 
     api.logger.info(
-      `[solana-trader] Registered 49 trading tools for walletId ${walletId} (session auth mode)`,
+      `[solana-trader] Registered 52 trading tools for walletId ${walletId} (session auth mode)`,
     );
   },
 };

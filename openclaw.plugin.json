@@ -47,6 +47,14 @@
       "agentId": {
         "type": "string",
         "description": "Agent ID for event-to-agent forwarding (e.g., 'main'). When set, subscriptions automatically include this agentId so the orchestrator forwards stream events to your Gateway via /v1/responses."
+      },
+      "gatewayBaseUrl": {
+        "type": "string",
+        "description": "Public HTTPS URL of your OpenClaw Gateway used by orchestrator event forwarding."
+      },
+      "gatewayToken": {
+        "type": "string",
+        "description": "Bearer token used by orchestrator when calling your Gateway /v1/responses."
       }
     }
   },
@@ -91,6 +99,16 @@
     "agentId": {
       "label": "Agent ID",
       "placeholder": "main",
+      "advanced": true
+    },
+    "gatewayBaseUrl": {
+      "label": "Gateway Base URL",
+      "placeholder": "https://gateway.example.com",
+      "advanced": true
+    },
+    "gatewayToken": {
+      "label": "Gateway Token",
+      "sensitive": true,
       "advanced": true
     }
   }

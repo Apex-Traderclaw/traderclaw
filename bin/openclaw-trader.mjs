@@ -950,6 +950,23 @@ async function cmdStatus() {
     printWarn("  System status:    unavailable");
   }
 
+  try {
+    const credsRes = await httpRequest(`${orchestratorUrl}/api/agents/gateway-credentials`, authOpts);
+    if (credsRes.ok && credsRes.data && Array.isArray(credsRes.data.credentials)) {
+      const activeCreds = credsRes.data.credentials.filter((entry) => entry && entry.active);
+      printInfo(`  Gateway creds:    ${activeCreds.length > 0 ? "active" : "missing/inactive"} (${activeCreds.length})`);
+      if (activeCreds.length > 0) {
+        const primary = activeCreds.find((entry) => (entry.agentId || "main") === (pluginConfig.agentId || "main")) || activeCreds[0];
+        printInfo(`  Gateway agent:    ${primary.agentId || "default"}`);
+        printInfo(`  Gateway lastUsed: ${primary.lastUsedAt || "never"}`);
+      }
+    } else {
+      printWarn("  Gateway creds:    unavailable");
+    }
+  } catch {
+    printWarn("  Gateway creds:    unavailable");
+  }
+
   print("");
 
   if (walletId) {
