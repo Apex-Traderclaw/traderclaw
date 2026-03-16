@@ -43,6 +43,15 @@ function printInfo(msg) {
   print(`\x1b[36m${msg}\x1b[0m`);
 }
 
+function commandExists(cmd) {
+  try {
+    execSync(`command -v ${cmd}`, { stdio: "ignore", shell: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function maskKey(key) {
   if (!key || key.length <= 8) return "****";
   return key.slice(0, 4) + "..." + key.slice(-4);
