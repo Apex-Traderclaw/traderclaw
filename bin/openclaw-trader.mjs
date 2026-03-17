@@ -1360,58 +1360,71 @@ function wizardHtml(defaults) {
       .card { background:#121a31; border:1px solid #22315a; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
       .grid { display:grid; grid-template-columns:1fr 1fr; gap: 12px; }
       label { display:block; font-size: 12px; color:#9cb0de; margin-bottom: 4px; }
-      input, select { width:100%; padding:10px; border-radius:8px; border:1px solid #334a87; background:#0d1530; color:#e8eef9; }
+      input { width:100%; padding:10px; border-radius:8px; border:1px solid #334a87; background:#0d1530; color:#e8eef9; }
       button { border:0; border-radius:8px; padding:10px 14px; background:#4d7cff; color:#fff; cursor:pointer; font-weight:600; }
       .muted { color:#9cb0de; font-size:13px; }
-      .ok { color:#78f0a9; } .warn { color:#ffd166; } .err { color:#ff6b6b; }
+      .ok { color:#78f0a9; }
+      .warn { color:#ffd166; }
+      .err { color:#ff6b6b; }
       code { background:#0d1530; padding:2px 6px; border-radius:6px; }
       pre { background:#0d1530; border:1px solid #22315a; border-radius:8px; padding:12px; max-height:300px; overflow:auto; }
       table { width:100%; border-collapse: collapse; }
       td, th { border-bottom:1px solid #22315a; padding:8px; font-size:13px; text-align:left; }
+      .cta { background:#0d2a1d; border:1px solid #1f7a47; border-radius:10px; padding:12px; margin-bottom:10px; }
+      .cta h4 { margin:0 0 6px 0; color:#8ef5bc; font-size:14px; }
+      .cta .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+      .cta a, .cta code { color:#b9ffda; word-break:break-all; }
+      .cta button { background:#2f9a5f; padding:8px 10px; font-size:12px; }
+      .hidden { display:none; }
     </style>
   </head>
   <body>
     <div class="wrap">
       <div class="card">
         <h2>TraderClaw Linux Installer Wizard</h2>
-        <p class="muted">Runs full install flow with lane-aware setup, Tailscale handling, gateway checks, and optional Telegram setup.</p>
+        <p class="muted">Beginner mode: install core services first, then finish wallet setup in your VPS shell.</p>
       </div>
       <div class="card">
         <div class="grid">
           <div>
-            <label>Lane</label>
-            <select id="lane">
-              <option value="event-driven">Event-Driven (recommended)</option>
-              <option value="quick-local">Quick Local (fallback)</option>
-            </select>
+            <label>TraderClaw API key (optional)</label>
+            <input id="apiKey" value="${defaults.apiKey}" placeholder="Paste your TraderClaw API key if you already have one" />
+            <p class="muted">Leave empty to create a new account during setup.</p>
           </div>
           <div>
-            <label>Orchestrator URL</label>
-            <input id="orchestratorUrl" value="${defaults.orchestratorUrl}" />
-          </div>
-          <div>
-            <label>API Key (optional if signup flow)</label>
-            <input id="apiKey" value="${defaults.apiKey}" />
-          </div>
-          <div>
-            <label>Gateway Base URL (optional override)</label>
-            <input id="gatewayBaseUrl" value="${defaults.gatewayBaseUrl}" />
-          </div>
-          <div>
-            <label>Gateway Token (event-driven)</label>
-            <input id="gatewayToken" value="${defaults.gatewayToken}" />
-          </div>
-          <div>
-            <label>Telegram Token (optional)</label>
-            <input id="telegramToken" value="${defaults.telegramToken}" />
+            <label>Telegram bot token (optional)</label>
+            <input id="telegramToken" value="${defaults.telegramToken}" placeholder="Only needed for Telegram pairing later" />
+            <p class="muted">Need one? <a href="https://core.telegram.org/bots#how-do-i-create-a-bot" target="_blank" rel="noopener noreferrer">Create a Telegram bot token (official docs)</a>.</p>
           </div>
         </div>
-        <p class="muted">If Telegram token is set, optional Telegram setup is attempted.</p>
         <button id="start">Start Installation</button>
       </div>
       <div class="card">
         <h3>Status: <span id="status">idle</span></h3>
-        <p class="muted" id="approval"></p>
+        <p class="muted">Watch progress below. Key links and next actions appear here automatically.</p>
+        <div id="ctaBox" class="hidden">
+          <div id="tailscaleCta" class="cta hidden">
+            <h4>Approve Tailscale</h4>
+            <div class="row">
+              <a id="tailscaleLink" href="#" target="_blank" rel="noopener noreferrer"></a>
+            </div>
+          </div>
+          <div id="funnelCta" class="cta hidden">
+            <h4>Gateway Funnel URL</h4>
+            <div class="row">
+              <a id="funnelLink" href="#" target="_blank" rel="noopener noreferrer"></a>
+            </div>
+          </div>
+          <div id="setupCta" class="cta hidden">
+            <h4>Finish in VPS Shell</h4>
+            <p class="muted" id="setupSuccessText"></p>
+            <div class="row">
+              <code id="setupCommand"></code>
+              <button id="copySetupCommand" type="button">Copy command</button>
+            </div>
+            <p class="muted">After setup completes, run <code id="restartCommand"></code>.</p>
+          </div>
+        </div>
         <div id="ready" class="ok"></div>
         <pre id="manual" class="err"></pre>
         <table>
@@ -1426,20 +1439,37 @@ function wizardHtml(defaults) {
     </div>
     <script>
       const stateEl = document.getElementById("status");
-      const approvalEl = document.getElementById("approval");
       const readyEl = document.getElementById("ready");
       const manualEl = document.getElementById("manual");
       const stepsEl = document.getElementById("steps");
       const logsEl = document.getElementById("logs");
-      document.getElementById("lane").value = "${defaults.lane}";
+      const ctaBoxEl = document.getElementById("ctaBox");
+      const tailscaleCtaEl = document.getElementById("tailscaleCta");
+      const tailscaleLinkEl = document.getElementById("tailscaleLink");
+      const funnelCtaEl = document.getElementById("funnelCta");
+      const funnelLinkEl = document.getElementById("funnelLink");
+      const setupCtaEl = document.getElementById("setupCta");
+      const setupSuccessTextEl = document.getElementById("setupSuccessText");
+      const setupCommandEl = document.getElementById("setupCommand");
+      const restartCommandEl = document.getElementById("restartCommand");
+      const copySetupBtn = document.getElementById("copySetupCommand");
+
+      function showUrlCta(containerEl, linkEl, value) {
+        if (!value) {
+          containerEl.classList.add("hidden");
+          linkEl.textContent = "";
+          linkEl.removeAttribute("href");
+          return;
+        }
+        ctaBoxEl.classList.remove("hidden");
+        containerEl.classList.remove("hidden");
+        linkEl.href = value;
+        linkEl.textContent = value;
+      }
 
       async function startInstall() {
         const payload = {
-          lane: document.getElementById("lane").value,
-          orchestratorUrl: document.getElementById("orchestratorUrl").value.trim(),
           apiKey: document.getElementById("apiKey").value.trim(),
-          gatewayBaseUrl: document.getElementById("gatewayBaseUrl").value.trim(),
-          gatewayToken: document.getElementById("gatewayToken").value.trim(),
           telegramToken: document.getElementById("telegramToken").value.trim()
         };
         await fetch("/api/start", {
@@ -1453,34 +1483,58 @@ function wizardHtml(defaults) {
         const res = await fetch("/api/state");
         const data = await res.json();
         stateEl.textContent = data.status || "idle";
-        approvalEl.textContent = data.detected && data.detected.tailscaleApprovalUrl
-          ? "Tailscale approval link: " + data.detected.tailscaleApprovalUrl
-          : "";
+
+        const tailscaleApprovalUrl = data.detected && data.detected.tailscaleApprovalUrl ? data.detected.tailscaleApprovalUrl : "";
+        const funnelUrl = data.detected && data.detected.funnelUrl ? data.detected.funnelUrl : "";
+
+        showUrlCta(tailscaleCtaEl, tailscaleLinkEl, tailscaleApprovalUrl);
+        showUrlCta(funnelCtaEl, funnelLinkEl, funnelUrl);
+
         const setupHandoff = data.setupHandoff;
         if (data.status === "completed" && setupHandoff && setupHandoff.command) {
+          ctaBoxEl.classList.remove("hidden");
+          setupCtaEl.classList.remove("hidden");
+          setupSuccessTextEl.textContent = "Installation succeeded. Continue in your VPS shell to finish secure wallet/session setup.";
+          setupCommandEl.textContent = setupHandoff.command;
+          restartCommandEl.textContent = setupHandoff.restartCommand || "openclaw gateway restart";
           readyEl.textContent =
-            setupHandoff.title + "\\n" +
-            setupHandoff.message + "\\n" +
-            "Run in VPS shell: " + setupHandoff.command + "\\n" +
+            setupHandoff.title + "\n" +
+            setupHandoff.message + "\n" +
+            "Run in VPS shell: " + setupHandoff.command + "\n" +
             "Then run: " + (setupHandoff.restartCommand || "openclaw gateway restart");
         } else {
+          setupCtaEl.classList.add("hidden");
+          if (!tailscaleApprovalUrl && !funnelUrl) {
+            ctaBoxEl.classList.add("hidden");
+          }
           readyEl.textContent = "";
         }
 
         const errors = data.errors || [];
         manualEl.textContent = errors.length > 0
-          ? errors.map((e) => "Step " + (e.stepId || "unknown") + ":\\n" + (e.error || "")).join("\\n\\n")
+          ? errors.map((e) => "Step " + (e.stepId || "unknown") + ":\n" + (e.error || "")).join("\n\n")
           : "";
         stepsEl.innerHTML = "";
         (data.stepResults || []).forEach((row) => {
           const tr = document.createElement("tr");
-          tr.innerHTML = "<td>" + row.stepId + "</td><td>" + row.status + "</td><td>" + (row.error || "") + "</td>";
+          tr.innerHTML = "<td>" + row.stepId + "</td><td>" + row.status + "</td><td>" + (row.error || row.detail || "") + "</td>";
           stepsEl.appendChild(tr);
         });
-        logsEl.textContent = (data.logs || []).map((l) => "[" + l.at + "] " + l.stepId + " " + l.level + " " + l.text).join("\\n");
+        logsEl.textContent = (data.logs || []).map((l) => "[" + l.at + "] " + l.stepId + " " + l.level + " " + l.text).join("\n");
       }
 
       document.getElementById("start").addEventListener("click", startInstall);
+      copySetupBtn.addEventListener("click", async () => {
+        const value = setupCommandEl.textContent || "";
+        if (!value) return;
+        try {
+          await navigator.clipboard.writeText(value);
+          copySetupBtn.textContent = "Copied";
+        } catch {
+          copySetupBtn.textContent = "Copy failed";
+        }
+        setTimeout(() => { copySetupBtn.textContent = "Copy command"; }, 1200);
+      });
       setInterval(refresh, 1200);
       refresh();
     </script>
@@ -1554,11 +1608,11 @@ async function cmdInstall(args) {
         modeConfig,
         {
           mode: "light",
-          lane: body.lane || defaults.lane,
+          lane: defaults.lane,
           apiKey: body.apiKey || defaults.apiKey,
-          orchestratorUrl: body.orchestratorUrl || defaults.orchestratorUrl,
-          gatewayBaseUrl: body.gatewayBaseUrl || defaults.gatewayBaseUrl,
-          gatewayToken: body.gatewayToken || defaults.gatewayToken,
+          orchestratorUrl: defaults.orchestratorUrl,
+          gatewayBaseUrl: defaults.gatewayBaseUrl,
+          gatewayToken: defaults.gatewayToken,
           enableTelegram: Boolean(body.telegramToken || defaults.telegramToken || defaults.enableTelegram),
           telegramToken: body.telegramToken || defaults.telegramToken,
           autoInstallDeps: true,
