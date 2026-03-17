@@ -1468,15 +1468,37 @@ function wizardHtml(defaults) {
       }
 
       async function startInstall() {
+        stateEl.textContent = "starting";
+        manualEl.textContent = "";
+        readyEl.textContent = "Starting installation...";
+
         const payload = {
           apiKey: document.getElementById("apiKey").value.trim(),
           telegramToken: document.getElementById("telegramToken").value.trim()
         };
-        await fetch("/api/start", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload),
-        });
+
+        try {
+          const res = await fetch("/api/start", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const data = await res.json().catch(() => ({}));
+
+          if (!res.ok) {
+            stateEl.textContent = "failed";
+            manualEl.textContent = data.error ? "Failed to start: " + data.error : "Failed to start installation.";
+            readyEl.textContent = "";
+            return;
+          }
+
+          readyEl.textContent = "Installation started. Live progress will appear below.";
+          await refresh();
+        } catch (err) {
+          stateEl.textContent = "failed";
+          manualEl.textContent = "Failed to start installation: " + (err && err.message ? err.message : String(err));
+          readyEl.textContent = "";
+        }
       }
 
       async function refresh() {
