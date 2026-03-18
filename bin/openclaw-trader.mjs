@@ -1149,6 +1149,9 @@ function parseInstallWizardArgs(args) {
     port: 17890,
     lane: "event-driven",
     apiKey: "",
+    llmProvider: "",
+    llmModel: "",
+    llmCredential: "",
     orchestratorUrl: "https://api.traderclaw.ai",
     gatewayBaseUrl: "",
     gatewayToken: "",
@@ -1162,6 +1165,9 @@ function parseInstallWizardArgs(args) {
     if (key === "--port" && next) out.port = Number.parseInt(args[++i], 10) || 17890;
     if (key === "--lane" && next) out.lane = next === "quick-local" ? "quick-local" : "event-driven";
     if ((key === "--api-key" || key === "-k") && next) out.apiKey = args[++i];
+    if (key === "--llm-provider" && next) out.llmProvider = args[++i];
+    if (key === "--llm-model" && next) out.llmModel = args[++i];
+    if ((key === "--llm-api-key" || key === "--llm-token") && next) out.llmCredential = args[++i];
     if ((key === "--url" || key === "-u") && next) out.orchestratorUrl = args[++i];
     if ((key === "--gateway-base-url" || key === "-g") && next) out.gatewayBaseUrl = args[++i];
     if ((key === "--gateway-token" || key === "-t") && next) out.gatewayToken = args[++i];
@@ -1347,6 +1353,83 @@ function parseJsonBody(req) {
   });
 }
 
+function loadWizardLlmCatalog() {
+  const supportedProviders = new Set([
+    "anthropic",
+    "openai",
+    "openai-codex",
+    "openrouter",
+    "groq",
+    "mistral",
+    "google",
+    "google-vertex",
+  ]);
+  const fallback = {
+    source: "fallback",
+    providers: [
+      {
+        id: "anthropic",
+        models: [{ id: "anthropic/claude-opus-4-6", name: "Claude Opus 4.6" }],
+      },
+      {
+        id: "openai",
+        models: [{ id: "openai/gpt-5.4", name: "GPT-5.4" }],
+      },
+    ],
+  };
+
+  if (!commandExists("openclaw")) {
+    return { ...fallback, warning: "openclaw_not_found" };
+  }
+
+  try {
+    const raw = execSync("openclaw models list --all --json", {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const parsed = JSON.parse(raw);
+    const models = Array.isArray(parsed?.models) ? parsed.models : [];
+    const providerMap = new Map();
+    for (const entry of models) {
+      if (!entry || typeof entry.key !== "string") continue;
+      const modelId = String(entry.key);
+      const slash = modelId.indexOf("/");
+      if (slash <= 0 || slash === modelId.length - 1) continue;
+      const provider = modelId.slice(0, slash);
+      const existing = providerMap.get(provider) || [];
+      existing.push({
+        id: modelId,
+        name: typeof entry.name === "string" && entry.name.trim() ? entry.name : modelId,
+      });
+      providerMap.set(provider, existing);
+    }
+
+    const providers = [...providerMap.keys()]
+      .sort((a, b) => a.localeCompare(b))
+      .map((id) => ({
+        id,
+        models: (providerMap.get(id) || []).sort((a, b) => a.id.localeCompare(b.id)),
+      }))
+      .filter((entry) => supportedProviders.has(entry.id))
+      .filter((entry) => entry.models.length > 0);
+
+    if (providers.length === 0) {
+      return { ...fallback, warning: "openclaw_model_catalog_empty" };
+    }
+
+    return {
+      source: "openclaw",
+      providers,
+      generatedAt: new Date().toISOString(),
+    };
+  } catch (err) {
+    return {
+      ...fallback,
+      warning: `openclaw_models_list_failed: ${err?.message || String(err)}`,
+    };
+  }
+}
+
 function wizardHtml(defaults) {
   return `<!doctype html>
 <html>
@@ -1360,8 +1443,9 @@ function wizardHtml(defaults) {
       .card { background:#121a31; border:1px solid #22315a; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
       .grid { display:grid; grid-template-columns:1fr 1fr; gap: 12px; }
       label { display:block; font-size: 12px; color:#9cb0de; margin-bottom: 4px; }
-      input { width:100%; padding:10px; border-radius:8px; border:1px solid #334a87; background:#0d1530; color:#e8eef9; }
+      input, select { width:100%; padding:10px; border-radius:8px; border:1px solid #334a87; background:#0d1530; color:#e8eef9; }
       button { border:0; border-radius:8px; padding:10px 14px; background:#4d7cff; color:#fff; cursor:pointer; font-weight:600; }
+      button:disabled { opacity:0.6; cursor:not-allowed; }
       .muted { color:#9cb0de; font-size:13px; }
       .ok { color:#78f0a9; }
       .warn { color:#ffd166; }
@@ -1375,31 +1459,64 @@ function wizardHtml(defaults) {
       .cta .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
       .cta a, .cta code { color:#b9ffda; word-break:break-all; }
       .cta button { background:#2f9a5f; padding:8px 10px; font-size:12px; }
+      .checkout { background:#10263f; border:1px solid #2e5785; border-radius:12px; padding:18px; }
+      .checkout h2 { margin:0 0 8px 0; color:#9ee6ff; font-size:24px; }
+      .checkout p { margin:0 0 12px 0; }
+      .checkout-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+      .checkout-row code { flex:1 1 560px; font-size:13px; padding:10px; }
+      .checkout-row button { background:#2d7dff; padding:10px 12px; font-size:13px; }
+      .checkout-finish { margin-top:14px; background:#2f9a5f; font-size:14px; padding:10px 14px; }
       .hidden { display:none; }
     </style>
   </head>
   <body>
     <div class="wrap">
-      <div class="card">
+      <div class="card" id="introCard">
         <h2>TraderClaw Linux Installer Wizard</h2>
-        <p class="muted">Beginner mode: install core services first, then finish wallet setup in your VPS shell.</p>
+        <p class="muted">install core services first, then finish wallet setup in your VPS shell.</p>
       </div>
-      <div class="card">
+      <div class="card" id="llmCard">
+        <h3>Required: OpenClaw LLM Provider</h3>
+        <p class="muted">Pick your LLM provider and paste your credential. Beginner mode supports common API-key providers.</p>
         <div class="grid">
           <div>
-            <label>TraderClaw API key (optional)</label>
-            <input id="apiKey" value="${defaults.apiKey}" placeholder="Paste your TraderClaw API key if you already have one" />
-            <p class="muted">Leave empty to create a new account during setup.</p>
+            <label>LLM provider (required)</label>
+            <select id="llmProvider"></select>
           </div>
           <div>
-            <label>Telegram bot token (optional)</label>
-            <input id="telegramToken" value="${defaults.telegramToken}" placeholder="Only needed for Telegram pairing later" />
-            <p class="muted">Need one? <a href="https://core.telegram.org/bots#how-do-i-create-a-bot" target="_blank" rel="noopener noreferrer">Create a Telegram bot token (official docs)</a>.</p>
+            <label>LLM model (advanced, optional)</label>
+            <select id="llmModel"></select>
           </div>
         </div>
-        <button id="start">Start Installation</button>
+        <div style="margin-top:8px;">
+          <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#9cb0de;">
+            <input id="llmModelManual" type="checkbox" style="width:auto; padding:0; margin:0;" />
+            Choose model manually (advanced)
+          </label>
+        </div>
+        <div style="margin-top:12px;">
+          <label>LLM API key or token (required)</label>
+          <input id="llmCredential" type="password" placeholder="Paste the credential for the selected provider/model" />
+          <p class="muted">This credential is written to OpenClaw model provider config so your agent can run. If you skip manual model selection, the installer will choose a safe provider default.</p>
+          <p class="muted" id="llmLoadState">Loading LLM provider catalog...</p>
+        </div>
       </div>
-      <div class="card">
+      <div class="card" id="startCard">
+        <div class="grid">
+          <div>
+            <label>TraderClaw account API key (existing users)</label>
+            <input id="apiKey" value="${defaults.apiKey}" placeholder="Paste your TraderClaw API key if you already have an account" />
+            <p class="muted">New user? Leave this blank and the setup step will help create your account.</p>
+          </div>
+          <div>
+            <label>Telegram bot token (required)</label>
+            <input id="telegramToken" value="${defaults.telegramToken}" placeholder="Required now for the best onboarding experience" />
+            <p class="muted">Required for guided onboarding and immediate bot readiness. Need one? <a href="https://core.telegram.org/bots#how-do-i-create-a-bot" target="_blank" rel="noopener noreferrer">Create a Telegram bot token (official docs)</a>.</p>
+          </div>
+        </div>
+        <button id="start" disabled>Start Installation</button>
+      </div>
+      <div class="card" id="statusCard">
         <h3>Status: <span id="status">idle</span></h3>
         <p class="muted">Watch progress below. Key links and next actions appear here automatically.</p>
         <div id="ctaBox" class="hidden">
@@ -1416,13 +1533,8 @@ function wizardHtml(defaults) {
             </div>
           </div>
           <div id="setupCta" class="cta hidden">
-            <h4>Finish in VPS Shell</h4>
-            <p class="muted" id="setupSuccessText"></p>
-            <div class="row">
-              <code id="setupCommand"></code>
-              <button id="copySetupCommand" type="button">Copy command</button>
-            </div>
-            <p class="muted">After setup completes, run <code id="restartCommand"></code>.</p>
+            <h4>Final setup will appear when install completes</h4>
+            <p class="muted">When complete, a final checkout screen will show your commands and finish action.</p>
           </div>
         </div>
         <div id="ready" class="ok"></div>
@@ -1432,9 +1544,23 @@ function wizardHtml(defaults) {
           <tbody id="steps"></tbody>
         </table>
       </div>
-      <div class="card">
+      <div class="card" id="logsCard">
         <h3>Live Logs</h3>
         <pre id="logs"></pre>
+      </div>
+      <div class="card checkout hidden" id="completionScreen">
+        <h2>You Made It - Wizard Complete</h2>
+        <p class="muted">TraderClaw core installation is done. Run these 2 commands in your VPS shell to finish setup and go live.</p>
+        <p class="ok" id="setupSuccessText"></p>
+        <div class="checkout-row">
+          <code id="setupCommand"></code>
+          <button id="copySetupCommand" type="button">Copy setup command</button>
+        </div>
+        <div class="checkout-row">
+          <code id="restartCommand"></code>
+          <button id="copyRestartCommand" type="button">Copy restart command</button>
+        </div>
+        <button id="finishWizard" type="button" class="checkout-finish">Finish & Return to Shell</button>
       </div>
     </div>
     <script>
@@ -1453,6 +1579,89 @@ function wizardHtml(defaults) {
       const setupCommandEl = document.getElementById("setupCommand");
       const restartCommandEl = document.getElementById("restartCommand");
       const copySetupBtn = document.getElementById("copySetupCommand");
+      const copyRestartBtn = document.getElementById("copyRestartCommand");
+      const finishWizardBtn = document.getElementById("finishWizard");
+      const llmProviderEl = document.getElementById("llmProvider");
+      const llmModelEl = document.getElementById("llmModel");
+      const llmModelManualEl = document.getElementById("llmModelManual");
+      const llmCredentialEl = document.getElementById("llmCredential");
+      const telegramTokenEl = document.getElementById("telegramToken");
+      const llmLoadStateEl = document.getElementById("llmLoadState");
+      const startBtn = document.getElementById("start");
+      const llmCardEl = document.getElementById("llmCard");
+      const startCardEl = document.getElementById("startCard");
+      const statusCardEl = document.getElementById("statusCard");
+      const logsCardEl = document.getElementById("logsCard");
+      const completionScreenEl = document.getElementById("completionScreen");
+      let llmCatalog = { providers: [] };
+      let llmCatalogReady = false;
+
+      function hasRequiredInputs() {
+        return (
+          llmCatalogReady
+          && Boolean(llmProviderEl.value.trim())
+          && Boolean(llmCredentialEl.value.trim())
+          && Boolean(telegramTokenEl.value.trim())
+        );
+      }
+
+      function updateStartButtonState() {
+        startBtn.disabled = !hasRequiredInputs();
+      }
+
+      function setLlmCatalogReady(ready, message, isError = false) {
+        llmCatalogReady = ready;
+        llmLoadStateEl.textContent = message;
+        llmLoadStateEl.className = isError ? "err" : "muted";
+        updateStartButtonState();
+      }
+
+      function setSelectOptions(selectEl, items, value) {
+        selectEl.innerHTML = "";
+        items.forEach((item) => {
+          const option = document.createElement("option");
+          option.value = item.value;
+          option.textContent = item.label;
+          selectEl.appendChild(option);
+        });
+        if (value) selectEl.value = value;
+      }
+
+      function refreshModelOptions(preferredModel) {
+        const provider = llmProviderEl.value;
+        const providerEntry = (llmCatalog.providers || []).find((entry) => entry.id === provider);
+        const modelItems = (providerEntry ? providerEntry.models : []).map((item) => ({ value: item.id, label: item.name + " (" + item.id + ")" }));
+        if (modelItems.length === 0) {
+          setSelectOptions(llmModelEl, [{ value: "", label: "No models available for provider" }], "");
+          updateStartButtonState();
+          return;
+        }
+        setSelectOptions(llmModelEl, modelItems, preferredModel || modelItems[0].value);
+        llmModelEl.disabled = !llmModelManualEl.checked;
+        updateStartButtonState();
+      }
+
+      async function loadLlmCatalog() {
+        setLlmCatalogReady(false, "Loading LLM provider catalog... this can take a few seconds.");
+        try {
+          const res = await fetch("/api/llm/options");
+          const data = await res.json();
+          llmCatalog = data || { providers: [] };
+          const providers = (llmCatalog.providers || []).map((entry) => ({ value: entry.id, label: entry.id }));
+          if (providers.length === 0) {
+            setSelectOptions(llmProviderEl, [{ value: "", label: "No providers available" }], "");
+            refreshModelOptions("");
+            setLlmCatalogReady(false, "No LLM providers were found from OpenClaw. Please check OpenClaw model setup.", true);
+            return;
+          }
+          setSelectOptions(llmProviderEl, providers, "${defaults.llmProvider}");
+          refreshModelOptions("${defaults.llmModel}");
+          setLlmCatalogReady(true, "LLM providers loaded. Select provider and paste credential to continue. Model selection is optional.");
+        } catch (err) {
+          setLlmCatalogReady(false, "Failed to load LLM providers. Check OpenClaw and reload this page.", true);
+          manualEl.textContent = "Failed to load LLM provider catalog: " + (err && err.message ? err.message : String(err));
+        }
+      }
 
       function showUrlCta(containerEl, linkEl, value) {
         if (!value) {
@@ -1467,15 +1676,52 @@ function wizardHtml(defaults) {
         linkEl.textContent = value;
       }
 
+      function setCheckoutMode(enabled) {
+        if (enabled) {
+          llmCardEl.classList.add("hidden");
+          startCardEl.classList.add("hidden");
+          statusCardEl.classList.add("hidden");
+          logsCardEl.classList.add("hidden");
+          completionScreenEl.classList.remove("hidden");
+          return;
+        }
+        llmCardEl.classList.remove("hidden");
+        startCardEl.classList.remove("hidden");
+        statusCardEl.classList.remove("hidden");
+        logsCardEl.classList.remove("hidden");
+        completionScreenEl.classList.add("hidden");
+      }
+
       async function startInstall() {
+        if (!llmCatalogReady) {
+          stateEl.textContent = "blocked";
+          readyEl.textContent = "";
+          manualEl.textContent = "LLM provider catalog is still loading. Please wait a few seconds and try again.";
+          return;
+        }
         stateEl.textContent = "starting";
         manualEl.textContent = "";
         readyEl.textContent = "Starting installation...";
 
         const payload = {
+          llmProvider: llmProviderEl.value.trim(),
+          llmModel: llmModelManualEl.checked ? llmModelEl.value.trim() : "",
+          llmCredential: llmCredentialEl.value.trim(),
           apiKey: document.getElementById("apiKey").value.trim(),
           telegramToken: document.getElementById("telegramToken").value.trim()
         };
+        if (!payload.llmProvider || !payload.llmCredential) {
+          stateEl.textContent = "blocked";
+          readyEl.textContent = "";
+          manualEl.textContent = "LLM provider and credential are required before starting installation.";
+          return;
+        }
+        if (!payload.telegramToken) {
+          stateEl.textContent = "blocked";
+          readyEl.textContent = "";
+          manualEl.textContent = "Telegram bot token is required before starting installation.";
+          return;
+        }
 
         try {
           const res = await fetch("/api/start", {
@@ -1514,9 +1760,10 @@ function wizardHtml(defaults) {
 
         const setupHandoff = data.setupHandoff;
         if (data.status === "completed" && setupHandoff && setupHandoff.command) {
+          setCheckoutMode(true);
           ctaBoxEl.classList.remove("hidden");
           setupCtaEl.classList.remove("hidden");
-          setupSuccessTextEl.textContent = "Installation succeeded. Continue in your VPS shell to finish secure wallet/session setup.";
+          setupSuccessTextEl.textContent = "Pro move. You finished the wizard installation.";
           setupCommandEl.textContent = setupHandoff.command;
           restartCommandEl.textContent = setupHandoff.restartCommand || "openclaw gateway restart";
           readyEl.textContent =
@@ -1525,6 +1772,7 @@ function wizardHtml(defaults) {
             "Run in VPS shell: " + setupHandoff.command + "\\n" +
             "Then run: " + (setupHandoff.restartCommand || "openclaw gateway restart");
         } else {
+          setCheckoutMode(false);
           setupCtaEl.classList.add("hidden");
           if (!tailscaleApprovalUrl && !funnelUrl) {
             ctaBoxEl.classList.add("hidden");
@@ -1545,18 +1793,54 @@ function wizardHtml(defaults) {
         logsEl.textContent = (data.logs || []).map((l) => "[" + l.at + "] " + l.stepId + " " + l.level + " " + l.text).join("\\n");
       }
 
+      async function finishWizardServer() {
+        finishWizardBtn.disabled = true;
+        finishWizardBtn.textContent = "Closing wizard...";
+        try {
+          const res = await fetch("/api/finish", { method: "POST" });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            finishWizardBtn.disabled = false;
+            finishWizardBtn.textContent = "Finish & Return to Shell";
+            manualEl.textContent = data.error ? "Unable to close wizard: " + data.error : "Unable to close wizard right now.";
+            return;
+          }
+          readyEl.textContent = "Wizard completed. Server is shutting down and your shell prompt will return.";
+          manualEl.textContent = "";
+        } catch (err) {
+          finishWizardBtn.disabled = false;
+          finishWizardBtn.textContent = "Finish & Return to Shell";
+          manualEl.textContent = "Unable to close wizard: " + (err && err.message ? err.message : String(err));
+        }
+      }
+
       document.getElementById("start").addEventListener("click", startInstall);
-      copySetupBtn.addEventListener("click", async () => {
-        const value = setupCommandEl.textContent || "";
+      async function copyWithFeedback(buttonEl, value) {
         if (!value) return;
         try {
           await navigator.clipboard.writeText(value);
-          copySetupBtn.textContent = "Copied";
+          buttonEl.textContent = "Copied";
         } catch {
-          copySetupBtn.textContent = "Copy failed";
+          buttonEl.textContent = "Copy failed";
         }
-        setTimeout(() => { copySetupBtn.textContent = "Copy command"; }, 1200);
+        setTimeout(() => { buttonEl.textContent = "Copy command"; }, 1200);
+      }
+
+      copySetupBtn.addEventListener("click", async () => {
+        await copyWithFeedback(copySetupBtn, setupCommandEl.textContent || "");
       });
+      copyRestartBtn.addEventListener("click", async () => {
+        await copyWithFeedback(copyRestartBtn, restartCommandEl.textContent || "");
+      });
+      finishWizardBtn.addEventListener("click", finishWizardServer);
+      llmProviderEl.addEventListener("change", () => refreshModelOptions(""));
+      llmModelManualEl.addEventListener("change", () => {
+        llmModelEl.disabled = !llmModelManualEl.checked;
+        updateStartButtonState();
+      });
+      llmCredentialEl.addEventListener("input", updateStartButtonState);
+      telegramTokenEl.addEventListener("input", updateStartButtonState);
+      loadLlmCatalog();
       setInterval(refresh, 1200);
       refresh();
     </script>
@@ -1590,6 +1874,7 @@ async function cmdInstall(args) {
     setupHandoff: null,
   };
   let running = false;
+  let shuttingDown = false;
 
   const server = createServer(async (req, res) => {
     const respondJson = (code, payload) => {
@@ -1607,6 +1892,40 @@ async function cmdInstall(args) {
 
     if (req.method === "GET" && req.url === "/api/state") {
       respondJson(200, runtime);
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/api/llm/options") {
+      respondJson(200, loadWizardLlmCatalog());
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/finish") {
+      if (running || runtime.status !== "completed") {
+        respondJson(409, { ok: false, error: "wizard_not_completed" });
+        return;
+      }
+      if (shuttingDown) {
+        respondJson(202, { ok: true, shuttingDown: true });
+        return;
+      }
+      shuttingDown = true;
+      respondJson(202, { ok: true, shuttingDown: true });
+      setTimeout(() => {
+        const setupCommand = runtime.setupHandoff?.command || "";
+        const restartCommand = runtime.setupHandoff?.restartCommand || "openclaw gateway restart";
+        if (setupCommand) {
+          printSuccess("Run these commands now in this same terminal:");
+          print(`  1) ${setupCommand}`);
+          print(`  2) ${restartCommand}`);
+        } else {
+          printWarn("Wizard finished, but no setup handoff command was available.");
+          print(`  Next step: traderclaw setup --url ${defaults.orchestratorUrl}`);
+          print(`  Then run: ${restartCommand}`);
+        }
+        printInfo("Wizard finish requested from browser. Closing server and returning shell prompt.");
+        server.close(() => process.exit(0));
+      }, 120);
       return;
     }
 
@@ -1631,11 +1950,14 @@ async function cmdInstall(args) {
         {
           mode: "light",
           lane: defaults.lane,
+          llmProvider: body.llmProvider || defaults.llmProvider,
+          llmModel: body.llmModel || defaults.llmModel,
+          llmCredential: body.llmCredential || defaults.llmCredential,
           apiKey: body.apiKey || defaults.apiKey,
           orchestratorUrl: defaults.orchestratorUrl,
           gatewayBaseUrl: defaults.gatewayBaseUrl,
           gatewayToken: defaults.gatewayToken,
-          enableTelegram: Boolean(body.telegramToken || defaults.telegramToken || defaults.enableTelegram),
+          enableTelegram: true,
           telegramToken: body.telegramToken || defaults.telegramToken,
           autoInstallDeps: true,
         },
