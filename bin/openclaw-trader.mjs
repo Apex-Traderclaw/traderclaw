@@ -1469,6 +1469,7 @@ function wizardHtml(defaults) {
       .checkout-finish { margin-top:14px; background:#2f9a5f; font-size:14px; padding:10px 14px; }
       .hidden { display:none; }
       .loading-hint { display:flex; align-items:center; gap:8px; margin-top:8px; color:#9cb0de; font-size:13px; }
+      .loading-hint.hidden { display:none; }
       .spinner { width:14px; height:14px; border:2px solid #334a87; border-top-color:#8daeff; border-radius:50%; animation:spin 0.8s linear infinite; flex:0 0 auto; }
       @keyframes spin { to { transform:rotate(360deg); } }
     </style>
