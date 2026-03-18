@@ -171,7 +171,8 @@ async function installPlugin(modeConfig) {
   return { installed: true, available: commandExists(modeConfig.cliName) };
 }
 
-async function installAndEnableOpenClawPlugin(modeConfig, onEvent) {
+async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorUrl) {
+  seedPluginConfig(modeConfig, orchestratorUrl || "https://api.traderclaw.ai");
   await runCommandWithEvents("openclaw", ["plugins", "install", modeConfig.pluginPackage], { onEvent });
   await runCommandWithEvents("openclaw", ["plugins", "enable", modeConfig.pluginId], { onEvent });
   const list = await runCommandWithEvents("openclaw", ["plugins", "list"], { onEvent });
@@ -189,6 +190,37 @@ async function installAndEnableOpenClawPlugin(modeConfig, onEvent) {
     list: list.stdout || "",
     doctor: doctor.stdout || "",
   };
+}
+
+function seedPluginConfig(modeConfig, orchestratorUrl, configPath = CONFIG_FILE) {
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    config = {};
+  }
+
+  if (!config.plugins || typeof config.plugins !== "object") config.plugins = {};
+  if (!config.plugins.entries || typeof config.plugins.entries !== "object") config.plugins.entries = {};
+
+  const existing = config.plugins.entries[modeConfig.pluginId];
+  const existingConfig = existing && typeof existing === "object" && existing.config && typeof existing.config === "object"
+    ? existing.config
+    : {};
+
+  config.plugins.entries[modeConfig.pluginId] = {
+    enabled: existing && typeof existing.enabled === "boolean" ? existing.enabled : true,
+    config: {
+      ...existingConfig,
+      orchestratorUrl: typeof existingConfig.orchestratorUrl === "string" && existingConfig.orchestratorUrl.trim()
+        ? existingConfig.orchestratorUrl.trim()
+        : (orchestratorUrl || "https://api.traderclaw.ai"),
+    },
+  };
+
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  return configPath;
 }
 
 function ensureOpenResponsesEnabled(configPath = CONFIG_FILE) {
@@ -703,10 +735,16 @@ export class InstallerStepEngine {
       await this.runStep("configure_llm", "Configuring required OpenClaw LLM provider", async () => this.configureLlmStep());
       if (!this.options.skipInstallPlugin) {
         await this.runStep("install_plugin_package", "Installing TraderClaw CLI package", async () => installPlugin(this.modeConfig));
-        await this.runStep("activate_openclaw_plugin", "Installing and enabling TraderClaw inside OpenClaw", async () =>
-          installAndEnableOpenClawPlugin(this.modeConfig, (evt) =>
-            this.emitLog("activate_openclaw_plugin", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
-          ));
+        await this.runStep(
+          "activate_openclaw_plugin",
+          "Installing and enabling TraderClaw inside OpenClaw",
+          async () =>
+            installAndEnableOpenClawPlugin(
+              this.modeConfig,
+              (evt) => this.emitLog("activate_openclaw_plugin", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
+              this.options.orchestratorUrl,
+            ),
+        );
       }
       if (!this.options.skipTailscale) {
         await this.runStep("tailscale_install", "Ensuring Tailscale is installed", async () => this.ensureTailscale());
