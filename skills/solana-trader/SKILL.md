@@ -2206,6 +2206,9 @@ When any of the following occur:
 | Limits | `solana_entitlement_purchase` | Buy plan upgrade |
 | Limits | `solana_entitlement_upgrade` | Upgrade account tier |
 | System | `solana_system_status` | System health |
+| Startup | `solana_startup_gate` | Run all 6 startup checks with auto-fix for gateway credentials |
+| Startup | `solana_gateway_forward_probe` | Test orchestrator→gateway push path end-to-end |
+| Diagnostics | `solana_runtime_status` | Plugin runtime state snapshot (startup gate, alpha stream, probe) |
 | Alpha | `solana_alpha_subscribe` | Subscribe to SpyFly alpha stream (pass `agentId` for Gateway forwarding) |
 | Alpha | `solana_alpha_unsubscribe` | Unsubscribe from alpha stream |
 | Alpha | `solana_alpha_signals` | Get buffered alpha signals (unseen, filtered) |

@@ -1,4 +1,5 @@
 import { execSync, spawn } from "child_process";
+import { randomBytes } from "crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -280,6 +281,156 @@ function seedPluginConfig(modeConfig, orchestratorUrl, configPath = CONFIG_FILE)
   return configPath;
 }
 
+function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    config = {};
+  }
+
+  if (!config.agents || typeof config.agents !== "object") config.agents = {};
+
+  const isV2 = modeConfig.pluginId === "solana-trader-v2";
+
+  const v1Agents = [
+    { id: "main", default: true, heartbeat: { every: "5m", target: "last" } }
+  ];
+  const v2Agents = [
+    { id: "cto", default: true, heartbeat: { every: "5m", target: "last" } },
+    { id: "execution-specialist", heartbeat: { every: "3m", target: "last" } },
+    { id: "alpha-signal-analyst", heartbeat: { every: "5m", target: "last" } },
+    { id: "onchain-analyst" },
+    { id: "social-analyst" },
+    { id: "smart-money-tracker" },
+    { id: "risk-officer" },
+    { id: "strategy-researcher" }
+  ];
+
+  const targetAgents = isV2 ? v2Agents : v1Agents;
+
+  if (!Array.isArray(config.agents.list)) {
+    config.agents.list = [];
+  }
+  config.agents.list = config.agents.list.filter(a => a && typeof a === "object" && a.id);
+
+  const existingIds = new Set(config.agents.list.map(a => a.id));
+  for (const agent of targetAgents) {
+    if (existingIds.has(agent.id)) {
+      const existing = config.agents.list.find(a => a.id === agent.id);
+      if (agent.heartbeat) {
+        existing.heartbeat = agent.heartbeat;
+      }
+      if (agent.default) {
+        existing.default = true;
+      }
+    } else {
+      config.agents.list.push(agent);
+    }
+  }
+
+  if (!config.cron || typeof config.cron !== "object") {
+    config.cron = {};
+  }
+  config.cron.enabled = true;
+  if (!config.cron.maxConcurrentRuns) config.cron.maxConcurrentRuns = isV2 ? 3 : 2;
+  if (!config.cron.sessionRetention) config.cron.sessionRetention = "24h";
+
+  const mainAgent = isV2 ? "cto" : "main";
+
+  const v1Jobs = [
+    { id: "strategy-evolution", schedule: "0 */4 * * *", agentId: mainAgent, message: "CRON_JOB: strategy_evolution — Review trade journal, compute weight adjustments, update strategy. Only update if sufficient closed trades have accumulated.", enabled: true },
+    { id: "source-reputation", schedule: "0 */3 * * *", agentId: mainAgent, message: "CRON_JOB: source_reputation_recalc — Analyze which alpha signal sources led to wins vs losses. Update reputation tracking in memory.", enabled: true },
+    { id: "risk-audit", schedule: "0 */2 * * *", agentId: mainAgent, message: "CRON_JOB: portfolio_risk_audit — Portfolio stress tests, exposure checks, correlation analysis, drawdown monitoring.", enabled: true },
+    { id: "meta-rotation", schedule: "30 */3 * * *", agentId: mainAgent, message: "CRON_JOB: meta_rotation_analysis — Analyze narrative clusters across recent scans and trades. Identify hot vs cooling metas. Write observations to memory.", enabled: true },
+    { id: "dead-money-sweep", schedule: "0 */2 * * *", agentId: mainAgent, message: "CRON_JOB: dead_money_sweep — Check all open LOCAL_MANAGED positions for dead money. Exit stale positions. Tag as dead_money.", enabled: true },
+    { id: "subscription-cleanup", schedule: "0 * * * *", agentId: mainAgent, message: "CRON_JOB: subscription_cleanup — Check active Bitquery subscriptions. Unsubscribe from streams no longer needed (sold tokens, closed positions).", enabled: true },
+    { id: "daily-report", schedule: "0 4 * * *", agentId: mainAgent, message: "CRON_JOB: daily_performance_report — Calculate daily PnL, aggregate win/loss stats, source reputation summary, write comprehensive memory entry.", enabled: true },
+    { id: "whale-watch", schedule: "0 */2 * * *", agentId: mainAgent, message: "CRON_JOB: whale_activity_scan — Scan for large wallet movements, deployer activity, and accumulation patterns across watched tokens.", enabled: true }
+  ];
+
+  const v2ExtraJobs = [
+    { id: "whale-watch", schedule: "0 */2 * * *", agentId: "smart-money-tracker", message: "CRON_JOB: whale_activity_scan — Scan for large wallet movements, deployer activity, accumulation patterns. Detect smart money consensus and fresh wallet surges.", enabled: true },
+    { id: "sentiment-trend", schedule: "0 */4 * * *", agentId: "social-analyst", message: "CRON_JOB: sentiment_trend_analysis — Analyze Twitter/X trending tokens, influencer clustering, mention velocity, narrative exhaustion signals. Write to memory.", enabled: true },
+    { id: "execution-health", schedule: "0 */6 * * *", agentId: "execution-specialist", message: "CRON_JOB: execution_health_review — Review recent trade executions for slippage patterns, timing efficiency, failed transactions. Report execution quality metrics.", enabled: true },
+    { id: "source-reputation", schedule: "0 */3 * * *", agentId: "alpha-signal-analyst", message: "CRON_JOB: source_reputation_recalc — Analyze which alpha signal sources led to wins vs losses. Update reputation tracking in memory.", enabled: true },
+    { id: "risk-audit", schedule: "0 */2 * * *", agentId: "risk-officer", message: "CRON_JOB: portfolio_risk_audit — Portfolio stress tests, exposure checks, correlation analysis, drawdown monitoring. Produce risk report for CTO.", enabled: true },
+    { id: "strategy-evolution", schedule: "0 */4 * * *", agentId: "strategy-researcher", message: "CRON_JOB: strategy_evolution — Review trade journal, compute weight adjustments, update strategy. Only update if sufficient closed trades have accumulated.", enabled: true },
+    { id: "meta-rotation", schedule: "30 */3 * * *", agentId: "onchain-analyst", message: "CRON_JOB: meta_rotation_analysis — Analyze narrative clusters across recent scans and trades. Identify hot vs cooling metas. Write observations to memory.", enabled: true }
+  ];
+
+  const targetJobs = isV2
+    ? [...v1Jobs.filter(j => j.id === "dead-money-sweep" || j.id === "subscription-cleanup" || j.id === "daily-report"), ...v2ExtraJobs]
+    : v1Jobs;
+
+  if (!Array.isArray(config.cron.jobs)) {
+    config.cron.jobs = [];
+  }
+  config.cron.jobs = config.cron.jobs.filter(j => j && typeof j === "object" && j.id);
+
+  const existingJobIds = new Set(config.cron.jobs.map(j => j.id));
+  let added = 0;
+  let updated = 0;
+  for (const job of targetJobs) {
+    if (existingJobIds.has(job.id)) {
+      const existing = config.cron.jobs.find(j => j.id === job.id);
+      if (existing.schedule !== job.schedule || existing.agentId !== job.agentId || existing.message !== job.message || existing.enabled !== true) {
+        existing.schedule = job.schedule;
+        existing.agentId = job.agentId;
+        existing.message = job.message;
+        existing.enabled = true;
+        updated++;
+      }
+    } else {
+      config.cron.jobs.push(job);
+      added++;
+    }
+  }
+
+  if (!config.hooks || typeof config.hooks !== "object") {
+    config.hooks = {};
+  }
+  config.hooks.enabled = true;
+  if (!config.hooks.token || config.hooks.token === "shared-secret" || config.hooks.token === "REPLACE_WITH_SECURE_TOKEN") {
+    config.hooks.token = "hk_" + randomBytes(24).toString("hex");
+  }
+
+  const alphaAgentId = isV2 ? "alpha-signal-analyst" : "main";
+  const onchainAgentId = isV2 ? "onchain-analyst" : "main";
+
+  const targetMappings = [
+    { match: { path: "alpha-signal" }, action: "agent", agentId: alphaAgentId, deliver: true },
+    { match: { path: "firehose-alert" }, action: "agent", agentId: onchainAgentId, deliver: true }
+  ];
+
+  if (!Array.isArray(config.hooks.mappings)) {
+    config.hooks.mappings = [];
+  }
+  config.hooks.mappings = config.hooks.mappings.filter(m => m && typeof m === "object");
+
+  for (const mapping of targetMappings) {
+    const existingIdx = config.hooks.mappings.findIndex(m => m?.match?.path === mapping.match.path);
+    if (existingIdx >= 0) {
+      config.hooks.mappings[existingIdx] = mapping;
+    } else {
+      config.hooks.mappings.push(mapping);
+    }
+  }
+
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+
+  return {
+    configPath,
+    agentsConfigured: targetAgents.length,
+    cronJobsAdded: added,
+    cronJobsUpdated: updated,
+    cronJobsTotal: config.cron.jobs.length,
+    hooksConfigured: config.hooks.mappings.length,
+    isV2
+  };
+}
+
 function ensureOpenResponsesEnabled(configPath = CONFIG_FILE) {
   let config = {};
   try {
@@ -486,6 +637,18 @@ function verifyInstallation(modeConfig, apiKey) {
     const pluginList = getCommandOutput("openclaw plugins list") || "";
     pluginActive = pluginList.toLowerCase().includes(modeConfig.pluginId.toLowerCase());
   }
+  let heartbeatConfigured = false;
+  let cronConfigured = false;
+  try {
+    const config = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
+    const agentsList = config?.agents?.list;
+    if (Array.isArray(agentsList)) {
+      heartbeatConfigured = agentsList.some(a => a.heartbeat && a.heartbeat.every);
+    }
+    cronConfigured = config?.cron?.enabled === true && Array.isArray(config?.cron?.jobs) && config.cron.jobs.length > 0;
+  } catch {
+  }
+
   return [
     { label: "OpenClaw platform", ok: commandExists("openclaw"), note: "not in PATH" },
     { label: `Trading CLI (${modeConfig.cliName})`, ok: commandExists(modeConfig.cliName), note: "not in PATH" },
@@ -493,6 +656,8 @@ function verifyInstallation(modeConfig, apiKey) {
     { label: "Configuration file", ok: existsSync(CONFIG_FILE), note: "not created" },
     { label: "LLM provider configured", ok: llmConfigured, note: "missing model provider credential" },
     { label: "Gateway configuration", ok: existsSync(gatewayFile), note: "not found" },
+    { label: "Heartbeat scheduling", ok: heartbeatConfigured, note: "agent will not wake autonomously" },
+    { label: "Cron jobs configured", ok: cronConfigured, note: "scheduled maintenance jobs missing" },
     { label: "API key configured", ok: !!apiKey, note: "needs setup" },
   ];
 }
@@ -889,6 +1054,15 @@ export class InstallerStepEngine {
         const configPath = ensureOpenResponsesEnabled(CONFIG_FILE);
         const restart = await restartGateway();
         return { configPath, restart };
+      });
+
+      await this.runStep("gateway_scheduling", "Configuring heartbeat and cron schedules", async () => {
+        const result = configureGatewayScheduling(this.modeConfig, CONFIG_FILE);
+        this.emitLog("gateway_scheduling", "info", `Agents configured: ${result.agentsConfigured}`);
+        this.emitLog("gateway_scheduling", "info", `Cron jobs: ${result.cronJobsAdded} added, ${result.cronJobsUpdated} updated, ${result.cronJobsTotal} total`);
+        this.emitLog("gateway_scheduling", "info", `Webhook hooks: ${result.hooksConfigured}`);
+        const restart = await restartGateway();
+        return { ...result, restart };
       });
 
       await this.runStep("setup_handoff", "Preparing secure setup handoff", async () => {
