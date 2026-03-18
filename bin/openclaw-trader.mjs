@@ -1471,6 +1471,8 @@ function wizardHtml(defaults) {
       .loading-hint { display:flex; align-items:center; gap:8px; margin-top:8px; color:#9cb0de; font-size:13px; }
       .loading-hint.hidden { display:none; }
       .spinner { width:14px; height:14px; border:2px solid #334a87; border-top-color:#8daeff; border-radius:50%; animation:spin 0.8s linear infinite; flex:0 0 auto; }
+      .muted a { color:#9fd3ff; }
+      .muted a:hover { color:#c5e5ff; }
       @keyframes spin { to { transform:rotate(360deg); } }
     </style>
   </head>
@@ -1612,6 +1614,7 @@ function wizardHtml(defaults) {
       let llmCatalogLoading = false;
       let llmLoadTicker = null;
       let llmLoadStartedAt = 0;
+      let announcedTailscaleUrl = "";
 
       function hasRequiredInputs() {
         return (
@@ -1819,6 +1822,15 @@ function wizardHtml(defaults) {
 
         showUrlCta(tailscaleCtaEl, tailscaleLinkEl, tailscaleApprovalUrl);
         showUrlCta(funnelCtaEl, funnelLinkEl, funnelUrl);
+        if (tailscaleApprovalUrl && tailscaleApprovalUrl !== announcedTailscaleUrl) {
+          announcedTailscaleUrl = tailscaleApprovalUrl;
+          readyEl.textContent = "Action required: open the Tailscale approval link and complete sign-in, then return to this page.";
+          try {
+            window.alert("Action required: approve Tailscale in your browser. The approval link is now shown above status.");
+          } catch {
+            // Some environments can suppress alerts; CTA remains visible.
+          }
+        }
 
         const setupHandoff = data.setupHandoff;
         if (data.status === "completed" && setupHandoff && setupHandoff.command) {
@@ -1931,7 +1943,7 @@ async function cmdInstall(args) {
     status: "idle",
     logs: [],
     stepResults: [],
-    detected: {},
+    detected: { funnelUrl: null, tailscaleApprovalUrl: null },
     errors: [],
     setupHandoff: null,
   };
@@ -1943,6 +1955,15 @@ async function cmdInstall(args) {
       res.statusCode = code;
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify(payload));
+    };
+    const extractTailscaleApprovalUrl = (evt) => {
+      const urls = Array.isArray(evt?.urls) ? evt.urls : [];
+      for (const url of urls) {
+        if (typeof url === "string" && url.startsWith("https://login.tailscale.com/")) return url;
+      }
+      const text = typeof evt?.text === "string" ? evt.text : "";
+      const match = text.match(/https:\/\/login\.tailscale\.com\/[^\s"')]+/);
+      return match ? match[0] : "";
     };
 
     if (req.method === "GET" && req.url === "/") {
@@ -2003,7 +2024,7 @@ async function cmdInstall(args) {
       runtime.logs = [];
       runtime.stepResults = [];
       runtime.errors = [];
-      runtime.detected = {};
+      runtime.detected = { funnelUrl: null, tailscaleApprovalUrl: null };
       runtime.setupHandoff = null;
       respondJson(202, { ok: true });
 
@@ -2034,6 +2055,10 @@ async function cmdInstall(args) {
           },
           onLog: (evt) => {
             runtime.logs.push(evt);
+            if (!runtime.detected.tailscaleApprovalUrl && evt.stepId === "tailscale_up") {
+              const approvalUrl = extractTailscaleApprovalUrl(evt);
+              if (approvalUrl) runtime.detected.tailscaleApprovalUrl = approvalUrl;
+            }
           },
         },
       );
