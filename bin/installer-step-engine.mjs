@@ -171,6 +171,26 @@ async function installPlugin(modeConfig) {
   return { installed: true, available: commandExists(modeConfig.cliName) };
 }
 
+async function installAndEnableOpenClawPlugin(modeConfig, onEvent) {
+  await runCommandWithEvents("openclaw", ["plugins", "install", modeConfig.pluginPackage], { onEvent });
+  await runCommandWithEvents("openclaw", ["plugins", "enable", modeConfig.pluginId], { onEvent });
+  const list = await runCommandWithEvents("openclaw", ["plugins", "list"], { onEvent });
+  const doctor = await runCommandWithEvents("openclaw", ["plugins", "doctor"], { onEvent });
+  const pluginFound = `${list.stdout || ""}\n${list.stderr || ""}`.toLowerCase().includes(modeConfig.pluginId.toLowerCase());
+  if (!pluginFound) {
+    throw new Error(
+      `Plugin '${modeConfig.pluginId}' was not found in 'openclaw plugins list' after install/enable.`,
+    );
+  }
+  return {
+    installed: true,
+    enabled: true,
+    verified: true,
+    list: list.stdout || "",
+    doctor: doctor.stdout || "",
+  };
+}
+
 function ensureOpenResponsesEnabled(configPath = CONFIG_FILE) {
   let config = {};
   try {
@@ -212,12 +232,132 @@ function deployGatewayConfig(modeConfig) {
   return { deployed: true, source: src, dest: destFile };
 }
 
+function listProviderModels(provider) {
+  const cmd = `openclaw models list --all --provider ${shellQuote(provider)} --json`;
+  const raw = getCommandOutput(cmd);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    const models = Array.isArray(parsed?.models) ? parsed.models : [];
+    return models
+      .map((entry) => (entry && typeof entry.key === "string" ? entry.key : ""))
+      .filter((id) => id.startsWith(`${provider}/`));
+  } catch {
+    return [];
+  }
+}
+
+function fallbackModelForProvider(provider) {
+  if (provider === "anthropic") return "anthropic/claude-opus-4-6";
+  if (provider === "openai") return "openai/gpt-5.4";
+  if (provider === "openai-codex") return "openai-codex/gpt-5.4";
+  return `${provider}/default`;
+}
+
+function providerEnvKey(provider) {
+  if (provider === "anthropic") return "ANTHROPIC_API_KEY";
+  if (provider === "openai" || provider === "openai-codex") return "OPENAI_API_KEY";
+  if (provider === "openrouter") return "OPENROUTER_API_KEY";
+  if (provider === "groq") return "GROQ_API_KEY";
+  if (provider === "mistral") return "MISTRAL_API_KEY";
+  if (provider === "google" || provider === "google-vertex") return "GEMINI_API_KEY";
+  return "";
+}
+
+function resolveLlmModelSelection(provider, requestedModel) {
+  const availableModels = listProviderModels(provider);
+  const warnings = [];
+
+  if (requestedModel) {
+    if (!requestedModel.startsWith(`${provider}/`)) {
+      warnings.push(`Manual model '${requestedModel}' does not match provider '${provider}'. Using provider default instead.`);
+    } else if (availableModels.length === 0 || availableModels.includes(requestedModel)) {
+      return { model: requestedModel, source: "manual", availableModels, warnings };
+    } else {
+      warnings.push(`Manual model '${requestedModel}' was not found in OpenClaw catalog for '${provider}'. Falling back to provider default.`);
+    }
+  }
+
+  if (availableModels.length > 0) {
+    return { model: availableModels[0], source: "provider_default", availableModels, warnings };
+  }
+
+  warnings.push(`No discoverable model list found for provider '${provider}'. Falling back to '${fallbackModelForProvider(provider)}'.`);
+  return { model: fallbackModelForProvider(provider), source: "fallback_guess", availableModels, warnings };
+}
+
+function configureOpenClawLlmProvider({ provider, model, credential }, configPath = CONFIG_FILE) {
+  if (!provider || !credential) {
+    throw new Error("LLM provider and credential are required.");
+  }
+  if (!model) {
+    throw new Error("LLM model could not be resolved for the selected provider.");
+  }
+  if (!model.startsWith(`${provider}/`)) {
+    throw new Error(`Selected model '${model}' does not match provider '${provider}'.`);
+  }
+
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    config = {};
+  }
+
+  const envKey = providerEnvKey(provider);
+  if (!envKey) {
+    throw new Error(
+      `Provider '${provider}' is not supported by quick API-key setup in this wizard yet. Use a supported provider.`,
+    );
+  }
+
+  if (!config.env || typeof config.env !== "object") config.env = {};
+  config.env[envKey] = credential;
+
+  // Clean stale/broken provider objects from previous buggy writes.
+  if (config.models && config.models.providers && config.models.providers[provider]) {
+    delete config.models.providers[provider];
+    if (Object.keys(config.models.providers).length === 0) {
+      delete config.models.providers;
+    }
+    if (Object.keys(config.models).length === 0) {
+      delete config.models;
+    }
+  }
+
+  if (!config.agents) config.agents = {};
+  if (!config.agents.defaults) config.agents.defaults = {};
+  if (!config.agents.defaults.model || typeof config.agents.defaults.model !== "object") {
+    config.agents.defaults.model = {};
+  }
+  config.agents.defaults.model.primary = model;
+
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  return { configPath, provider, model };
+}
+
 function verifyInstallation(modeConfig, apiKey) {
   const gatewayFile = join(CONFIG_DIR, "gateway", modeConfig.gatewayConfig);
+  let llmConfigured = false;
+  let pluginActive = false;
+  try {
+    const config = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
+    const primaryModel = config?.agents?.defaults?.model?.primary;
+    llmConfigured = typeof primaryModel === "string" && primaryModel.length > 0;
+  } catch {
+    llmConfigured = false;
+  }
+  if (commandExists("openclaw")) {
+    const pluginList = getCommandOutput("openclaw plugins list") || "";
+    pluginActive = pluginList.toLowerCase().includes(modeConfig.pluginId.toLowerCase());
+  }
   return [
     { label: "OpenClaw platform", ok: commandExists("openclaw"), note: "not in PATH" },
     { label: `Trading CLI (${modeConfig.cliName})`, ok: commandExists(modeConfig.cliName), note: "not in PATH" },
+    { label: `OpenClaw plugin (${modeConfig.pluginId})`, ok: pluginActive, note: "not installed/enabled" },
     { label: "Configuration file", ok: existsSync(CONFIG_FILE), note: "not created" },
+    { label: "LLM provider configured", ok: llmConfigured, note: "missing model provider credential" },
     { label: "Gateway configuration", ok: existsSync(gatewayFile), note: "not found" },
     { label: "API key configured", ok: !!apiKey, note: "needs setup" },
   ];
@@ -242,6 +382,9 @@ export class InstallerStepEngine {
     this.modeConfig = modeConfig;
     this.options = {
       lane: normalizeLane(options.lane),
+      llmProvider: options.llmProvider || "",
+      llmModel: options.llmModel || "",
+      llmCredential: options.llmCredential || "",
       apiKey: options.apiKey || "",
       orchestratorUrl: options.orchestratorUrl || "https://api.traderclaw.ai",
       gatewayBaseUrl: options.gatewayBaseUrl || "",
@@ -469,12 +612,55 @@ export class InstallerStepEngine {
   }
 
   async runTelegramStep() {
-    if (!this.options.enableTelegram) return { skipped: true, reason: "telegram_not_requested" };
-    if (!this.options.telegramToken) return { skipped: true, reason: "telegram_token_missing" };
+    if (!this.options.telegramToken) {
+      throw new Error(
+        "Telegram token is required for this installer flow. Add your bot token in the wizard and start again.",
+      );
+    }
     await runCommandWithEvents("openclaw", ["plugins", "enable", "telegram"]);
     await runCommandWithEvents("openclaw", ["channels", "add", "--channel", "telegram", "--token", this.options.telegramToken]);
     await runCommandWithEvents("openclaw", ["channels", "status", "--probe"]);
     return { configured: true };
+  }
+
+  async configureLlmStep() {
+    const provider = String(this.options.llmProvider || "").trim();
+    const requestedModel = String(this.options.llmModel || "").trim();
+    const credential = String(this.options.llmCredential || "").trim();
+    if (!provider || !credential) {
+      throw new Error(
+        "Missing required LLM settings. Select provider and provide credential in the wizard before starting installation.",
+      );
+    }
+    if (!commandExists("openclaw")) {
+      throw new Error("OpenClaw is not available yet. Install step must complete before LLM configuration.");
+    }
+
+    const selection = resolveLlmModelSelection(provider, requestedModel);
+    for (const msg of selection.warnings) {
+      this.emitLog("configure_llm", "warn", msg);
+    }
+    const model = selection.model;
+
+    const saved = configureOpenClawLlmProvider({ provider, model, credential });
+    this.emitLog("configure_llm", "info", `Configured OpenClaw model primary=${model}`);
+
+    await runCommandWithEvents("openclaw", ["config", "validate"], {
+      onEvent: (evt) => this.emitLog("configure_llm", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
+    });
+
+    try {
+      await runCommandWithEvents("openclaw", ["models", "status", "--check", "--probe-provider", provider], {
+        onEvent: (evt) => this.emitLog("configure_llm", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
+      });
+    } catch (err) {
+      const details = `${err?.stderr || ""}\n${err?.stdout || ""}\n${err?.message || ""}`.trim();
+      throw new Error(
+        `LLM provider validation failed for '${provider}'. Check credential/model and retry.\n${details}`,
+      );
+    }
+
+    return { configured: true, provider, model, configPath: saved.configPath };
   }
 
   buildSetupHandoff() {
@@ -514,8 +700,13 @@ export class InstallerStepEngine {
       if (!this.options.skipInstallOpenClaw) {
         await this.runStep("install_openclaw", "Installing OpenClaw platform", async () => installOpenClawPlatform());
       }
+      await this.runStep("configure_llm", "Configuring required OpenClaw LLM provider", async () => this.configureLlmStep());
       if (!this.options.skipInstallPlugin) {
-        await this.runStep("install_plugin", "Installing TraderClaw plugin package", async () => installPlugin(this.modeConfig));
+        await this.runStep("install_plugin_package", "Installing TraderClaw CLI package", async () => installPlugin(this.modeConfig));
+        await this.runStep("activate_openclaw_plugin", "Installing and enabling TraderClaw inside OpenClaw", async () =>
+          installAndEnableOpenClawPlugin(this.modeConfig, (evt) =>
+            this.emitLog("activate_openclaw_plugin", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
+          ));
       }
       if (!this.options.skipTailscale) {
         await this.runStep("tailscale_install", "Ensuring Tailscale is installed", async () => this.ensureTailscale());
@@ -574,7 +765,7 @@ export class InstallerStepEngine {
         });
       }
 
-      await this.runStep("telegram_optional", "Optional Telegram setup", async () => this.runTelegramStep());
+      await this.runStep("telegram_required", "Configuring required Telegram channel", async () => this.runTelegramStep());
       await this.runStep("verify", "Verifying installation", async () => {
         const checks = verifyInstallation(this.modeConfig, this.options.apiKey);
         this.state.verifyChecks = checks;
