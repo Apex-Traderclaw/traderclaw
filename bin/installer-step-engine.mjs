@@ -363,28 +363,12 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
     ? [...v1Jobs.filter(j => j.id === "dead-money-sweep" || j.id === "subscription-cleanup" || j.id === "daily-report"), ...v2ExtraJobs]
     : v1Jobs;
 
-  if (!Array.isArray(config.cron.jobs)) {
-    config.cron.jobs = [];
-  }
-  config.cron.jobs = config.cron.jobs.filter(j => j && typeof j === "object" && j.id);
-
-  const existingJobIds = new Set(config.cron.jobs.map(j => j.id));
-  let added = 0;
-  let updated = 0;
-  for (const job of targetJobs) {
-    if (existingJobIds.has(job.id)) {
-      const existing = config.cron.jobs.find(j => j.id === job.id);
-      if (existing.schedule !== job.schedule || existing.agentId !== job.agentId || existing.message !== job.message || existing.enabled !== true) {
-        existing.schedule = job.schedule;
-        existing.agentId = job.agentId;
-        existing.message = job.message;
-        existing.enabled = true;
-        updated++;
-      }
-    } else {
-      config.cron.jobs.push(job);
-      added++;
-    }
+  let removedLegacyCronJobs = false;
+  if (config.cron && Object.prototype.hasOwnProperty.call(config.cron, "jobs")) {
+    // OpenClaw now stores jobs under ~/.openclaw/cron/jobs.json.
+    // Keeping cron.jobs in openclaw.json can fail strict config validation.
+    delete config.cron.jobs;
+    removedLegacyCronJobs = true;
   }
 
   if (!config.hooks || typeof config.hooks !== "object") {
@@ -423,9 +407,11 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   return {
     configPath,
     agentsConfigured: targetAgents.length,
-    cronJobsAdded: added,
-    cronJobsUpdated: updated,
-    cronJobsTotal: config.cron.jobs.length,
+    cronJobsAdded: 0,
+    cronJobsUpdated: 0,
+    cronJobsTotal: targetJobs.length,
+    cronJobsManagedExternally: true,
+    removedLegacyCronJobs,
     hooksConfigured: config.hooks.mappings.length,
     isV2
   };
@@ -645,7 +631,7 @@ function verifyInstallation(modeConfig, apiKey) {
     if (Array.isArray(agentsList)) {
       heartbeatConfigured = agentsList.some(a => a.heartbeat && a.heartbeat.every);
     }
-    cronConfigured = config?.cron?.enabled === true && Array.isArray(config?.cron?.jobs) && config.cron.jobs.length > 0;
+    cronConfigured = config?.cron?.enabled === true;
   } catch {
   }
 
@@ -1059,7 +1045,10 @@ export class InstallerStepEngine {
       await this.runStep("gateway_scheduling", "Configuring heartbeat and cron schedules", async () => {
         const result = configureGatewayScheduling(this.modeConfig, CONFIG_FILE);
         this.emitLog("gateway_scheduling", "info", `Agents configured: ${result.agentsConfigured}`);
-        this.emitLog("gateway_scheduling", "info", `Cron jobs: ${result.cronJobsAdded} added, ${result.cronJobsUpdated} updated, ${result.cronJobsTotal} total`);
+        this.emitLog("gateway_scheduling", "info", `Cron jobs target: ${result.cronJobsTotal} (managed by OpenClaw cron store/CLI).`);
+        if (result.removedLegacyCronJobs) {
+          this.emitLog("gateway_scheduling", "warn", "Removed legacy 'cron.jobs' from openclaw.json to keep config validation compatible.");
+        }
         this.emitLog("gateway_scheduling", "info", `Webhook hooks: ${result.hooksConfigured}`);
         const restart = await restartGateway();
         return { ...result, restart };
