@@ -166,9 +166,31 @@ async function installOpenClawPlatform() {
   return { alreadyInstalled: false, installed: true, available: commandExists("openclaw") };
 }
 
-async function installPlugin(modeConfig) {
-  await runCommandWithEvents("npm", ["install", "-g", modeConfig.pluginPackage]);
-  return { installed: true, available: commandExists(modeConfig.cliName) };
+function isNpmGlobalBinConflict(err, cliName) {
+  const text = `${err?.message || ""}\n${err?.stderr || ""}\n${err?.stdout || ""}`.toLowerCase();
+  return (
+    text.includes("eexist")
+    && text.includes("/usr/bin/")
+    && text.includes(String(cliName || "").toLowerCase())
+  );
+}
+
+async function installPlugin(modeConfig, onEvent) {
+  try {
+    await runCommandWithEvents("npm", ["install", "-g", modeConfig.pluginPackage], { onEvent });
+    return { installed: true, available: commandExists(modeConfig.cliName), forced: false };
+  } catch (err) {
+    if (!isNpmGlobalBinConflict(err, modeConfig.cliName)) throw err;
+    if (typeof onEvent === "function") {
+      onEvent({
+        type: "stderr",
+        text: `Detected existing global binary conflict for '${modeConfig.cliName}'. Retrying npm install with --force.\n`,
+        urls: [],
+      });
+    }
+    await runCommandWithEvents("npm", ["install", "-g", "--force", modeConfig.pluginPackage], { onEvent });
+    return { installed: true, available: commandExists(modeConfig.cliName), forced: true };
+  }
 }
 
 function isPluginAlreadyExistsError(err, pluginId) {
@@ -814,7 +836,11 @@ export class InstallerStepEngine {
       }
       await this.runStep("configure_llm", "Configuring required OpenClaw LLM provider", async () => this.configureLlmStep());
       if (!this.options.skipInstallPlugin) {
-        await this.runStep("install_plugin_package", "Installing TraderClaw CLI package", async () => installPlugin(this.modeConfig));
+        await this.runStep("install_plugin_package", "Installing TraderClaw CLI package", async () =>
+          installPlugin(
+            this.modeConfig,
+            (evt) => this.emitLog("install_plugin_package", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
+          ));
         await this.runStep(
           "activate_openclaw_plugin",
           "Installing and enabling TraderClaw inside OpenClaw",
