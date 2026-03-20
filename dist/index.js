@@ -6,7 +6,7 @@ import {
 } from "./chunk-3YPZOXWE.js";
 import {
   orchestratorRequest
-} from "./chunk-K6S5YPXW.js";
+} from "./chunk-OIWH6XY6.js";
 import {
   SessionManager
 } from "./chunk-OITJKCHL.js";
@@ -2082,7 +2082,7 @@ Context compaction triggered. MEMORY.md synced from last persisted state. Decisi
     );
   }
 };
-var index_default = solanaTraderPlugin;
+var openclaw_plugin_default = solanaTraderPlugin;
 export {
-  index_default as default
+  openclaw_plugin_default as default
 };

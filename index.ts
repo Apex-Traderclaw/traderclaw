@@ -4,8 +4,17 @@ import { orchestratorRequest } from "./src/http-client.js";
 import { SessionManager } from "./src/session-manager.js";
 import { AlphaBuffer } from "./src/alpha-buffer.js";
 import { AlphaStreamManager } from "./src/alpha-ws.js";
+import { parseXConfig, registerXReadTools } from "../lib/x-tools.mjs";
+import { registerWebFetchTool } from "../lib/web-fetch.mjs";
 import * as fs from "fs";
 import * as path from "path";
+
+interface XConfig {
+  ok: boolean;
+  consumerKey: string;
+  consumerSecret: string;
+  profiles: Record<string, { accessToken: string; accessTokenSecret: string; userId?: string; username?: string }>;
+}
 
 interface PluginConfig {
   orchestratorUrl: string;
@@ -20,6 +29,7 @@ interface PluginConfig {
   gatewayBaseUrl?: string;
   gatewayToken?: string;
   dataDir?: string;
+  xConfig?: XConfig;
 }
 
 function parseConfig(raw: unknown): PluginConfig {
@@ -39,6 +49,7 @@ function parseConfig(raw: unknown): PluginConfig {
   const gatewayBaseUrl = typeof obj.gatewayBaseUrl === "string" ? obj.gatewayBaseUrl : undefined;
   const gatewayToken = typeof obj.gatewayToken === "string" ? obj.gatewayToken : undefined;
   const dataDir = typeof obj.dataDir === "string" ? obj.dataDir : undefined;
+  const xConfig = parseXConfig(obj) as XConfig;
   return {
     orchestratorUrl,
     walletId,
@@ -52,6 +63,7 @@ function parseConfig(raw: unknown): PluginConfig {
     gatewayBaseUrl,
     gatewayToken,
     dataDir,
+    xConfig,
   };
 }
 
@@ -1409,7 +1421,7 @@ const solanaTraderPlugin = {
 
     api.registerTool({
       name: "solana_system_status",
-      description: "Check orchestrator system health — uptime, connected services, database status, execution mode (mock/live), and upstream API connectivity.",
+      description: "Check orchestrator system health — uptime, connected services, database status, execution mode, and upstream API connectivity.",
       parameters: Type.Object({}),
       execute: wrapExecute(async () => get("/api/system/status")),
     });
@@ -2243,8 +2255,12 @@ const solanaTraderPlugin = {
       },
     });
 
+    registerXReadTools(api, Type, config.xConfig, config.agentId || "main", "[solana-trader]");
+    registerWebFetchTool(api, Type, "[solana-trader]");
+
+    const xToolCount = config.xConfig?.ok ? 3 : 0;
     api.logger.info(
-      `[solana-trader] Registered 66 trading tools for walletId ${walletId} (session auth mode)`,
+      `[solana-trader] Registered ${67 + xToolCount} tools (67 trading + ${xToolCount} X/Twitter read) for walletId ${walletId} (session auth mode)`,
     );
   },
 };

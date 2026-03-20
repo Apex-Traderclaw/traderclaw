@@ -81,7 +81,7 @@ async function doRequest(
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error(
-        `Orchestrator request timed out after ${opts.timeout ?? 120000}ms: ${opts.method} ${opts.path}`,
+        `Orchestrator request timed out after ${opts.timeout ?? 30000}ms: ${opts.method} ${opts.path}`,
       );
     }
     throw err;
