@@ -6,13 +6,15 @@ import {
 } from "./chunk-3YPZOXWE.js";
 import {
   orchestratorRequest
-} from "./chunk-OIWH6XY6.js";
+} from "./chunk-K6S5YPXW.js";
 import {
   SessionManager
-} from "./chunk-45WQGKBZ.js";
+} from "./chunk-OITJKCHL.js";
 
 // index.ts
 import { Type } from "@sinclair/typebox";
+import * as fs from "fs";
+import * as path from "path";
 function parseConfig(raw) {
   const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   const orchestratorUrl = typeof obj.orchestratorUrl === "string" ? obj.orchestratorUrl : "";
@@ -22,10 +24,11 @@ function parseConfig(raw) {
   const refreshToken = typeof obj.refreshToken === "string" ? obj.refreshToken : void 0;
   const walletPublicKey = typeof obj.walletPublicKey === "string" ? obj.walletPublicKey : void 0;
   const walletPrivateKey = typeof obj.walletPrivateKey === "string" ? obj.walletPrivateKey : void 0;
-  const apiTimeout = typeof obj.apiTimeout === "number" ? obj.apiTimeout : 3e4;
+  const apiTimeout = typeof obj.apiTimeout === "number" ? obj.apiTimeout : 12e4;
   const agentId = typeof obj.agentId === "string" ? obj.agentId : void 0;
   const gatewayBaseUrl = typeof obj.gatewayBaseUrl === "string" ? obj.gatewayBaseUrl : void 0;
   const gatewayToken = typeof obj.gatewayToken === "string" ? obj.gatewayToken : void 0;
+  const dataDir = typeof obj.dataDir === "string" ? obj.dataDir : void 0;
   return {
     orchestratorUrl,
     walletId,
@@ -37,7 +40,8 @@ function parseConfig(raw) {
     apiTimeout,
     agentId,
     gatewayBaseUrl,
-    gatewayToken
+    gatewayToken,
+    dataDir
   };
 }
 var solanaTraderPlugin = {
@@ -78,12 +82,12 @@ var solanaTraderPlugin = {
       api.logger.warn("[solana-trader] Received 401 \u2014 refreshing session...");
       return sessionManager.handleUnauthorized();
     };
-    const post = async (path, body, extraHeaders) => {
+    const post = async (path2, body, extraHeaders) => {
       const token = await sessionManager.getAccessToken();
       return orchestratorRequest({
         baseUrl: orchestratorUrl,
         method: "POST",
-        path,
+        path: path2,
         body: { walletId, ...body },
         timeout: apiTimeout,
         accessToken: token,
@@ -91,35 +95,35 @@ var solanaTraderPlugin = {
         onUnauthorized
       });
     };
-    const get = async (path) => {
+    const get = async (path2) => {
       const token = await sessionManager.getAccessToken();
       return orchestratorRequest({
         baseUrl: orchestratorUrl,
         method: "GET",
-        path,
+        path: path2,
         timeout: apiTimeout,
         accessToken: token,
         onUnauthorized
       });
     };
-    const put = async (path, body) => {
+    const put = async (path2, body) => {
       const token = await sessionManager.getAccessToken();
       return orchestratorRequest({
         baseUrl: orchestratorUrl,
         method: "PUT",
-        path,
+        path: path2,
         body,
         timeout: apiTimeout,
         accessToken: token,
         onUnauthorized
       });
     };
-    const del = async (path) => {
+    const del = async (path2) => {
       const token = await sessionManager.getAccessToken();
       return orchestratorRequest({
         baseUrl: orchestratorUrl,
         method: "DELETE",
-        path,
+        path: path2,
         timeout: apiTimeout,
         accessToken: token,
         onUnauthorized
@@ -135,6 +139,165 @@ var solanaTraderPlugin = {
       } catch (err) {
         return json({ error: err instanceof Error ? err.message : String(err) });
       }
+    };
+    const dataDir = config.dataDir || path.join(process.cwd(), ".traderclaw-v1-data");
+    const stateDir = path.join(dataDir, "state");
+    const logsDir = path.join(dataDir, "logs");
+    const sharedLogsDir = path.join(logsDir, "shared");
+    const memoryDir = path.join(process.cwd(), "memory");
+    const memoryMdPath = path.join(process.cwd(), "MEMORY.md");
+    const ensureDir = (dirPath) => {
+      if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+    };
+    ensureDir(stateDir);
+    ensureDir(sharedLogsDir);
+    const readJsonFile = (filePath) => {
+      try {
+        if (!fs.existsSync(filePath)) return null;
+        return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      } catch {
+        return null;
+      }
+    };
+    const deepMerge = (target, source) => {
+      const result = { ...target };
+      for (const key of Object.keys(source)) {
+        const sv = source[key];
+        const tv = result[key];
+        if (sv && typeof sv === "object" && !Array.isArray(sv) && tv && typeof tv === "object" && !Array.isArray(tv)) {
+          result[key] = deepMerge(tv, sv);
+        } else {
+          result[key] = sv;
+        }
+      }
+      return result;
+    };
+    const writeJsonFile = (filePath, data) => {
+      ensureDir(path.dirname(filePath));
+      fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+    };
+    const readJsonlFile = (filePath, maxEntries) => {
+      try {
+        if (!fs.existsSync(filePath)) return [];
+        const lines = fs.readFileSync(filePath, "utf-8").trim().split("\n").filter(Boolean);
+        const entries = lines.map((l) => {
+          try {
+            return JSON.parse(l);
+          } catch {
+            return null;
+          }
+        }).filter(Boolean);
+        return maxEntries ? entries.slice(-maxEntries) : entries;
+      } catch {
+        return [];
+      }
+    };
+    const appendJsonlFile = (filePath, entry, maxEntries) => {
+      ensureDir(path.dirname(filePath));
+      let entries = readJsonlFile(filePath);
+      entries.push(entry);
+      if (entries.length > maxEntries) entries = entries.slice(-maxEntries);
+      fs.writeFileSync(filePath, entries.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf-8");
+      return entries.length;
+    };
+    const generateMemoryMd = (aid, stateObj) => {
+      const lines = [
+        `# ${aid} \u2014 Durable Memory`,
+        ``,
+        `> Auto-generated by solana_state_save. OpenClaw loads this file into context at every session start.`,
+        `> Last updated: ${(/* @__PURE__ */ new Date()).toISOString()}`,
+        ``
+      ];
+      if (!stateObj || typeof stateObj !== "object") {
+        lines.push("_No state saved yet._");
+        return lines.join("\n");
+      }
+      const state = stateObj;
+      const identity = [];
+      if (state.tier) identity.push(`- **Tier:** ${state.tier}`);
+      if (state.walletId) identity.push(`- **Wallet:** ${state.walletId}`);
+      if (state.mode) identity.push(`- **Mode:** ${state.mode}`);
+      if (state.strategyVersion) identity.push(`- **Strategy Version:** ${state.strategyVersion}`);
+      if (state.regime) identity.push(`- **Regime:** ${state.regime}`);
+      if (state.maxPositions) identity.push(`- **Max Positions:** ${state.maxPositions}`);
+      if (state.maxPositionSizeSol) identity.push(`- **Max Position Size:** ${state.maxPositionSizeSol} SOL`);
+      if (identity.length > 0) {
+        lines.push("## Identity & Config", "", ...identity, "");
+      }
+      if (state.defenseMode !== void 0) lines.push(`## Defense Mode
+
+- **Active:** ${state.defenseMode}
+`);
+      if (state.killSwitchActive !== void 0) lines.push(`## Kill Switch
+
+- **Active:** ${state.killSwitchActive}
+`);
+      if (state.watchlist && Array.isArray(state.watchlist) && state.watchlist.length > 0) {
+        lines.push("## Watchlist", "");
+        for (const item of state.watchlist.slice(0, 20)) {
+          lines.push(`- ${typeof item === "string" ? item : JSON.stringify(item)}`);
+        }
+        lines.push("");
+      }
+      if (state.permanentLearnings && Array.isArray(state.permanentLearnings)) {
+        lines.push("## Permanent Learnings", "");
+        for (const learning of state.permanentLearnings.slice(0, 30)) {
+          lines.push(`- ${typeof learning === "string" ? learning : JSON.stringify(learning)}`);
+        }
+        lines.push("");
+      }
+      if (state.regimeCanary && typeof state.regimeCanary === "object") {
+        const rc = state.regimeCanary;
+        lines.push("## Regime Canary", "", `- **Regime:** ${rc.regime || "unknown"}`, `- **Detected At:** ${rc.detectedAt || "unknown"}`, "");
+      }
+      const excludeKeys = /* @__PURE__ */ new Set(["tier", "walletId", "mode", "strategyVersion", "regime", "maxPositions", "maxPositionSizeSol", "defenseMode", "killSwitchActive", "watchlist", "permanentLearnings", "regimeCanary"]);
+      const otherKeys = Object.keys(state).filter((k) => !excludeKeys.has(k));
+      if (otherKeys.length > 0) {
+        lines.push("## Other State Keys", "");
+        for (const key of otherKeys.slice(0, 30)) {
+          const val = state[key];
+          const display = typeof val === "object" ? JSON.stringify(val) : String(val);
+          lines.push(`- **${key}:** ${display.length > 200 ? display.slice(0, 200) + "\u2026" : display}`);
+        }
+        lines.push("");
+      }
+      return lines.join("\n");
+    };
+    const writeMemoryMd = (aid, stateObj) => {
+      try {
+        const content = generateMemoryMd(aid, stateObj);
+        fs.writeFileSync(memoryMdPath, content, "utf-8");
+      } catch {
+      }
+    };
+    const getDailyLogPath = (date) => {
+      const d = date || /* @__PURE__ */ new Date();
+      const dateStr = d.toISOString().slice(0, 10);
+      return path.join(memoryDir, `${dateStr}.md`);
+    };
+    const pruneDailyLogs = (retentionDays = 7) => {
+      try {
+        if (!fs.existsSync(memoryDir)) return;
+        const cutoff = /* @__PURE__ */ new Date();
+        cutoff.setDate(cutoff.getDate() - retentionDays);
+        const files = fs.readdirSync(memoryDir).filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f));
+        for (const file of files) {
+          const dateStr = file.replace(".md", "");
+          if (new Date(dateStr) < cutoff) {
+            try {
+              fs.unlinkSync(path.join(memoryDir, file));
+            } catch {
+            }
+          }
+        }
+      } catch {
+      }
+    };
+    const agentId = config.agentId || "main";
+    const sanitizeAgentId = (id) => {
+      const clean = id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64);
+      if (!clean) return agentId;
+      return clean;
     };
     api.registerTool({
       name: "solana_scan_launches",
@@ -354,9 +517,9 @@ var solanaTraderPlugin = {
         days: Type.Optional(Type.Number({ description: "Look back period in days (default: 7)" }))
       }),
       execute: wrapExecute(async (_id, params) => {
-        let path = `/api/memory/journal-summary?walletId=${walletId}`;
-        if (params.days) path += `&lookbackDays=${params.days}`;
-        return get(path);
+        let path2 = `/api/memory/journal-summary?walletId=${walletId}`;
+        if (params.days) path2 += `&lookbackDays=${params.days}`;
+        return get(path2);
       })
     });
     api.registerTool({
@@ -430,9 +593,9 @@ var solanaTraderPlugin = {
         status: Type.Optional(Type.String({ description: "Filter by status: 'open', 'closed', or omit for all" }))
       }),
       execute: wrapExecute(async (_id, params) => {
-        let path = `/api/wallet/positions?walletId=${walletId}`;
-        if (params.status) path += `&status=${params.status}`;
-        return get(path);
+        let path2 = `/api/wallet/positions?walletId=${walletId}`;
+        if (params.status) path2 += `&status=${params.status}`;
+        return get(path2);
       })
     });
     api.registerTool({
@@ -450,9 +613,9 @@ var solanaTraderPlugin = {
         refresh: Type.Optional(Type.Boolean({ description: "If true, refresh balances from on-chain before returning" }))
       }),
       execute: wrapExecute(async (_id, params) => {
-        let path = "/api/wallets";
-        if (params.refresh) path += "?refresh=true";
-        return get(path);
+        let path2 = "/api/wallets";
+        if (params.refresh) path2 += "?refresh=true";
+        return get(path2);
       })
     });
     api.registerTool({
@@ -483,10 +646,10 @@ var solanaTraderPlugin = {
         offset: Type.Optional(Type.Number({ description: "Offset for pagination (default: 0)" }))
       }),
       execute: wrapExecute(async (_id, params) => {
-        let path = `/api/trades?walletId=${walletId}`;
-        if (params.limit) path += `&limit=${params.limit}`;
-        if (params.offset) path += `&offset=${params.offset}`;
-        return get(path);
+        let path2 = `/api/trades?walletId=${walletId}`;
+        if (params.limit) path2 += `&limit=${params.limit}`;
+        if (params.offset) path2 += `&offset=${params.offset}`;
+        return get(path2);
       })
     });
     api.registerTool({
@@ -496,9 +659,9 @@ var solanaTraderPlugin = {
         limit: Type.Optional(Type.Number({ description: "Max denials to return (1-200, default: 50)" }))
       }),
       execute: wrapExecute(async (_id, params) => {
-        let path = `/api/risk-denials?walletId=${walletId}`;
-        if (params.limit) path += `&limit=${params.limit}`;
-        return get(path);
+        let path2 = `/api/risk-denials?walletId=${walletId}`;
+        if (params.limit) path2 += `&limit=${params.limit}`;
+        return get(path2);
       })
     });
     api.registerTool({
@@ -517,9 +680,17 @@ var solanaTraderPlugin = {
       name: "solana_entitlement_current",
       description: "Get your current entitlements \u2014 active tier, scope access, effective limits, and expiration details.",
       parameters: Type.Object({}),
-      execute: wrapExecute(
-        async () => get(`/api/entitlements/current?walletId=${walletId}`)
-      )
+      execute: wrapExecute(async () => {
+        const result = await get(`/api/entitlements/current?walletId=${walletId}`);
+        if (result && typeof result === "object") {
+          try {
+            const cacheFile = path.join(stateDir, "entitlement-cache.json");
+            writeJsonFile(cacheFile, { ...result, cachedAt: (/* @__PURE__ */ new Date()).toISOString() });
+          } catch (_) {
+          }
+        }
+        return result;
+      })
     });
     api.registerTool({
       name: "solana_entitlement_purchase",
@@ -805,11 +976,11 @@ var solanaTraderPlugin = {
       return active && typeof active === "object" ? active : null;
     };
     const runForwardProbe = async ({
-      agentId,
+      agentId: agentId2,
       source = "plugin_probe"
     } = {}) => {
       const payload = await post("/api/agents/gateway-forward-probe", {
-        agentId: agentId || config.agentId || "main",
+        agentId: agentId2 || config.agentId || "main",
         source
       });
       const result = payload && typeof payload === "object" ? payload : {};
@@ -1112,6 +1283,717 @@ var solanaTraderPlugin = {
         lastForwardProbe: lastForwardProbeState
       }))
     });
+    api.registerTool({
+      name: "solana_state_save",
+      description: "Persist durable agent state to local storage via deep merge. New keys are added, existing keys are updated, omitted keys are preserved. State survives across sessions and is auto-injected at bootstrap. Use for: strategy weights cache, watchlists, running counters, regime observations, any data that must survive session boundaries.",
+      parameters: Type.Object({
+        agentId: Type.String({ description: "Agent ID whose state to save (must match calling agent)." }),
+        state: Type.Unknown({ description: "JSON object to deep-merge into existing state. New keys are added, existing keys are updated, omitted keys are preserved." }),
+        overwrite: Type.Optional(Type.Boolean({ description: "If true, replace entire state instead of merging. Default false." }))
+      }),
+      execute: wrapExecute(async (_id, params) => {
+        const targetAgentId = sanitizeAgentId(String(params.agentId));
+        const filePath = path.join(stateDir, `${targetAgentId}.json`);
+        const shouldOverwrite = Boolean(params.overwrite);
+        let mergedState;
+        if (shouldOverwrite) {
+          mergedState = params.state;
+        } else {
+          const existing = readJsonFile(filePath);
+          const existingState = existing?.state && typeof existing.state === "object" ? existing.state : {};
+          const newState = params.state && typeof params.state === "object" ? params.state : params.state;
+          if (typeof existingState === "object" && typeof newState === "object" && newState !== null) {
+            mergedState = deepMerge(existingState, newState);
+          } else {
+            mergedState = newState;
+          }
+        }
+        const payload = { agentId: targetAgentId, state: mergedState, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+        writeJsonFile(filePath, payload);
+        writeMemoryMd(targetAgentId, mergedState);
+        return { ok: true, agentId: targetAgentId, updatedAt: payload.updatedAt, merged: !shouldOverwrite, memoryMdWritten: true };
+      })
+    });
+    api.registerTool({
+      name: "solana_state_read",
+      description: "Read durable agent state from local storage. Returns the last saved state object or null if no state exists. Also auto-injected at bootstrap \u2014 this tool is for mid-session reads.",
+      parameters: Type.Object({
+        agentId: Type.String({ description: "Agent ID whose state to read." })
+      }),
+      execute: wrapExecute(async (_id, params) => {
+        const targetAgentId = sanitizeAgentId(String(params.agentId));
+        const filePath = path.join(stateDir, `${targetAgentId}.json`);
+        const data = readJsonFile(filePath);
+        return data || { agentId: targetAgentId, state: null, updatedAt: null };
+      })
+    });
+    api.registerTool({
+      name: "solana_decision_log",
+      description: "Append a structured decision entry to the agent's episodic decision log. Maintains the last 50 entries per agent (FIFO). Entries are auto-injected at bootstrap for session continuity. Use for: trade decisions, analysis conclusions, relay actions, skip reasons.",
+      parameters: Type.Object({
+        agentId: Type.String({ description: "Agent ID writing the decision." }),
+        type: Type.String({ description: "Decision type: 'trade_entry', 'trade_exit', 'skip', 'watch', 'relay', 'analysis', 'alert', 'cron_result'." }),
+        token: Type.Optional(Type.String({ description: "Token mint address if decision relates to a specific token." })),
+        rationale: Type.String({ description: "Brief reasoning for the decision (< 500 chars)." }),
+        scores: Type.Optional(Type.Unknown({ description: "Relevant scores object (confidence, analyst scores, etc.)." })),
+        outcome: Type.Optional(Type.String({ description: "Outcome if known: 'pending', 'win', 'loss', 'neutral'." }))
+      }),
+      execute: wrapExecute(async (_id, params) => {
+        const targetAgentId = sanitizeAgentId(String(params.agentId));
+        const logPath = path.join(logsDir, targetAgentId, "decisions.jsonl");
+        const entry = {
+          ts: (/* @__PURE__ */ new Date()).toISOString(),
+          agentId: targetAgentId,
+          type: String(params.type),
+          token: params.token ? String(params.token) : void 0,
+          rationale: String(params.rationale),
+          scores: params.scores || void 0,
+          outcome: params.outcome ? String(params.outcome) : "pending"
+        };
+        const count = appendJsonlFile(logPath, entry, 50);
+        return { ok: true, agentId: targetAgentId, entryCount: count };
+      })
+    });
+    api.registerTool({
+      name: "solana_team_bulletin_post",
+      description: "Post a finding or alert to the shared team bulletin board. All agents can read the bulletin. Maintains last 200 entries with 3-day retention. Use for: broadcasting discoveries, risk alerts, regime observations, cross-agent coordination signals.",
+      parameters: Type.Object({
+        fromAgent: Type.String({ description: "Posting agent's ID." }),
+        type: Type.String({ description: "Bulletin type: 'discovery', 'risk_alert', 'regime_shift', 'position_update', 'convergence', 'exhaustion', 'whale_move', 'source_rep_update', 'pattern_match'." }),
+        priority: Type.String({ description: "Priority: 'low', 'medium', 'high', 'critical'." }),
+        payload: Type.Unknown({ description: "Structured payload relevant to the bulletin type." })
+      }),
+      execute: wrapExecute(async (_id, params) => {
+        const fromAgent = sanitizeAgentId(String(params.fromAgent));
+        const bulletinPath = path.join(sharedLogsDir, "team-bulletin.jsonl");
+        const now = /* @__PURE__ */ new Date();
+        const entry = {
+          ts: now.toISOString(),
+          fromAgent,
+          type: String(params.type),
+          priority: String(params.priority),
+          payload: params.payload
+        };
+        let entries = readJsonlFile(bulletinPath);
+        const threeDaysAgo = now.getTime() - 3 * 24 * 60 * 60 * 1e3;
+        entries = entries.filter((e) => new Date(e.ts).getTime() > threeDaysAgo);
+        entries.push(entry);
+        if (entries.length > 200) entries = entries.slice(-200);
+        fs.writeFileSync(bulletinPath, entries.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf-8");
+        return { ok: true, entryCount: entries.length };
+      })
+    });
+    api.registerTool({
+      name: "solana_team_bulletin_read",
+      description: "Read entries from the shared team bulletin board with optional filters. Returns entries in chronological order.",
+      parameters: Type.Object({
+        since: Type.Optional(Type.String({ description: "ISO timestamp \u2014 only return entries after this time." })),
+        fromAgent: Type.Optional(Type.String({ description: "Filter by posting agent ID." })),
+        type: Type.Optional(Type.String({ description: "Filter by bulletin type." })),
+        limit: Type.Optional(Type.Number({ description: "Max entries to return (default 50)." }))
+      }),
+      execute: wrapExecute(async (_id, params) => {
+        const bulletinPath = path.join(sharedLogsDir, "team-bulletin.jsonl");
+        let entries = readJsonlFile(bulletinPath);
+        if (params.since) {
+          const sinceTs = new Date(String(params.since)).getTime();
+          entries = entries.filter((e) => new Date(String(e.ts)).getTime() > sinceTs);
+        }
+        if (params.fromAgent) entries = entries.filter((e) => e.fromAgent === String(params.fromAgent));
+        if (params.type) entries = entries.filter((e) => e.type === String(params.type));
+        const limit = typeof params.limit === "number" ? params.limit : 50;
+        return { entries: entries.slice(-limit), total: entries.length };
+      })
+    });
+    api.registerTool({
+      name: "solana_context_snapshot_write",
+      description: "Write the portfolio context snapshot. CTO writes this at the end of each session to give all agents a consistent world-view at next bootstrap. Contains: open positions, capital state, active regime, recent decisions summary, strategy version.",
+      parameters: Type.Object({
+        snapshot: Type.Unknown({ description: "Context snapshot object with positions, capital, regime, strategyVersion, activeSubscriptions, recentDecisions summary." })
+      }),
+      execute: wrapExecute(async (_id, params) => {
+        const filePath = path.join(stateDir, "context-snapshot.json");
+        const payload = { snapshot: params.snapshot, writtenBy: agentId, ts: (/* @__PURE__ */ new Date()).toISOString() };
+        writeJsonFile(filePath, payload);
+        return { ok: true, ts: payload.ts };
+      })
+    });
+    api.registerTool({
+      name: "solana_context_snapshot_read",
+      description: "Read the latest portfolio context snapshot written by the CTO. Provides a consistent world-view: open positions, capital, regime, strategy version. Also auto-injected at bootstrap.",
+      parameters: Type.Object({}),
+      execute: wrapExecute(async () => {
+        const filePath = path.join(stateDir, "context-snapshot.json");
+        const data = readJsonFile(filePath);
+        return data || { snapshot: null, ts: null };
+      })
+    });
+    api.registerTool({
+      name: "solana_compute_confidence",
+      description: "Deterministic confidence score computation. Applies the V2 weighted formula with convergence bonus and risk penalty. Returns the computed score with full breakdown \u2014 no hallucination possible.",
+      parameters: Type.Object({
+        onchainScore: Type.Number({ description: "On-Chain Analyst score (0.0-1.0)." }),
+        signalScore: Type.Number({ description: "Alpha Signal Analyst score (0.0-1.0)." }),
+        socialScore: Type.Optional(Type.Number({ description: "Social Intelligence Analyst score (0.0-1.0). Default 0." })),
+        smartMoneyScore: Type.Optional(Type.Number({ description: "Smart Money Tracker score (0.0-1.0). Default 0." })),
+        riskPenalty: Type.Number({ description: "Risk penalty from Risk Officer flags, hardDeny, manipulation, liquidity, front-running, late freshness." }),
+        weights: Type.Optional(Type.Object({
+          onchain: Type.Optional(Type.Number()),
+          signal: Type.Optional(Type.Number()),
+          social: Type.Optional(Type.Number()),
+          smart: Type.Optional(Type.Number())
+        }, { description: "Custom weights. Default: onchain=0.45, signal=0.35, social=0.05, smart=0.15." })),
+        convergenceSources: Type.Optional(Type.Number({ description: "Number of independent discovery sources that flagged same token. 2=+0.15, 3=+0.20, 4+=+0.25." }))
+      }),
+      execute: wrapExecute(async (_id, params) => {
+        const onchain = Number(params.onchainScore) || 0;
+        const signal = Number(params.signalScore) || 0;
+        const social = Number(params.socialScore) || 0;
+        const smart = Number(params.smartMoneyScore) || 0;
+        const penalty = Number(params.riskPenalty) || 0;
+        const w = params.weights;
+        const wOnchain = w?.onchain ?? 0.45;
+        const wSignal = w?.signal ?? 0.35;
+        const wSocial = w?.social ?? 0.05;
+        const wSmart = w?.smart ?? 0.15;
+        const sources = Number(params.convergenceSources) || 0;
+        let convergenceBonus = 0;
+        if (sources >= 4) convergenceBonus = 0.25;
+        else if (sources >= 3) convergenceBonus = 0.2;
+        else if (sources >= 2) convergenceBonus = 0.15;
+        const raw = wOnchain * onchain + wSignal * signal + wSocial * social + wSmart * smart;
+        const confidence = Math.max(0, Math.min(1, raw - penalty + convergenceBonus));
+        return {
+          confidence: Math.round(confidence * 1e4) / 1e4,
+          raw: Math.round(raw * 1e4) / 1e4,
+          convergenceBonus,
+          riskPenalty: penalty,
+          weights: { onchain: wOnchain, signal: wSignal, social: wSocial, smart: wSmart },
+          components: {
+            onchain: Math.round(wOnchain * onchain * 1e4) / 1e4,
+            signal: Math.round(wSignal * signal * 1e4) / 1e4,
+            social: Math.round(wSocial * social * 1e4) / 1e4,
+            smart: Math.round(wSmart * smart * 1e4) / 1e4
+          },
+          formula: `(${wOnchain}\xD7${onchain}) + (${wSignal}\xD7${signal}) + (${wSocial}\xD7${social}) + (${wSmart}\xD7${smart}) - ${penalty} + ${convergenceBonus} = ${confidence.toFixed(4)}`
+        };
+      })
+    });
+    api.registerTool({
+      name: "solana_compute_freshness_decay",
+      description: "Compute signal freshness decay factor based on signal age. Returns a 0.0-1.0 multiplier and age category. Deterministic \u2014 no API calls.",
+      parameters: Type.Object({
+        signalAgeMinutes: Type.Number({ description: "Age of the signal in minutes since original call." }),
+        signalType: Type.Optional(Type.String({ description: "Signal type: 'ca_drop' (default), 'exit', 'sentiment', 'confirmation'." }))
+      }),
+      execute: wrapExecute(async (_id, params) => {
+        const age = Number(params.signalAgeMinutes) || 0;
+        const signalType = String(params.signalType || "ca_drop");
+        let decay = 1;
+        let category = "EARLY";
+        let recommendation = "PROCEED";
+        if (signalType === "exit" || signalType === "sentiment") {
+          if (age <= 5) {
+            decay = 1;
+            category = "IMMEDIATE";
+          } else if (age <= 15) {
+            decay = 0.8;
+            category = "RECENT";
+          } else if (age <= 30) {
+            decay = 0.5;
+            category = "AGING";
+            recommendation = "REDUCE_WEIGHT";
+          } else {
+            decay = 0.2;
+            category = "STALE";
+            recommendation = "SKIP";
+          }
+        } else {
+          if (age <= 3) {
+            decay = 1;
+            category = "EARLY";
+          } else if (age <= 10) {
+            decay = 0.9;
+            category = "ONTIME";
+          } else if (age <= 30) {
+            decay = 0.7;
+            category = "LATE";
+            recommendation = "REDUCE_SIZE";
+          } else if (age <= 60) {
+            decay = 0.4;
+            category = "VERY_LATE";
+            recommendation = "WATCH_ONLY";
+          } else {
+            decay = 0.1;
+            category = "STALE";
+            recommendation = "SKIP";
+          }
+        }
+        return { decayFactor: decay, ageMinutes: age, ageCategory: category, recommendation, signalType };
+      })
+    });
+    api.registerTool({
+      name: "solana_compute_position_limits",
+      description: "Compute final position size after all stacked reductions. Applies mode-based range \u2192 Risk Officer cap \u2192 precheck cap \u2192 liquidity hard cap \u2192 reduction triggers \u2192 floor. Returns sizeSol with full reduction breakdown. Deterministic.",
+      parameters: Type.Object({
+        mode: Type.String({ description: "'HARDENED' or 'DEGEN'." }),
+        confidence: Type.Number({ description: "Confidence score (0.0-1.0)." }),
+        capitalSol: Type.Number({ description: "Total available capital in SOL." }),
+        poolDepthUsd: Type.Number({ description: "Pool liquidity depth in USD." }),
+        solPriceUsd: Type.Number({ description: "Current SOL price in USD for pool-depth conversion." }),
+        lifecycle: Type.String({ description: "'FRESH', 'EMERGING', or 'ESTABLISHED'." }),
+        winRateLast10: Type.Optional(Type.Number({ description: "Win rate over last 10 trades (0.0-1.0)." })),
+        dailyNotionalUsedPct: Type.Optional(Type.Number({ description: "Daily notional used as percentage (0-100)." })),
+        consecutiveLosses: Type.Optional(Type.Number({ description: "Current consecutive loss count." })),
+        openPositionCount: Type.Optional(Type.Number({ description: "Number of open positions." })),
+        tokenConcentrationPct: Type.Optional(Type.Number({ description: "Token concentration percentage (0-100)." })),
+        priceMovePct: Type.Optional(Type.Number({ description: "Token price move percentage from recent low." })),
+        riskOfficerMaxSizeSol: Type.Optional(Type.Number({ description: "Risk Officer's maxSizeSol cap." })),
+        precheckCappedSizeSol: Type.Optional(Type.Number({ description: "Precheck cappedSizeSol." }))
+      }),
+      execute: wrapExecute(async (_id, params) => {
+        const mode = String(params.mode).toUpperCase();
+        const isHardened = mode === "HARDENED";
+        const confidence = Number(params.confidence) || 0;
+        const capital = Number(params.capitalSol) || 0;
+        const poolUsd = Number(params.poolDepthUsd) || 0;
+        const solPrice = Number(params.solPriceUsd) || 1;
+        const lifecycle = String(params.lifecycle).toUpperCase();
+        const reductions = [];
+        const highMin = isHardened ? 0.1 : 0.12;
+        const highMax = isHardened ? 0.2 : 0.25;
+        const exploMin = isHardened ? 0.03 : 0.05;
+        const exploMax = isHardened ? 0.08 : 0.1;
+        const isHighConf = confidence > 0.75;
+        let baseMin = isHighConf ? highMin : exploMin;
+        let baseMax = isHighConf ? highMax : exploMax;
+        if (lifecycle === "FRESH") {
+          baseMin = exploMin;
+          baseMax = isHardened ? 0.05 : exploMax;
+        }
+        let sizeSol = capital * ((baseMin + baseMax) / 2);
+        const riskMax = params.riskOfficerMaxSizeSol != null ? Number(params.riskOfficerMaxSizeSol) : Infinity;
+        if (riskMax < sizeSol) {
+          reductions.push({ factor: riskMax / sizeSol, reason: "Risk Officer maxSizeSol cap" });
+          sizeSol = riskMax;
+        }
+        const precheckCap = params.precheckCappedSizeSol != null ? Number(params.precheckCappedSizeSol) : Infinity;
+        if (precheckCap < sizeSol) {
+          reductions.push({ factor: precheckCap / sizeSol, reason: "Precheck cappedSizeSol" });
+          sizeSol = precheckCap;
+        }
+        const poolCapSol = poolUsd * 0.02 / solPrice;
+        const poolHardCapSol = poolUsd < 5e4 ? 1e3 / solPrice : Infinity;
+        const effectivePoolCap = Math.min(poolCapSol, poolHardCapSol);
+        if (effectivePoolCap < sizeSol) {
+          reductions.push({ factor: effectivePoolCap / sizeSol, reason: poolUsd < 5e4 ? "Pool < $50K hard cap ($1K max)" : "2% pool depth cap" });
+          sizeSol = effectivePoolCap;
+        }
+        const wr = params.winRateLast10 != null ? Number(params.winRateLast10) : 1;
+        if (wr < 0.4) {
+          sizeSol *= 0.6;
+          reductions.push({ factor: 0.6, reason: "Win rate < 40%" });
+        }
+        const dnPct = params.dailyNotionalUsedPct != null ? Number(params.dailyNotionalUsedPct) : 0;
+        if (dnPct > 70) {
+          sizeSol *= 0.5;
+          reductions.push({ factor: 0.5, reason: "Daily notional > 70%" });
+        }
+        const consLoss = params.consecutiveLosses != null ? Number(params.consecutiveLosses) : 0;
+        if (consLoss >= 2) {
+          sizeSol *= 0.7;
+          reductions.push({ factor: 0.7, reason: `${consLoss} consecutive losses` });
+        }
+        const openPos = params.openPositionCount != null ? Number(params.openPositionCount) : 0;
+        if (openPos >= 3) {
+          sizeSol *= 0.8;
+          reductions.push({ factor: 0.8, reason: `${openPos} open positions` });
+        }
+        const concPct = params.tokenConcentrationPct != null ? Number(params.tokenConcentrationPct) : 0;
+        if (concPct > 30) {
+          sizeSol *= 0.5;
+          reductions.push({ factor: 0.5, reason: "Token concentration > 30%" });
+        }
+        const pricePct = params.priceMovePct != null ? Number(params.priceMovePct) : 0;
+        if (pricePct > 200) {
+          sizeSol *= 0.5;
+          reductions.push({ factor: 0.5, reason: "Token moved +200%" });
+        }
+        const floorPct = isHardened ? 75e-4 : 0.0125;
+        const floor = capital * floorPct;
+        if (sizeSol < floor) {
+          sizeSol = floor;
+          reductions.push({ factor: 1, reason: `Floor applied: ${(floorPct * 100).toFixed(2)}% of capital` });
+        }
+        return {
+          sizeSol: Math.round(sizeSol * 1e4) / 1e4,
+          mode,
+          baseRange: { min: baseMin, max: baseMax },
+          poolCap: Math.round(effectivePoolCap * 1e4) / 1e4,
+          floor: Math.round(floor * 1e4) / 1e4,
+          reductions
+        };
+      })
+    });
+    api.registerTool({
+      name: "solana_classify_deployer_risk",
+      description: "Classify deployer wallet risk level based on history. Returns risk class, score, and flags. Deterministic computation \u2014 no API calls.",
+      parameters: Type.Object({
+        previousTokens: Type.Number({ description: "Number of tokens previously deployed by this wallet." }),
+        rugHistory: Type.Boolean({ description: "Whether any previous token was a confirmed rug." }),
+        avgTokenLifespanHours: Type.Optional(Type.Number({ description: "Average lifespan of previous tokens in hours." })),
+        freshWalletSurge: Type.Optional(Type.Number({ description: "Fresh wallet surge ratio (0.0-1.0) for this deployer's tokens." })),
+        devSoldEarlyCount: Type.Optional(Type.Number({ description: "Number of previous tokens where dev sold within first hour." }))
+      }),
+      execute: wrapExecute(async (_id, params) => {
+        const prev = Number(params.previousTokens) || 0;
+        const rugged = Boolean(params.rugHistory);
+        const avgLife = params.avgTokenLifespanHours != null ? Number(params.avgTokenLifespanHours) : null;
+        const freshSurge = params.freshWalletSurge != null ? Number(params.freshWalletSurge) : 0;
+        const devSold = params.devSoldEarlyCount != null ? Number(params.devSoldEarlyCount) : 0;
+        const flags = [];
+        let score = 0;
+        if (rugged) {
+          score += 40;
+          flags.push("CONFIRMED_RUG_HISTORY");
+        }
+        if (prev >= 10) {
+          score += 20;
+          flags.push("SERIAL_DEPLOYER");
+        } else if (prev >= 5) {
+          score += 10;
+          flags.push("FREQUENT_DEPLOYER");
+        }
+        if (avgLife !== null && avgLife < 2) {
+          score += 15;
+          flags.push("SHORT_LIVED_TOKENS");
+        }
+        if (freshSurge > 0.5) {
+          score += 15;
+          flags.push("HIGH_FRESH_WALLET_SURGE");
+        }
+        if (devSold > 0 && prev > 0 && devSold / prev > 0.5) {
+          score += 10;
+          flags.push("FREQUENT_EARLY_DEV_SELLS");
+        }
+        let riskClass;
+        if (score >= 50) riskClass = "CRITICAL";
+        else if (score >= 30) riskClass = "HIGH";
+        else if (score >= 15) riskClass = "MODERATE";
+        else riskClass = "LOW";
+        return { riskClass, score, flags, inputs: { previousTokens: prev, rugHistory: rugged, avgTokenLifespanHours: avgLife, freshWalletSurge: freshSurge, devSoldEarlyCount: devSold } };
+      })
+    });
+    api.registerTool({
+      name: "solana_history_export",
+      description: "Export comprehensive historical data for analysis: local decision logs + server-side closed trades + memory entries + strategy evolution history. Supports filtering by agent, time range, decision type, and token. Designed for deep analysis with full lookback depth.",
+      parameters: Type.Object({
+        agentId: Type.Optional(Type.String({ description: "Agent ID to export local logs for. Defaults to configured agent." })),
+        since: Type.Optional(Type.String({ description: "ISO timestamp \u2014 only export entries after this time." })),
+        before: Type.Optional(Type.String({ description: "ISO timestamp \u2014 only export entries before this time." })),
+        decisionType: Type.Optional(Type.String({ description: "Filter local decisions by type (e.g., 'trade_entry', 'trade_exit', 'analysis')." })),
+        token: Type.Optional(Type.String({ description: "Filter decisions and memory by token mint address." })),
+        includeState: Type.Optional(Type.Boolean({ description: "Include agent durable state. Default true." })),
+        includeBulletin: Type.Optional(Type.Boolean({ description: "Include team bulletin entries. Default false." })),
+        includePatterns: Type.Optional(Type.Boolean({ description: "Include named patterns. Default false." })),
+        includeTrades: Type.Optional(Type.Boolean({ description: "Include server-side closed trade history (via /api/trades). Default true." })),
+        includeMemory: Type.Optional(Type.Boolean({ description: "Include server-side memory entries matching filters (via /api/memory/search). Default false." })),
+        includeStrategy: Type.Optional(Type.Boolean({ description: "Include server-side strategy state and weight history (via /api/strategy/state). Default false." })),
+        memoryTags: Type.Optional(Type.String({ description: "Comma-separated memory tags to search (used with includeMemory). Default: 'learning_entry,strategy_evolution,pattern_detection'." })),
+        limit: Type.Optional(Type.Number({ description: "Max decision entries (local logs). Default 50." })),
+        offset: Type.Optional(Type.Number({ description: "Skip first N decision entries. Default 0." })),
+        tradesLimit: Type.Optional(Type.Number({ description: "Max closed trades to fetch. Default 100." })),
+        tradesPage: Type.Optional(Type.Number({ description: "Page number for trade pagination (1-based). Default 1." }))
+      }),
+      execute: wrapExecute(async (_id, params) => {
+        const targetAgentId = sanitizeAgentId(params.agentId ? String(params.agentId) : agentId);
+        const sinceTs = params.since ? new Date(String(params.since)).getTime() : 0;
+        const beforeTs = params.before ? new Date(String(params.before)).getTime() : Infinity;
+        const filterType = params.decisionType ? String(params.decisionType) : null;
+        const filterToken = params.token ? String(params.token) : null;
+        const maxEntries = typeof params.limit === "number" ? params.limit : 50;
+        const skipEntries = typeof params.offset === "number" ? params.offset : 0;
+        const includeState = params.includeState !== false;
+        const shouldFetchTrades = params.includeTrades !== false;
+        const shouldFetchMemory = Boolean(params.includeMemory);
+        const shouldFetchStrategy = Boolean(params.includeStrategy);
+        const logPath = path.join(logsDir, targetAgentId, "decisions.jsonl");
+        let decisions = readJsonlFile(logPath);
+        if (sinceTs > 0) decisions = decisions.filter((d) => new Date(d.ts).getTime() > sinceTs);
+        if (beforeTs < Infinity) decisions = decisions.filter((d) => new Date(d.ts).getTime() < beforeTs);
+        if (filterType) decisions = decisions.filter((d) => d.type === filterType);
+        if (filterToken) decisions = decisions.filter((d) => d.token === filterToken);
+        const totalFiltered = decisions.length;
+        decisions = decisions.slice(skipEntries, skipEntries + maxEntries);
+        const agentResult = {
+          decisions,
+          decisionCount: decisions.length,
+          totalFiltered
+        };
+        if (includeState) {
+          const statePath = path.join(stateDir, `${targetAgentId}.json`);
+          agentResult.state = readJsonFile(statePath);
+        }
+        const exportResult = {
+          agents: { [targetAgentId]: agentResult },
+          exportedAt: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        exportResult.contextSnapshot = readJsonFile(path.join(stateDir, "context-snapshot.json"));
+        if (params.includeBulletin) {
+          let bulletin = readJsonlFile(path.join(sharedLogsDir, "team-bulletin.jsonl"));
+          if (sinceTs > 0) bulletin = bulletin.filter((b) => new Date(b.ts).getTime() > sinceTs);
+          if (beforeTs < Infinity) bulletin = bulletin.filter((b) => new Date(b.ts).getTime() < beforeTs);
+          exportResult.bulletin = bulletin.slice(-maxEntries);
+        }
+        if (params.includePatterns) {
+          exportResult.patterns = readJsonFile(path.join(stateDir, "patterns.json")) || {};
+        }
+        if (shouldFetchTrades) {
+          try {
+            const trLimit = typeof params.tradesLimit === "number" ? params.tradesLimit : 100;
+            const trPage = typeof params.tradesPage === "number" ? params.tradesPage : 1;
+            let tradePath = `/api/trades?walletId=${walletId}&limit=${trLimit}&page=${trPage}`;
+            if (filterToken) tradePath += `&tokenAddress=${filterToken}`;
+            const trades = await get(tradePath);
+            exportResult.closedTrades = trades;
+          } catch (err) {
+            exportResult.closedTrades = { error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+        if (shouldFetchMemory) {
+          try {
+            const tags = params.memoryTags ? String(params.memoryTags).split(",").map((t) => t.trim()) : ["learning_entry", "strategy_evolution", "pattern_detection"];
+            const memoryResults = [];
+            for (const tag of tags) {
+              try {
+                const entries = await post("/api/memory/search", { query: tag, walletId });
+                memoryResults.push({ tag, entries });
+              } catch {
+              }
+            }
+            exportResult.memoryEntries = memoryResults;
+          } catch (err) {
+            exportResult.memoryEntries = { error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+        if (shouldFetchStrategy) {
+          try {
+            const strategyState = await get("/api/strategy/state");
+            exportResult.strategyState = strategyState;
+          } catch (err) {
+            exportResult.strategyState = { error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+        return exportResult;
+      })
+    });
+    api.registerTool({
+      name: "solana_pattern_store",
+      description: "Read, write, or list named trading patterns. Patterns are shared state used for pattern matching and strategy evolution.",
+      parameters: Type.Object({
+        action: Type.String({ description: "'read', 'write', or 'list'." }),
+        patternId: Type.Optional(Type.String({ description: "Pattern identifier (required for read/write)." })),
+        pattern: Type.Optional(Type.Unknown({ description: "Pattern object to store (required for write). Should include: name, description, conditions, expectedOutcome, confidence, sampleSize, discoveredAt." }))
+      }),
+      execute: wrapExecute(async (_id, params) => {
+        const action = String(params.action);
+        const patternsPath = path.join(stateDir, "patterns.json");
+        const patterns = readJsonFile(patternsPath) || {};
+        if (action === "list") {
+          const ids = Object.keys(patterns);
+          return { patterns: ids.map((id) => ({ id, ...patterns[id] })), count: ids.length };
+        }
+        const patternId = params.patternId ? String(params.patternId) : null;
+        if (!patternId) return { error: "patternId is required for read/write." };
+        if (action === "read") {
+          return patterns[patternId] ? { patternId, ...patterns[patternId] } : { patternId, found: false };
+        }
+        if (action === "write") {
+          if (!params.pattern) return { error: "pattern object is required for write." };
+          patterns[patternId] = { ...params.pattern, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+          writeJsonFile(patternsPath, patterns);
+          return { ok: true, patternId, updatedAt: patterns[patternId].updatedAt };
+        }
+        return { error: `Unknown action: ${action}. Use 'read', 'write', or 'list'.` };
+      })
+    });
+    api.registerTool({
+      name: "solana_daily_log",
+      description: "Append an entry to today's daily episodic log (memory/YYYY-MM-DD.md). OpenClaw auto-loads today + yesterday's log into context at every session start \u2014 no tool call needed to read them. Use at session end and after significant events. Auto-prunes logs older than 7 days.",
+      parameters: Type.Object({
+        summary: Type.String({ description: "Session summary or event description to log. Keep concise (1-5 lines)." }),
+        tags: Type.Optional(Type.String({ description: "Comma-separated tags for categorization (e.g., 'trade,regime_shift,session_end')." }))
+      }),
+      execute: wrapExecute(async (_id, params) => {
+        ensureDir(memoryDir);
+        const now = /* @__PURE__ */ new Date();
+        const logPath = getDailyLogPath(now);
+        const timeStr = now.toISOString().slice(11, 19);
+        const tags = params.tags ? ` [${String(params.tags)}]` : "";
+        const entry = `
+### ${timeStr} \u2014 ${agentId}${tags}
+
+${String(params.summary)}
+`;
+        if (!fs.existsSync(logPath)) {
+          const dateStr = now.toISOString().slice(0, 10);
+          const header = `# Daily Log \u2014 ${dateStr}
+
+> Auto-generated by solana_daily_log. OpenClaw loads today + yesterday into context automatically.
+`;
+          fs.writeFileSync(logPath, header + entry, "utf-8");
+        } else {
+          fs.appendFileSync(logPath, entry, "utf-8");
+        }
+        pruneDailyLogs(7);
+        return { ok: true, date: now.toISOString().slice(0, 10), time: timeStr, agent: agentId };
+      })
+    });
+    api.registerHook("agent:bootstrap", async (context) => {
+      const bootAgentId = sanitizeAgentId(context.agentId || agentId);
+      if (!context.bootstrapFiles) context.bootstrapFiles = [];
+      try {
+        const stateFile = path.join(stateDir, `${bootAgentId}.json`);
+        const stateData = readJsonFile(stateFile);
+        if (stateData) {
+          context.bootstrapFiles.push({
+            name: `${bootAgentId}-durable-state.json`,
+            path: `state/${bootAgentId}.json`,
+            content: JSON.stringify(stateData, null, 2),
+            source: "solana-trader:state"
+          });
+        }
+      } catch (err) {
+        api.logger.warn(`[solana-trader] Bootstrap: failed to load state for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      try {
+        const logFile = path.join(logsDir, bootAgentId, "decisions.jsonl");
+        const decisions = readJsonlFile(logFile, 50);
+        if (decisions.length > 0) {
+          context.bootstrapFiles.push({
+            name: `${bootAgentId}-decision-log.jsonl`,
+            path: `logs/${bootAgentId}/decisions.jsonl`,
+            content: decisions.map((d) => JSON.stringify(d)).join("\n"),
+            source: "solana-trader:decisions"
+          });
+        }
+      } catch (err) {
+        api.logger.warn(`[solana-trader] Bootstrap: failed to load decisions for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      try {
+        const bulletinFile = path.join(sharedLogsDir, "team-bulletin.jsonl");
+        const allEntries = readJsonlFile(bulletinFile);
+        const windowMs = 6 * 60 * 60 * 1e3;
+        const cutoff = Date.now() - windowMs;
+        const filtered = allEntries.filter((e) => new Date(e.ts).getTime() > cutoff);
+        if (filtered.length > 0) {
+          context.bootstrapFiles.push({
+            name: "team-bulletin.jsonl",
+            path: "logs/shared/team-bulletin.jsonl",
+            content: filtered.map((e) => JSON.stringify(e)).join("\n"),
+            source: "solana-trader:bulletin"
+          });
+        }
+      } catch (err) {
+        api.logger.warn(`[solana-trader] Bootstrap: failed to load bulletin for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      try {
+        const snapshotFile = path.join(stateDir, "context-snapshot.json");
+        const snapshot = readJsonFile(snapshotFile);
+        if (snapshot) {
+          context.bootstrapFiles.push({
+            name: "context-snapshot.json",
+            path: "state/context-snapshot.json",
+            content: JSON.stringify(snapshot, null, 2),
+            source: "solana-trader:snapshot"
+          });
+        }
+      } catch (err) {
+        api.logger.warn(`[solana-trader] Bootstrap: failed to load snapshot for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      let entitlementData = null;
+      try {
+        const liveResult = await get(`/api/entitlements/current?walletId=${walletId}`);
+        if (liveResult && typeof liveResult === "object") {
+          entitlementData = { ...liveResult, source: "live-fetch", cachedAt: (/* @__PURE__ */ new Date()).toISOString() };
+          try {
+            writeJsonFile(path.join(stateDir, "entitlement-cache.json"), entitlementData);
+          } catch (_) {
+          }
+        }
+      } catch (fetchErr) {
+        api.logger.warn(`[solana-trader] Bootstrap: live entitlement fetch failed for ${bootAgentId}: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`);
+      }
+      if (!entitlementData) {
+        try {
+          const cached = readJsonFile(path.join(stateDir, "entitlement-cache.json"));
+          if (cached && typeof cached === "object") {
+            entitlementData = { ...cached, source: "cache-fallback" };
+          }
+        } catch (_) {
+        }
+      }
+      if (!entitlementData) {
+        try {
+          const agentState = readJsonFile(path.join(stateDir, `${bootAgentId}.json`));
+          const s = agentState?.state;
+          if (s && typeof s === "object" && "tier" in s) {
+            entitlementData = { tier: s.tier, maxPositions: s.maxPositions, maxPositionSizeSol: s.maxPositionSizeSol, source: "durable-state-fallback", cachedAt: (/* @__PURE__ */ new Date()).toISOString() };
+          }
+        } catch (_) {
+        }
+      }
+      if (!entitlementData) {
+        entitlementData = { tier: "starter", maxPositions: 3, maxPositionSizeSol: 0.1, source: "conservative-default", cachedAt: (/* @__PURE__ */ new Date()).toISOString() };
+        api.logger.warn(`[solana-trader] Bootstrap: no entitlement source available for ${bootAgentId}, injecting conservative Starter defaults`);
+      }
+      context.bootstrapFiles.push({
+        name: "active-entitlements.json",
+        path: "state/entitlement-cache.json",
+        content: JSON.stringify(entitlementData, null, 2),
+        source: "solana-trader:entitlements"
+      });
+      api.logger.info(`[solana-trader] Bootstrap: injected ${context.bootstrapFiles.length} files for agent ${bootAgentId}`);
+    });
+    api.registerHook("memory:flush", async (context) => {
+      const flushAgentId = sanitizeAgentId(context.agentId || agentId);
+      api.logger.info(`[solana-trader] Memory flush triggered for agent ${flushAgentId}`);
+      try {
+        const stateFile = path.join(stateDir, `${flushAgentId}.json`);
+        const stateData = readJsonFile(stateFile);
+        if (stateData?.state) {
+          writeMemoryMd(flushAgentId, stateData.state);
+          api.logger.info(`[solana-trader] Memory flush: MEMORY.md updated from persisted state for ${flushAgentId}`);
+        } else {
+          api.logger.info(`[solana-trader] Memory flush: no persisted state found for ${flushAgentId} \u2014 MEMORY.md not updated`);
+        }
+      } catch (err) {
+        api.logger.warn(`[solana-trader] Memory flush: failed to write MEMORY.md for ${flushAgentId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      try {
+        const now = /* @__PURE__ */ new Date();
+        ensureDir(memoryDir);
+        const logPath = getDailyLogPath(now);
+        const timeStr = now.toISOString().slice(11, 19);
+        const entry = `
+### ${timeStr} \u2014 ${flushAgentId} [memory_flush]
+
+Context compaction triggered. MEMORY.md synced from last persisted state. Decision log entries are server-persisted (no local buffer to flush).
+`;
+        if (!fs.existsSync(logPath)) {
+          const dateStr = now.toISOString().slice(0, 10);
+          const header = `# Daily Log \u2014 ${dateStr}
+
+> Auto-generated by solana_daily_log. OpenClaw loads today + yesterday into context automatically.
+`;
+          fs.writeFileSync(logPath, header + entry, "utf-8");
+        } else {
+          fs.appendFileSync(logPath, entry, "utf-8");
+        }
+      } catch (err) {
+        api.logger.warn(`[solana-trader] Memory flush: failed to write daily log for ${flushAgentId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
     api.registerService({
       id: "solana-trader-session",
       start: async () => {
@@ -1196,7 +2078,7 @@ var solanaTraderPlugin = {
       }
     });
     api.logger.info(
-      `[solana-trader] Registered 52 trading tools for walletId ${walletId} (session auth mode)`
+      `[solana-trader] Registered 66 trading tools for walletId ${walletId} (session auth mode)`
     );
   }
 };
