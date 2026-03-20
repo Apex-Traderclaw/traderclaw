@@ -4,8 +4,8 @@ import { orchestratorRequest } from "./src/http-client.js";
 import { SessionManager } from "./src/session-manager.js";
 import { AlphaBuffer } from "./src/alpha-buffer.js";
 import { AlphaStreamManager } from "./src/alpha-ws.js";
-import { parseXConfig, registerXReadTools } from "../lib/x-tools.mjs";
-import { registerWebFetchTool } from "../lib/web-fetch.mjs";
+import { parseXConfig, registerXReadTools } from "./lib/x-tools.mjs";
+import { registerWebFetchTool } from "./lib/web-fetch.mjs";
 import * as fs from "fs";
 import * as path from "path";
 
