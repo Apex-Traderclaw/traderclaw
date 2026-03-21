@@ -1,4 +1,4 @@
-# traderclaw-v1
+# solana-trader (TraderClaw V1)
 
 TraderClaw V1 plugin for autonomous Solana memecoin trading. Connects OpenClaw to a trading orchestrator that handles market data, risk enforcement, and trade execution. Includes a full memory layer with local persistence, episodic logging, deterministic compute tools, and OpenClaw-native memory integration.
 
@@ -34,14 +34,16 @@ The plugin gives OpenClaw tools to interact with the Solana trading orchestrator
 
 ### 1. Install the plugin
 
+The npm package name **`solana-trader`** matches the OpenClaw manifest id (`solana-trader` in `plugins.entries`), so the gateway does not log a plugin id mismatch on restart. Older installs under `traderclaw-v1` / `solana-traderclaw-v1` should migrate when convenient.
+
 ```bash
-npm install -g traderclaw-v1
+npm install -g solana-trader
 ```
 
 Or install directly into OpenClaw:
 
 ```bash
-openclaw plugins install traderclaw-v1
+openclaw plugins install solana-trader
 ```
 
 ### 2. Run setup

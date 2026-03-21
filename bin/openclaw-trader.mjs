@@ -867,7 +867,7 @@ async function cmdSetup(args) {
 `);
   print(`  Runtime wallet proof key source: --wallet-private-key or env ${WALLET_PRIVATE_KEY_ENV} (never openclaw.json)`);
   print("Next steps:");
-  print("  1. Install the plugin:     openclaw plugins install traderclaw-v1");
+  print("  1. Install the plugin:     openclaw plugins install solana-trader");
   print("  2. Restart the gateway:    openclaw gateway --restart");
   print("  3. Start trading:          Ask OpenClaw to scan for opportunities");
   print("");
@@ -2091,7 +2091,7 @@ async function cmdInstall(args) {
   const defaults = parseInstallWizardArgs(args);
   const { createInstallerStepEngine } = await import("./installer-step-engine.mjs");
   const modeConfig = {
-    pluginPackage: "traderclaw-v1",
+    pluginPackage: "solana-trader",
     pluginId: "solana-trader",
     cliName: "traderclaw",
     gatewayConfig: "gateway-v1.json5",

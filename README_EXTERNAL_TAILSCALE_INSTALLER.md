@@ -1,6 +1,6 @@
 # TraderClaw External Installer Guide (v1.0.7)
 
-This guide is for teams implementing a GUI/CLI installer around `traderclaw-v1@1.0.7`.
+This guide is for teams implementing a GUI/CLI installer around `solana-trader@1.0.6`.
 
 It aligns external installer behavior with the canonical contract in `INSTALL_CONTRACT_v1.0.7.md`.
 
@@ -53,14 +53,14 @@ openclaw gateway status
 Authoritative plugin load path:
 
 ```bash
-openclaw plugins install traderclaw-v1@1.0.7
+openclaw plugins install solana-trader@1.0.6
 openclaw gateway restart
 ```
 
 Optional global CLI binary:
 
 ```bash
-npm install -g traderclaw-v1@1.0.7
+npm install -g solana-trader@1.0.6
 ```
 
 ---
@@ -209,7 +209,7 @@ Informational non-blocking warnings:
 ## 10) Minimal End-to-End Script
 
 ```bash
-openclaw plugins install traderclaw-v1@1.0.7
+openclaw plugins install solana-trader@1.0.6
 openclaw config set gateway.mode local
 openclaw config set gateway.tailscale.mode off
 openclaw config set gateway.bind tailnet

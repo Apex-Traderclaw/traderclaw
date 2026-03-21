@@ -1,6 +1,6 @@
 # TraderClaw Install Contract (v1.0.7)
 
-This document defines the canonical installation and onboarding contract for `traderclaw-v1@1.0.7`.
+This document defines the canonical installation and onboarding contract for `solana-trader@1.0.6` (npm package id aligned with OpenClaw manifest `solana-trader`; legacy `traderclaw-v1@1.0.7` installs may show an id-hint warning until migrated).
 
 Use this as the source of truth for:
 - CLI docs
