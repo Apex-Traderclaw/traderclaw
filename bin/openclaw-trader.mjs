@@ -479,6 +479,7 @@ async function cmdSetup(args) {
   let showApiKey = false;
   let showWalletPrivateKey = false;
   let doSignupFlow = false;
+  let signedUpThisSession = false;
 
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === "--api-key" || args[i] === "-k") && args[i + 1]) {
@@ -520,9 +521,9 @@ async function cmdSetup(args) {
   orchestratorUrl = orchestratorUrl.replace(/\/+$/, "");
 
   if (!apiKey) {
-    const hasKey = await confirm("Do you already have an API key?");
+    const hasKey = await confirm("Do you already have a TraderClaw API key?");
     if (hasKey) {
-      apiKey = await prompt("Enter your API key");
+      apiKey = await prompt("Enter your TraderClaw API key");
     } else {
       doSignupFlow = true;
     }
@@ -537,15 +538,34 @@ async function cmdSetup(args) {
     try {
       const signupResult = await doSignup(orchestratorUrl, externalUserId);
       apiKey = signupResult.apiKey;
+      signedUpThisSession = true;
       printSuccess(`  Signup successful!`);
-      printInfo(`  API Key: ${maskKey(apiKey)}`);
-      if (showApiKey) printWarn(`  Full API Key: ${apiKey}`);
       printInfo(`  Tier: ${signupResult.tier}`);
       printInfo(`  Scopes: ${signupResult.scopes.join(", ")}`);
     } catch (err) {
       printError(`Signup failed: ${err.message}`);
       process.exit(1);
     }
+  }
+
+  if (signedUpThisSession && apiKey) {
+    print("\n" + "=".repeat(60));
+    printWarn("  IMPORTANT: Save your TraderClaw API key");
+    print("=".repeat(60));
+    printInfo(`  Preview (masked): ${maskKey(apiKey)}`);
+    printWarn("  Your FULL TraderClaw API key is on the next line. Copy it to a password manager before continuing.");
+    printWarn(`  TraderClaw API Key: ${apiKey}`);
+    printWarn("  You will need this key on new machines, for recovery, and for some CLI flows.");
+    printWarn("  After setup, it is also saved in your local OpenClaw plugin config.");
+    if (showApiKey) {
+      printInfo("  (--show-api-key: full key is already shown above.)");
+    }
+    const ack = await prompt("Type API_KEY_STORED to confirm you saved this key", "");
+    if (ack !== "API_KEY_STORED") {
+      printError("Confirmation not provided. Aborting setup so you do not lose access to your API key.");
+      process.exit(1);
+    }
+    printSuccess("  API key backup confirmation received.");
   }
 
   if (!apiKey) {
@@ -1563,14 +1583,14 @@ function wizardHtml(defaults) {
       <div class="card" id="startCard">
         <div class="grid">
           <div>
-            <label>TraderClaw account API key (existing users)</label>
-            <input id="apiKey" value="${defaults.apiKey}" placeholder="Paste your TraderClaw API key if you already have an account" />
-            <p class="muted">New user? Leave this blank and the setup step will help create your account.</p>
+            <label>Telegram bot token (required)</label>
+            <input id="telegramToken" value="${defaults.telegramToken}" placeholder="Paste your bot token from BotFather" autofocus />
+            <p class="muted">Required for guided onboarding and immediate bot readiness. Need one? <a href="https://core.telegram.org/bots#how-do-i-create-a-bot" target="_blank" rel="noopener noreferrer">Create a Telegram bot token (official docs)</a>.</p>
           </div>
           <div>
-            <label>Telegram bot token (required)</label>
-            <input id="telegramToken" value="${defaults.telegramToken}" placeholder="Required now for the best onboarding experience" />
-            <p class="muted">Required for guided onboarding and immediate bot readiness. Need one? <a href="https://core.telegram.org/bots#how-do-i-create-a-bot" target="_blank" rel="noopener noreferrer">Create a Telegram bot token (official docs)</a>.</p>
+            <label>TraderClaw API key (optional for existing users)</label>
+            <input id="apiKey" value="${defaults.apiKey}" placeholder="Leave blank if you are new — setup will create your account" />
+            <p class="muted">Already have a TraderClaw account? Paste your API key here. New users: leave empty.</p>
           </div>
         </div>
         <button id="start" disabled>Start Installation</button>
@@ -1587,8 +1607,18 @@ function wizardHtml(defaults) {
               <a id="tailscaleLink" href="#" target="_blank" rel="noopener noreferrer"></a>
             </div>
           </div>
+          <div id="funnelAdminCta" class="cta hidden">
+            <h4>Enable Tailscale Funnel</h4>
+            <p class="important">Important: open this link in your browser, enable Funnel for this node if prompted, then return to this same wizard page.</p>
+            <p class="muted">The installer continues automatically after Tailscale Funnel is allowed for your tailnet.</p>
+            <div class="row">
+              <a id="funnelAdminLink" href="#" target="_blank" rel="noopener noreferrer"></a>
+            </div>
+          </div>
           <div id="funnelCta" class="cta hidden">
-            <h4>Gateway Funnel URL</h4>
+            <h4>Gateway public URL (Funnel)</h4>
+            <p class="important">Your gateway may be reachable at the URL below once Funnel is enabled. Keep this page open while installation finishes.</p>
+            <p class="muted">If the URL does not load yet, finish the Tailscale Funnel step above first.</p>
             <div class="row">
               <a id="funnelLink" href="#" target="_blank" rel="noopener noreferrer"></a>
             </div>
@@ -1634,6 +1664,8 @@ function wizardHtml(defaults) {
       const ctaBoxEl = document.getElementById("ctaBox");
       const tailscaleCtaEl = document.getElementById("tailscaleCta");
       const tailscaleLinkEl = document.getElementById("tailscaleLink");
+      const funnelAdminCtaEl = document.getElementById("funnelAdminCta");
+      const funnelAdminLinkEl = document.getElementById("funnelAdminLink");
       const funnelCtaEl = document.getElementById("funnelCta");
       const funnelLinkEl = document.getElementById("funnelLink");
       const setupCtaEl = document.getElementById("setupCta");
@@ -1663,6 +1695,9 @@ function wizardHtml(defaults) {
       let llmLoadTicker = null;
       let llmLoadStartedAt = 0;
       let announcedTailscaleUrl = "";
+      let announcedFunnelAdminUrl = "";
+      let pollTimer = null;
+      let pollIntervalMs = 1200;
 
       function hasRequiredInputs() {
         return (
@@ -1852,6 +1887,8 @@ function wizardHtml(defaults) {
           }
 
           readyEl.textContent = "Installation started. Live progress will appear below.";
+          announcedTailscaleUrl = "";
+          announcedFunnelAdminUrl = "";
           await refresh();
         } catch (err) {
           stateEl.textContent = "failed";
@@ -1860,28 +1897,56 @@ function wizardHtml(defaults) {
         }
       }
 
+      function setPollInterval(ms) {
+        if (ms === pollIntervalMs && pollTimer) return;
+        pollIntervalMs = ms;
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = setInterval(refresh, pollIntervalMs);
+      }
+
       async function refresh() {
         const res = await fetch("/api/state");
         const data = await res.json();
         stateEl.textContent = data.status || "idle";
 
+        const steps = data.stepResults || [];
+        const stepDone = (id) => steps.some((r) => r.stepId === id && r.status === "completed");
+        const tailscaleUpDone = stepDone("tailscale_up");
+        const gatewayBootstrapDone = stepDone("gateway_bootstrap");
+
         const tailscaleApprovalUrl = data.detected && data.detected.tailscaleApprovalUrl ? data.detected.tailscaleApprovalUrl : "";
         const funnelUrl = data.detected && data.detected.funnelUrl ? data.detected.funnelUrl : "";
+        const funnelAdminUrl = data.detected && data.detected.funnelAdminUrl ? data.detected.funnelAdminUrl : "";
 
-        showUrlCta(tailscaleCtaEl, tailscaleLinkEl, tailscaleApprovalUrl);
-        showUrlCta(funnelCtaEl, funnelLinkEl, funnelUrl);
-        if (tailscaleApprovalUrl && tailscaleApprovalUrl !== announcedTailscaleUrl) {
+        const showTailscaleCta = tailscaleApprovalUrl && !tailscaleUpDone;
+        showUrlCta(tailscaleCtaEl, tailscaleLinkEl, showTailscaleCta ? tailscaleApprovalUrl : "");
+
+        const showFunnelAdmin = funnelAdminUrl && !gatewayBootstrapDone;
+        showUrlCta(funnelAdminCtaEl, funnelAdminLinkEl, showFunnelAdmin ? funnelAdminUrl : "");
+
+        const showFunnelPublic = funnelUrl && !gatewayBootstrapDone;
+        showUrlCta(funnelCtaEl, funnelLinkEl, showFunnelPublic ? funnelUrl : "");
+
+        if (showTailscaleCta && tailscaleApprovalUrl !== announcedTailscaleUrl) {
           announcedTailscaleUrl = tailscaleApprovalUrl;
-          readyEl.textContent = "Action required: open the Tailscale approval link and complete sign-in, then return to this page.";
           try {
             window.alert("Action required: approve Tailscale in your browser. The approval link is now shown above status.");
           } catch {
             // Some environments can suppress alerts; CTA remains visible.
           }
         }
+        if (showFunnelAdmin && funnelAdminUrl !== announcedFunnelAdminUrl) {
+          announcedFunnelAdminUrl = funnelAdminUrl;
+          try {
+            window.alert("Action required: enable Tailscale Funnel in your browser. The link is shown above the status table.");
+          } catch {
+            // ignore
+          }
+        }
 
         const setupHandoff = data.setupHandoff;
         if (data.status === "completed" && setupHandoff && setupHandoff.command) {
+          setPollInterval(1200);
           setCheckoutMode(true);
           ctaBoxEl.classList.remove("hidden");
           setupCtaEl.classList.remove("hidden");
@@ -1896,10 +1961,39 @@ function wizardHtml(defaults) {
         } else {
           setCheckoutMode(false);
           setupCtaEl.classList.add("hidden");
-          if (!tailscaleApprovalUrl && !funnelUrl) {
+          const anyCta =
+            showTailscaleCta
+            || showFunnelAdmin
+            || showFunnelPublic;
+          if (anyCta) {
+            ctaBoxEl.classList.remove("hidden");
+          } else {
             ctaBoxEl.classList.add("hidden");
           }
-          readyEl.textContent = "";
+
+          if (data.status === "running") {
+            setPollInterval(500);
+            if (showTailscaleCta) {
+              readyEl.textContent =
+                "Action required: open the Tailscale approval link and complete sign-in, then return to this page.";
+            } else if (showFunnelAdmin) {
+              readyEl.textContent =
+                "Action required: open the Tailscale Funnel link above and complete any prompts, then return here.";
+            } else if (showFunnelPublic) {
+              readyEl.textContent =
+                "Public gateway URL is shown above — installation continues. Please keep this page open.";
+            } else if (tailscaleUpDone && !gatewayBootstrapDone) {
+              readyEl.textContent =
+                "Tailscale is connected — installation is continuing. Please keep this page open and be patient.";
+            } else {
+              readyEl.textContent = "Installation running — please wait…";
+            }
+          } else {
+            setPollInterval(1200);
+            if (data.status !== "completed") {
+              readyEl.textContent = "";
+            }
+          }
         }
 
         const errors = data.errors || [];
@@ -1907,7 +2001,7 @@ function wizardHtml(defaults) {
           ? errors.map((e) => "Step " + (e.stepId || "unknown") + ":\\n" + (e.error || "")).join("\\n\\n")
           : "";
         stepsEl.innerHTML = "";
-        (data.stepResults || []).forEach((row) => {
+        steps.forEach((row) => {
           const tr = document.createElement("tr");
           tr.innerHTML = "<td>" + row.stepId + "</td><td>" + row.status + "</td><td>" + (row.error || row.detail || "") + "</td>";
           stepsEl.appendChild(tr);
@@ -1973,7 +2067,7 @@ function wizardHtml(defaults) {
       llmCredentialEl.addEventListener("input", updateStartButtonState);
       telegramTokenEl.addEventListener("input", updateStartButtonState);
       loadLlmCatalog();
-      setInterval(refresh, 1200);
+      setPollInterval(1200);
       refresh();
     </script>
   </body>
@@ -2001,7 +2095,7 @@ async function cmdInstall(args) {
     status: "idle",
     logs: [],
     stepResults: [],
-    detected: { funnelUrl: null, tailscaleApprovalUrl: null },
+    detected: { funnelUrl: null, tailscaleApprovalUrl: null, funnelAdminUrl: null },
     errors: [],
     setupHandoff: null,
   };
@@ -2022,6 +2116,22 @@ async function cmdInstall(args) {
       const text = typeof evt?.text === "string" ? evt.text : "";
       const match = text.match(/https:\/\/login\.tailscale\.com\/[^\s"')]+/);
       return match ? match[0] : "";
+    };
+
+    const extractFunnelAdminUrlFromText = (text) => {
+      const t = typeof text === "string" ? text : "";
+      const m = t.match(/https:\/\/login\.tailscale\.com\/f\/funnel[^\s"'`)]+/);
+      return m ? m[0] : "";
+    };
+
+    const extractPublicGatewayUrlFromText = (text) => {
+      const t = typeof text === "string" ? text : "";
+      const matches = t.match(/https?:\/\/[^\s"'`)]+/g) || [];
+      for (const u of matches) {
+        if (u.includes("login.tailscale.com")) continue;
+        if (u.includes("ts.net") || u.includes("trycloudflare.com")) return u;
+      }
+      return "";
     };
 
     if (req.method === "GET" && req.url === "/") {
@@ -2082,7 +2192,7 @@ async function cmdInstall(args) {
       runtime.logs = [];
       runtime.stepResults = [];
       runtime.errors = [];
-      runtime.detected = { funnelUrl: null, tailscaleApprovalUrl: null };
+      runtime.detected = { funnelUrl: null, tailscaleApprovalUrl: null, funnelAdminUrl: null };
       runtime.setupHandoff = null;
       respondJson(202, { ok: true });
 
@@ -2113,9 +2223,23 @@ async function cmdInstall(args) {
           },
           onLog: (evt) => {
             runtime.logs.push(evt);
-            if (!runtime.detected.tailscaleApprovalUrl && evt.stepId === "tailscale_up") {
+            const stepId = evt.stepId || "";
+            const text = typeof evt.text === "string" ? evt.text : "";
+            if (!runtime.detected.tailscaleApprovalUrl && stepId === "tailscale_up") {
               const approvalUrl = extractTailscaleApprovalUrl(evt);
               if (approvalUrl) runtime.detected.tailscaleApprovalUrl = approvalUrl;
+            }
+            if (stepId === "funnel" || stepId === "gateway_bootstrap") {
+              const urls = Array.isArray(evt.urls) ? evt.urls : [];
+              for (const u of urls) {
+                if (typeof u === "string" && u.includes("login.tailscale.com/f/funnel")) {
+                  runtime.detected.funnelAdminUrl = u;
+                }
+              }
+              const adminFromText = extractFunnelAdminUrlFromText(text);
+              if (adminFromText) runtime.detected.funnelAdminUrl = adminFromText;
+              const pub = extractPublicGatewayUrlFromText(text);
+              if (pub) runtime.detected.funnelUrl = pub;
             }
           },
         },
@@ -2124,7 +2248,12 @@ async function cmdInstall(args) {
       const result = await engine.runAll();
       runtime.status = result.status;
       runtime.stepResults = result.stepResults || runtime.stepResults;
-      runtime.detected = result.detected || {};
+      const mergedDetected = result.detected && typeof result.detected === "object" ? result.detected : {};
+      runtime.detected = {
+        tailscaleApprovalUrl: mergedDetected.tailscaleApprovalUrl ?? runtime.detected.tailscaleApprovalUrl,
+        funnelUrl: mergedDetected.funnelUrl ?? runtime.detected.funnelUrl,
+        funnelAdminUrl: runtime.detected.funnelAdminUrl ?? mergedDetected.funnelAdminUrl ?? null,
+      };
       runtime.errors = result.errors || [];
       runtime.setupHandoff = result.setupHandoff || null;
       running = false;
@@ -2171,7 +2300,7 @@ Setup options:
   --gateway-base-url, -g  Gateway public HTTPS URL for orchestrator callbacks
   --gateway-token, -t     Gateway bearer token (defaults to API key)
   --skip-gateway-registration  Skip gateway URL registration with orchestrator
-  --show-api-key     Reveal full API key in setup output
+  --show-api-key     Extra hint after signup (full key is always shown once; confirm with API_KEY_STORED)
   --show-wallet-private-key  Reveal full wallet private key in setup output
   --signup           Force signup flow (create new account)
 
