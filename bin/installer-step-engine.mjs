@@ -283,6 +283,10 @@ async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorU
   seedPluginConfig(modeConfig, orchestratorUrl || "https://api.traderclaw.ai");
 
   await runCommandWithEvents("openclaw", ["plugins", "enable", modeConfig.pluginId], { onEvent });
+
+  // Safe to set plugins.allow only after install+enable — registry must know the plugin id.
+  mergePluginsAllowlist(modeConfig);
+
   const list = await runCommandWithEvents("openclaw", ["plugins", "list"], { onEvent });
   const doctor = await runCommandWithEvents("openclaw", ["plugins", "doctor"], { onEvent });
   const pluginFound = `${list.stdout || ""}\n${list.stderr || ""}`.toLowerCase().includes(modeConfig.pluginId.toLowerCase());
@@ -338,18 +342,30 @@ function seedPluginConfig(modeConfig, orchestratorUrl, configPath = CONFIG_FILE)
     if (entries[legacyId]) mergeOrchestratorForId(legacyId);
   }
 
-  const allowSet = new Set(
-    Array.isArray(config.plugins.allow) ? config.plugins.allow.filter((id) => typeof id === "string" && id.trim()) : [],
-  );
-  allowSet.add(modeConfig.pluginId);
-  for (const legacyId of LEGACY_TRADER_PLUGIN_IDS) {
-    if (entries[legacyId]) allowSet.add(legacyId);
-  }
-  config.plugins.allow = [...allowSet];
+  // Do not set plugins.allow here: OpenClaw validates allow[] against the plugin registry, and
+  // the id is not registered until after `openclaw plugins install`. Pre-seeding allow caused:
+  // "plugins.allow: plugin not found: solana-traderclaw-v1".
 
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
   return configPath;
+}
+
+function mergePluginsAllowlist(modeConfig, configPath = CONFIG_FILE) {
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    return;
+  }
+  if (!config.plugins || typeof config.plugins !== "object") config.plugins = {};
+  const allowSet = new Set(
+    Array.isArray(config.plugins.allow) ? config.plugins.allow.filter((id) => typeof id === "string" && id.trim()) : [],
+  );
+  allowSet.add(modeConfig.pluginId);
+  config.plugins.allow = [...allowSet];
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
 function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {

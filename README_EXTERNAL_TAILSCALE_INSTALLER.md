@@ -233,7 +233,7 @@ If the log shows `at Object.writeConfigFile (.../auth-profiles-...js)` during `o
 
 **`agents.defaults.heartbeat`:** OpenClaw’s schema requires `agents.defaults.heartbeat` (can be `{}`) whenever `agents.defaults` exists. The wizard sets this in the LLM step.
 
-**`plugins.allow`:** If empty, OpenClaw warns that discovered plugins may auto-load. The installer sets `plugins.allow` to include the current and any legacy TraderClaw ids that have config entries.
+**`plugins.allow`:** OpenClaw validates every id in `plugins.allow` against the plugin registry, so the installer **must not** set it before `openclaw plugins install`. After `plugins enable`, the wizard merges `plugins.allow` to include the current plugin id (optional; avoids the “empty allowlist” warning once the plugin is registered).
 
 **Wizard logs:** ANSI color codes from the `openclaw` CLI are stripped before logs are shown in the browser UI.
 
