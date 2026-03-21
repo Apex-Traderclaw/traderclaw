@@ -1417,6 +1417,9 @@ const solanaTraderPlugin = {
 
         const passed = steps.filter((step) => step.ok).length;
         const failed = steps.length - passed;
+        const failedSteps = steps.filter((step) => !step.ok);
+        const onlyCapitalFailed =
+          failedSteps.length === 1 && failedSteps[0]?.step === "solana_capital_status";
         startupGateState = {
           ok: failed === 0,
           ts: Date.now(),
@@ -1428,9 +1431,18 @@ const solanaTraderPlugin = {
           steps,
           summary: { passed, failed },
         };
-        if (startupGateState.ok) {
+        const includeWelcome = startupGateState.ok || onlyCapitalFailed;
+        if (includeWelcome) {
           const k = (config.apiKey && String(config.apiKey).trim()) || null;
-          return { ...base, welcomeMessage: buildTraderClawWelcomeMessage(k) };
+          const out = { ...base, welcomeMessage: buildTraderClawWelcomeMessage(k) };
+          if (onlyCapitalFailed && !startupGateState.ok) {
+            return {
+              ...out,
+              welcomeNote:
+                "Startup gate reported solana_capital_status failed (e.g. capital API error). Welcome message still included so the user gets onboarding text and API key; fix capital/wallet if tools keep failing.",
+            };
+          }
+          return out;
         }
         return base;
       })()
@@ -1543,7 +1555,8 @@ const solanaTraderPlugin = {
 
     api.registerTool({
       name: "solana_startup_gate",
-      description: "Run the mandatory startup sequence and return deterministic pass/fail results per step. Optionally auto-fixes gateway credentials if gatewayBaseUrl and gatewayToken are present in plugin config.",
+      description:
+        "Run the mandatory startup sequence and return deterministic pass/fail results per step. Optionally auto-fixes gateway credentials if gatewayBaseUrl and gatewayToken are present in plugin config. On full pass, includes welcomeMessage. If the only failed step is solana_capital_status (e.g. capital API error), still includes welcomeMessage so the user gets onboarding text; check welcomeNote in that case.",
       parameters: Type.Object({
         autoFixGateway: Type.Optional(Type.Boolean({ description: "If true (default), auto-register gateway credentials when missing and config includes gatewayBaseUrl + gatewayToken." })),
         force: Type.Optional(Type.Boolean({ description: "If true, always run the startup checks now even if a recent run exists." })),
@@ -1559,7 +1572,7 @@ const solanaTraderPlugin = {
     api.registerTool({
       name: "solana_traderclaw_welcome",
       description:
-        "Returns the canonical TraderClaw welcome message for the user after startup checks pass, including their API key when it is stored in plugin config. Use when the user ran the manual 6-step startup checklist instead of solana_startup_gate.",
+        "Returns the canonical TraderClaw welcome message for the user after startup checks succeed (including when the only issue is zero balance — funding is separate). Includes API key when stored in plugin config. Use when the user ran the manual startup checklist instead of solana_startup_gate, or whenever welcomeMessage was not already appended from solana_startup_gate.",
       parameters: Type.Object({}),
       execute: wrapExecute(async () => {
         const k = (config.apiKey && String(config.apiKey).trim()) || null;

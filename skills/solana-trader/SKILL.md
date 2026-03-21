@@ -125,11 +125,20 @@ Call the runtime startup gate first:
 Call solana_startup_gate({ autoFixGateway: true, force: true })
 ```
 
-Treat any `ok: false` step as a hard stop. Report the failing steps clearly and do not continue.
+Treat any `ok: false` step as a hard stop **for trading** — report failing steps clearly. Exception: if the result still includes `welcomeMessage` (e.g. only `solana_capital_status` failed in the gate), append it per **Welcome message** below.
 
 **If many or all startup steps fail at once**, or errors mention wallet proof / session / auth: **do not** blame a single guessed cause (e.g. “env var not set”) and **do not** output a custom shell playbook. Report the tool errors briefly, then **direct the user to:** https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-auth-errors-or-the-agent-logged-out
 
-**After `ok: true`:** The tool result includes `welcomeMessage` (full markdown). **Append it verbatim** to your reply after you summarize startup pass/fail — do not paraphrase or drop the API key section; the plugin injects the user's real key when it is in config.
+### Welcome message — Step 4.5 (required after startup verification)
+
+After startup verification completes — **whether you used `solana_startup_gate` or the manual tool checklist** — you **must** deliver the welcome ceremony:
+
+- **`solana_startup_gate`:** If the JSON includes `welcomeMessage`, **append it verbatim** to your reply (after your pass/fail summary). Do not paraphrase or drop the API key block. The same field appears when **all steps pass**, and may also appear when **only** `solana_capital_status` failed (API error); read `welcomeNote` if present.
+- **Manual path (six tools):** After each tool **succeeds** (no tool error), call `solana_traderclaw_welcome()` and **append** the returned `welcomeMessage` verbatim.
+
+**Zero SOL / capital “WARN” is not a skip condition.** If your report shows ⚠️ on capital because **balance is 0** or “fund your wallet,” but the **tools returned successfully** (no auth/network error), that is a **funding** reminder — **still** append the welcome message. The welcome text already tells the user to fund. **Do not** skip the welcome only because the wallet is empty.
+
+**When to skip the welcome:** Skip only if multiple checks **failed** with real errors (session, gateway, alpha, positions, kill switch, etc.) or the user has not completed a successful startup path.
 
 ### Startup Step 1: Verify System Connectivity
 
@@ -192,9 +201,7 @@ If the kill switch is active, enter Position Defense Mode immediately (see Step 
 
 **IF THIS FAILS → DO NOT PROCEED. You cannot make safe trading decisions without knowing your portfolio state. Report the error and stop.**
 
-**After all 4 startup steps complete → proceed to the trading loop (Step 0: INTERRUPT CHECK).**
-
-If you used this **manual** path (not `solana_startup_gate`), after every step has passed call `solana_traderclaw_welcome()` and **append** the returned `welcomeMessage` verbatim to your reply (same as the gate path).
+**After all 4 startup steps complete → proceed to the trading loop (Step 0: INTERRUPT CHECK) after you have appended the welcome message** (see **Welcome message** above).
 
 ### Startup Step 5: Forwarding Probe (recommended)
 
@@ -2590,7 +2597,7 @@ Each user configures their own X/Twitter API developer account tokens in the plu
 | Limits | `solana_entitlement_upgrade` | Upgrade account tier |
 | System | `solana_system_status` | System health |
 | Startup | `solana_startup_gate` | Run all 6 startup checks with auto-fix for gateway credentials |
-| Startup | `solana_traderclaw_welcome` | Post-startup welcome text (includes API key when in config); use after manual checklist |
+| Startup | `solana_traderclaw_welcome` | Welcome text (API key when in config); use after manual checklist if gate did not return `welcomeMessage` — always when tools succeeded, including 0 SOL reports |
 | Startup | `solana_gateway_forward_probe` | Test orchestrator→gateway push path end-to-end |
 | Diagnostics | `solana_runtime_status` | Plugin runtime state snapshot (startup gate, alpha stream, probe) |
 | Alpha | `solana_alpha_subscribe` | Subscribe to SpyFly alpha stream (pass `agentId` for Gateway forwarding) |
