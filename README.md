@@ -149,6 +149,8 @@ Available config keys: `orchestratorUrl`, `walletId`, `apiKey`, `apiTimeout`, `r
 
 Wallet proof note: if login/session challenge requires wallet ownership proof, provide the key at runtime with `--wallet-private-key` or `TRADERCLAW_WALLET_PRIVATE_KEY`. It is used for local signing only and is not stored in `~/.openclaw/openclaw.json`.
 
+**Session / auth / startup issues:** follow the official guide — [Installation → Troubleshooting (session expired, auth, logged out)](https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-auth-errors-or-the-agent-logged-out).
+
 ### `traderclaw --help`
 
 Print all available commands and options.
