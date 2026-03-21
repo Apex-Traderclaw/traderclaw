@@ -23,7 +23,6 @@ interface PluginConfig {
   externalUserId?: string;
   refreshToken?: string;
   walletPublicKey?: string;
-  walletPrivateKey?: string;
   apiTimeout?: number;
   agentId?: string;
   gatewayBaseUrl?: string;
@@ -43,7 +42,6 @@ function parseConfig(raw: unknown): PluginConfig {
   const externalUserId = typeof obj.externalUserId === "string" ? obj.externalUserId : undefined;
   const refreshToken = typeof obj.refreshToken === "string" ? obj.refreshToken : undefined;
   const walletPublicKey = typeof obj.walletPublicKey === "string" ? obj.walletPublicKey : undefined;
-  const walletPrivateKey = typeof obj.walletPrivateKey === "string" ? obj.walletPrivateKey : undefined;
   const apiTimeout = typeof obj.apiTimeout === "number" ? obj.apiTimeout : 120000;
   const agentId = typeof obj.agentId === "string" ? obj.agentId : undefined;
   const gatewayBaseUrl = typeof obj.gatewayBaseUrl === "string" ? obj.gatewayBaseUrl : undefined;
@@ -57,7 +55,6 @@ function parseConfig(raw: unknown): PluginConfig {
     externalUserId,
     refreshToken,
     walletPublicKey,
-    walletPrivateKey,
     apiTimeout,
     agentId,
     gatewayBaseUrl,
@@ -93,7 +90,10 @@ const solanaTraderPlugin = {
       apiKey: apiKey || "",
       refreshToken: config.refreshToken,
       walletPublicKey: config.walletPublicKey,
-      walletPrivateKey: config.walletPrivateKey,
+      walletPrivateKeyProvider: () => {
+        const runtimeKey = process.env.TRADERCLAW_WALLET_PRIVATE_KEY || "";
+        return runtimeKey.trim() || undefined;
+      },
       clientLabel: "openclaw-plugin-runtime",
       timeout: apiTimeout,
       onTokensRotated: (tokens) => {
@@ -2183,7 +2183,7 @@ const solanaTraderPlugin = {
             `[solana-trader] Session initialization failed: ${err instanceof Error ? err.message : String(err)}`,
           );
           api.logger.error(
-            "[solana-trader] Trading tools will fail until session is established. User should run on this machine: traderclaw login (after logout) or traderclaw setup / traderclaw signup for a new account.",
+            "[solana-trader] Trading tools will fail until session is established. User should run on this machine: traderclaw login (after logout) or traderclaw setup / traderclaw signup for a new account. Wallet proof uses local signing only — private key never leaves this system.",
           );
           return;
         }

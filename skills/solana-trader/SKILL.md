@@ -29,6 +29,8 @@ You interact with the orchestrator **exclusively through plugin tools** (e.g. `s
 If `solana_system_status`, the startup gate, or other tools report auth or session errors:
 
 1. Tell the user to fix this **on their machine** in a terminal (not through you): `traderclaw login` to re-establish a session after `traderclaw logout`, or `traderclaw signup` / `traderclaw setup --signup` for a **new** account or missing API key.
+2. Explain briefly: **wallet private keys are only used on their computer for local signing** (proving ownership to the session API). They are **not** sent to remote servers in the clear for trading auth in this flow — and the user must **never** paste a private key into chat.
+3. You still do not read or handle keys yourself; you only relay these instructions.
 
 ---
 
@@ -1874,12 +1876,12 @@ Base URL: `https://api.traderclaw.ai`
 
 ### Session Auth Flow
 
-The **runtime** refreshes or completes the challenge flow automatically once `apiKey` (and optionally `walletPrivateKey` for proof) exist in local plugin config. **Signup is not performed by the agent** — the human runs `traderclaw signup` or `traderclaw setup --signup` on the host.
+The **runtime** refreshes or completes the challenge flow automatically once `apiKey` exists in local plugin config. For wallet-proof challenges, the wallet private key is supplied at runtime via `--wallet-private-key` or `TRADERCLAW_WALLET_PRIVATE_KEY` (not stored in `openclaw.json`). **Signup is not performed by the agent** — the human runs `traderclaw signup` or `traderclaw setup --signup` on the host.
 
 1. **Signup (human / CLI only)** — `POST /api/auth/signup` with `{ externalUserId }` → returns `apiKey`. Status `201`. Invoked by `traderclaw signup` or `traderclaw setup --signup`, not by plugin tools.
 2. **Challenge** — `POST /api/session/challenge` with `{ apiKey, clientLabel }` → returns `{ challengeId, walletProofRequired }`. Status `201`.
    - If `walletProofRequired: false` → proceed directly to step 3.
-   - If `walletProofRequired: true` → sign the challenge with a wallet private key, include `challengeId`, `walletPublicKey`, `walletSignature` in step 3.
+   - If `walletProofRequired: true` → the **local** runtime signs the challenge with a runtime-supplied wallet private key (in-process on the user's machine), then includes `challengeId`, `walletPublicKey`, `walletSignature` in step 3.
 3. **Start** — `POST /api/session/start` with `{ apiKey, clientLabel }` (+ proof fields if required) → returns `{ accessToken, refreshToken }`. Status `201`.
 4. **Refresh** — `POST /api/session/refresh` with `{ refreshToken }` → returns new `{ accessToken, refreshToken }`. Status `200`. Old tokens are revoked.
 5. **Logout** — `POST /api/session/logout` with `{ refreshToken }` → revokes session. Status `200`. Subsequent refresh attempts return `401`.

@@ -143,7 +143,9 @@ traderclaw config set <key> <v> # Update a value
 traderclaw config reset         # Remove all plugin config
 ```
 
-Available config keys: `orchestratorUrl`, `walletId`, `apiKey`, `apiTimeout`, `refreshToken`, `walletPublicKey`, `walletPrivateKey`, `gatewayBaseUrl`, `gatewayToken`, `agentId`
+Available config keys: `orchestratorUrl`, `walletId`, `apiKey`, `apiTimeout`, `refreshToken`, `walletPublicKey`, `gatewayBaseUrl`, `gatewayToken`, `agentId`
+
+Wallet proof note: if login/session challenge requires wallet ownership proof, provide the key at runtime with `--wallet-private-key` or `TRADERCLAW_WALLET_PRIVATE_KEY`. It is used for local signing only and is not stored in `~/.openclaw/openclaw.json`.
 
 ### `traderclaw --help`
 
@@ -167,7 +169,7 @@ If you prefer to configure manually instead of using the CLI, add to `~/.opencla
           orchestratorUrl: "https://api.traderclaw.ai",
           walletId: 1,
           apiKey: "sk_live_your_key_here",
-          apiTimeout: 30000,  // optional, default 30s
+          apiTimeout: 80000,  // optional, default 80s
           dataDir: "/path/to/data"  // optional, default: <cwd>/.traderclaw-v1-data
         }
       }

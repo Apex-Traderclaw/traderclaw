@@ -27,7 +27,7 @@ export interface SessionManagerConfig {
   apiKey: string;
   refreshToken?: string;
   walletPublicKey?: string;
-  walletPrivateKey?: string;
+  walletPrivateKeyProvider?: () => string | undefined | Promise<string | undefined>;
   clientLabel?: string;
   timeout?: number;
   onTokensRotated?: (tokens: { refreshToken: string; walletPublicKey?: string }) => void;
@@ -98,7 +98,7 @@ async function signChallengeAsync(challengeBytes: string, privateKeyBase58: stri
   try {
     const cryptoKey = await crypto.subtle.importKey(
       "pkcs8",
-      pkcs8Der,
+      pkcs8Der as BufferSource,
       { name: "Ed25519" },
       false,
       ["sign"],
@@ -169,7 +169,7 @@ export class SessionManager {
   private accessToken: string | null = null;
   private refreshTokenValue: string | null = null;
   private walletPublicKey: string | null = null;
-  private walletPrivateKey: string | null = null;
+  private walletPrivateKeyProvider?: () => string | undefined | Promise<string | undefined>;
   private clientLabel: string;
   private timeout: number;
   private accessTokenExpiresAt: number = 0;
@@ -185,7 +185,7 @@ export class SessionManager {
     this.apiKey = config.apiKey;
     this.refreshTokenValue = config.refreshToken || null;
     this.walletPublicKey = config.walletPublicKey || null;
-    this.walletPrivateKey = config.walletPrivateKey || null;
+    this.walletPrivateKeyProvider = config.walletPrivateKeyProvider;
     this.clientLabel = config.clientLabel || "openclaw-plugin-runtime";
     this.timeout = config.timeout || 15000;
     this.onTokensRotated = config.onTokensRotated;
@@ -319,17 +319,18 @@ export class SessionManager {
     let walletSig: string | undefined;
 
     if (challenge.walletProofRequired && challenge.challenge) {
-      if (!this.walletPrivateKey) {
+      const walletPrivateKey = (await this.walletPrivateKeyProvider?.())?.trim();
+      if (!walletPrivateKey) {
         throw new Error(
           "Wallet proof required but no walletPrivateKey configured. " +
-            "This account already has a wallet — set walletPrivateKey in plugin config on this host only (local signing). " +
-            "Run: traderclaw config set walletPrivateKey <base58_key> — do not paste keys into chat.",
+            "This account already has a wallet — set TRADERCLAW_WALLET_PRIVATE_KEY in the host runtime environment and restart the gateway. " +
+            "The key is used only for local signing and is never sent to the orchestrator. Do not store private keys in openclaw.json.",
         );
       }
 
       walletPubKey = challenge.walletPublicKey || this.walletPublicKey || undefined;
       this.log.info("[session] Signing wallet challenge locally...");
-      walletSig = await signChallengeAsync(challenge.challenge, this.walletPrivateKey);
+      walletSig = await signChallengeAsync(challenge.challenge, walletPrivateKey);
     }
 
     const tokens = await this.startSession(challenge.challengeId, walletPubKey, walletSig);

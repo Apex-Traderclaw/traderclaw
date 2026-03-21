@@ -12,6 +12,7 @@ const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.u
 const PLUGIN_ID = "solana-trader";
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
+const WALLET_PRIVATE_KEY_ENV = "TRADERCLAW_WALLET_PRIVATE_KEY";
 
 const BANNER = `
  ████████╗██████╗  █████╗ ██████╗ ███████╗██████╗  ██████╗██╗      █████╗ ██╗    ██╗
@@ -63,6 +64,20 @@ function getCommandOutput(cmd) {
 function maskKey(key) {
   if (!key || key.length <= 8) return "****";
   return key.slice(0, 4) + "..." + key.slice(-4);
+}
+
+function getRuntimeWalletPrivateKey(explicitValue = "") {
+  const fromArg = typeof explicitValue === "string" ? explicitValue.trim() : "";
+  if (fromArg) return fromArg;
+  const fromEnv = typeof process.env[WALLET_PRIVATE_KEY_ENV] === "string" ? process.env[WALLET_PRIVATE_KEY_ENV].trim() : "";
+  return fromEnv || "";
+}
+
+function removeLegacyWalletPrivateKey(pluginConfig) {
+  if (!pluginConfig || typeof pluginConfig !== "object") return false;
+  if (!Object.prototype.hasOwnProperty.call(pluginConfig, "walletPrivateKey")) return false;
+  delete pluginConfig.walletPrivateKey;
+  return true;
 }
 
 function prompt(question, defaultValue) {
@@ -389,7 +404,7 @@ async function doLogout(orchestratorUrl, refreshToken) {
   return res.ok;
 }
 
-async function establishSession(orchestratorUrl, pluginConfig) {
+async function establishSession(orchestratorUrl, pluginConfig, walletPrivateKeyInput = "") {
   if (pluginConfig.refreshToken) {
     printInfo("  Refreshing existing session...");
     const tokens = await doRefresh(orchestratorUrl, pluginConfig.refreshToken);
@@ -413,15 +428,16 @@ async function establishSession(orchestratorUrl, pluginConfig) {
 
   if (challenge.walletProofRequired) {
     printWarn("  Wallet proof required — this account already has a wallet.");
-    if (!pluginConfig.walletPrivateKey) {
-      printError("  walletPrivateKey not configured. Cannot prove wallet ownership.");
-      printError("  Set it with: traderclaw config set walletPrivateKey <base58_key>");
+    const walletPrivateKey = getRuntimeWalletPrivateKey(walletPrivateKeyInput);
+    if (!walletPrivateKey) {
+      printError(`  Wallet private key not available. Cannot prove wallet ownership.`);
+      printError(`  Provide it via --wallet-private-key or env ${WALLET_PRIVATE_KEY_ENV} for local signing.`);
       throw new Error("Wallet proof required but no private key configured.");
     }
     walletPubKey = challenge.walletPublicKey || pluginConfig.walletPublicKey;
     printInfo("  Signing challenge locally...");
     try {
-      walletSig = signChallengeLocally(challenge.challenge, pluginConfig.walletPrivateKey);
+      walletSig = signChallengeLocally(challenge.challenge, walletPrivateKey);
       printSuccess("  Challenge signed successfully");
     } catch (err) {
       printError(`  Failed to sign challenge: ${err.message}`);
@@ -496,6 +512,7 @@ async function cmdSetup(args) {
       doSignupFlow = true;
     }
   }
+  const runtimeWalletPrivateKey = getRuntimeWalletPrivateKey(walletPrivateKey);
 
   if (!orchestratorUrl) {
     orchestratorUrl = await prompt("Orchestrator URL", "https://api.traderclaw.ai");
@@ -545,13 +562,13 @@ async function cmdSetup(args) {
     apiTimeout: 120000,
     refreshToken: undefined,
     walletPublicKey: undefined,
-    walletPrivateKey: walletPrivateKey || undefined,
     agentId: "main",
   };
 
+  let lastSeenWalletPrivateKey = runtimeWalletPrivateKey || "";
   let sessionTokens;
   try {
-    sessionTokens = await establishSession(orchestratorUrl, pluginConfig);
+    sessionTokens = await establishSession(orchestratorUrl, pluginConfig, runtimeWalletPrivateKey);
   } catch (err) {
     printError(`Session establishment failed: ${err.message}`);
     printWarn("Saving config without session. You can retry with: traderclaw login");
@@ -614,7 +631,7 @@ async function cmdSetup(args) {
           }
           const keys = extractWalletKeys(createRes.data);
           if (keys.publicKey) pluginConfig.walletPublicKey = keys.publicKey;
-          if (keys.privateKey && !pluginConfig.walletPrivateKey) pluginConfig.walletPrivateKey = keys.privateKey;
+          if (keys.privateKey) lastSeenWalletPrivateKey = keys.privateKey;
           printSuccess(`  Wallet created (ID: ${walletId})`);
         } else {
           printError("Failed to create wallet");
@@ -628,14 +645,14 @@ async function cmdSetup(args) {
           walletLabel = wallets[idx].label || "Unnamed";
           const keys = extractWalletKeys(wallets[idx]);
           if (keys.publicKey) pluginConfig.walletPublicKey = keys.publicKey;
-          if (keys.privateKey && !pluginConfig.walletPrivateKey) pluginConfig.walletPrivateKey = keys.privateKey;
+          if (keys.privateKey) lastSeenWalletPrivateKey = keys.privateKey;
           printSuccess(`  Using wallet: ${walletLabel} (ID: ${walletId})`);
         } else {
           walletId = extractWalletId(wallets[0]) || String(wallets[0].id);
           walletLabel = wallets[0].label || "Unnamed";
           const keys = extractWalletKeys(wallets[0]);
           if (keys.publicKey) pluginConfig.walletPublicKey = keys.publicKey;
-          if (keys.privateKey && !pluginConfig.walletPrivateKey) pluginConfig.walletPrivateKey = keys.privateKey;
+          if (keys.privateKey) lastSeenWalletPrivateKey = keys.privateKey;
           printSuccess(`  Using wallet: ${walletLabel} (ID: ${walletId})`);
         }
       }
@@ -655,7 +672,7 @@ async function cmdSetup(args) {
         }
         const keys = extractWalletKeys(createRes.data);
         if (keys.publicKey) pluginConfig.walletPublicKey = keys.publicKey;
-        if (keys.privateKey && !pluginConfig.walletPrivateKey) pluginConfig.walletPrivateKey = keys.privateKey;
+        if (keys.privateKey) lastSeenWalletPrivateKey = keys.privateKey;
         printSuccess(`  Wallet created (ID: ${walletId})`);
       } else {
         printError("Failed to create wallet");
@@ -676,16 +693,18 @@ async function cmdSetup(args) {
     printWarn("  IMPORTANT: New wallet credentials");
     print("=".repeat(60));
     print(`  Wallet Public Key:  ${pluginConfig.walletPublicKey || "not returned by API"}`);
-    if (pluginConfig.walletPrivateKey) {
-      printWarn(`  Wallet Private Key: ${pluginConfig.walletPrivateKey}`);
+    if (lastSeenWalletPrivateKey) {
+      printWarn(`  Wallet Private Key: ${lastSeenWalletPrivateKey}`);
       printWarn("  Save this private key now in a secure password manager.");
       printWarn("  You may not be able to retrieve this private key again.");
+      printWarn(`  For wallet proof signing, provide it at runtime via --wallet-private-key or ${WALLET_PRIVATE_KEY_ENV}.`);
+      printWarn("  It is NOT saved to openclaw.json.");
     } else {
       printWarn("  Wallet private key was not returned by the API.");
       printWarn("  If this is expected custody behavior, backup via your wallet provider.");
     }
 
-    if (pluginConfig.walletPrivateKey) {
+    if (lastSeenWalletPrivateKey) {
       const ack = await prompt("Type BACKED_UP to continue", "");
       if (ack !== "BACKED_UP") {
         printError("Backup confirmation not provided. Aborting setup to prevent key loss.");
@@ -698,6 +717,7 @@ async function cmdSetup(args) {
   print("\nWriting configuration...\n");
 
   const existingConfig = readConfig();
+  removeLegacyWalletPrivateKey(pluginConfig);
   setPluginConfig(existingConfig, pluginConfig);
   writeConfig(existingConfig);
 
@@ -817,13 +837,14 @@ async function cmdSetup(args) {
   Orchestrator:  ${orchestratorUrl}
   Wallet:        ${walletLabel} (ID: ${walletId})
   Wallet PubKey: ${pluginConfig.walletPublicKey || "not set"}
-  Wallet PrivKey:${pluginConfig.walletPrivateKey ? (createdNewWallet || showWalletPrivateKey ? " " + pluginConfig.walletPrivateKey : " " + maskKey(pluginConfig.walletPrivateKey)) : " not set"}
+  Wallet PrivKey:${lastSeenWalletPrivateKey ? (createdNewWallet || showWalletPrivateKey ? " " + lastSeenWalletPrivateKey : " " + maskKey(lastSeenWalletPrivateKey)) : " not saved"}
   Gateway URL:   ${gatewayBaseUrl || "not set"}
   Gateway Token: ${gatewayToken ? maskKey(gatewayToken) : "not set"}
   API Key:       ${showApiKey ? apiKey : maskKey(apiKey)}
   Session:       Active (tier: ${sessionTokens.session?.tier || "?"})
   Config:        ${CONFIG_FILE}
 `);
+  print(`  Runtime wallet proof key source: --wallet-private-key or env ${WALLET_PRIVATE_KEY_ENV} (never openclaw.json)`);
   print("Next steps:");
   print("  1. Install the plugin:     openclaw plugins install traderclaw-v1");
   print("  2. Restart the gateway:    openclaw gateway --restart");
@@ -861,13 +882,25 @@ async function cmdLogin(args) {
   print("\nTraderClaw V1 - Login\n");
   print("=".repeat(45));
 
+  let walletPrivateKeyArg = "";
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--wallet-private-key" && args[i + 1]) {
+      walletPrivateKeyArg = args[++i];
+    }
+  }
+
   pluginConfig.refreshToken = undefined;
+  const removedLegacyKey = removeLegacyWalletPrivateKey(pluginConfig);
 
   try {
-    await establishSession(orchestratorUrl, pluginConfig);
+    await establishSession(orchestratorUrl, pluginConfig, walletPrivateKeyArg);
     setPluginConfig(config, pluginConfig);
     writeConfig(config);
     printSuccess("\n  Session established and saved.");
+    if (removedLegacyKey) {
+      printWarn("  Removed deprecated walletPrivateKey from openclaw.json.");
+    }
+    printInfo(`  For wallet proof, pass --wallet-private-key or set ${WALLET_PRIVATE_KEY_ENV}.`);
     print("  Restart the gateway for changes to take effect: openclaw gateway --restart");
     print("  Or re-run login: traderclaw login\n");
   } catch (err) {
@@ -903,12 +936,17 @@ async function cmdLogout() {
   }
 
   pluginConfig.refreshToken = undefined;
+  const removedLegacyKey = removeLegacyWalletPrivateKey(pluginConfig);
   setPluginConfig(config, pluginConfig);
   writeConfig(config);
 
   printSuccess("  Local session cleared.");
+  if (removedLegacyKey) {
+    printWarn("  Removed deprecated walletPrivateKey from openclaw.json.");
+  }
   print("  Run 'traderclaw login' to re-authenticate (your API key must still be in config).");
-  print("  New account or lost API key: run 'traderclaw signup' or 'traderclaw setup --signup' on this machine — not via the agent.\n");
+  print("  New account or lost API key: run 'traderclaw signup' or 'traderclaw setup --signup' on this machine — not via the agent.");
+  print("  Wallet challenges are signed locally; the private key never leaves this system.\n");
 }
 
 async function cmdStatus() {
@@ -939,6 +977,7 @@ async function cmdStatus() {
       if (tokens) {
         accessToken = tokens.accessToken;
         pluginConfig.refreshToken = tokens.refreshToken;
+        removeLegacyWalletPrivateKey(pluginConfig);
         setPluginConfig(config, pluginConfig);
         writeConfig(config);
         printSuccess("  Session:          ACTIVE");
@@ -1073,9 +1112,9 @@ async function cmdConfig(subArgs) {
     print(`  API Key:          ${pluginConfig.apiKey ? maskKey(pluginConfig.apiKey) : "not set"}`);
     print(`  Refresh Token:    ${pluginConfig.refreshToken ? maskKey(pluginConfig.refreshToken) : "not set"}`);
     print(`  Wallet Pub Key:   ${pluginConfig.walletPublicKey || "not set"}`);
-    print(`  Wallet Priv Key:  ${pluginConfig.walletPrivateKey ? maskKey(pluginConfig.walletPrivateKey) : "not set"}`);
+    print(`  Wallet Priv Key:  runtime-only via --wallet-private-key or ${WALLET_PRIVATE_KEY_ENV}`);
     print(`  Agent ID:         ${pluginConfig.agentId || "not set"}`);
-    print(`  API Timeout:      ${pluginConfig.apiTimeout || 30000}ms`);
+    print(`  API Timeout:      ${pluginConfig.apiTimeout || 120000}ms`);
     print("=".repeat(45));
     print("");
     return;
@@ -1087,11 +1126,18 @@ async function cmdConfig(subArgs) {
 
     if (!key || !value) {
       printError("Usage: traderclaw config set <key> <value>");
-      print("  Available keys: orchestratorUrl, walletId, apiKey, apiTimeout, refreshToken, walletPublicKey, walletPrivateKey, gatewayBaseUrl, gatewayToken, agentId");
+      print("  Available keys: orchestratorUrl, walletId, apiKey, apiTimeout, refreshToken, walletPublicKey, gatewayBaseUrl, gatewayToken, agentId");
       process.exit(1);
     }
 
-    const allowedKeys = ["orchestratorUrl", "walletId", "apiKey", "apiTimeout", "refreshToken", "walletPublicKey", "walletPrivateKey", "gatewayBaseUrl", "gatewayToken", "agentId"];
+    if (key === "walletPrivateKey") {
+      printError(
+        `walletPrivateKey is no longer stored in openclaw.json. Use --wallet-private-key or env ${WALLET_PRIVATE_KEY_ENV} at runtime instead.`,
+      );
+      process.exit(1);
+    }
+
+    const allowedKeys = ["orchestratorUrl", "walletId", "apiKey", "apiTimeout", "refreshToken", "walletPublicKey", "gatewayBaseUrl", "gatewayToken", "agentId"];
     if (!allowedKeys.includes(key)) {
       printError(`Unknown config key: ${key}`);
       print(`  Available keys: ${allowedKeys.join(", ")}`);
@@ -1114,11 +1160,12 @@ async function cmdConfig(subArgs) {
       }
     }
 
+    removeLegacyWalletPrivateKey(pluginConfig);
     pluginConfig[key] = parsedValue;
     setPluginConfig(config, pluginConfig);
     writeConfig(config);
 
-    const sensitiveKeys = ["apiKey", "refreshToken", "walletPrivateKey"];
+    const sensitiveKeys = ["apiKey", "refreshToken"];
     printSuccess(`Set ${key} = ${sensitiveKeys.includes(key) ? maskKey(value) : value}`);
     print("Restart the gateway for changes to take effect: openclaw gateway --restart");
     return;
@@ -2120,7 +2167,7 @@ Setup options:
   --api-key, -k      API key (skip interactive prompt)
   --url, -u          Orchestrator URL (skip interactive prompt)
   --user-id          External user ID for signup
-  --wallet-private-key  Optional base58 private key for wallet proof flow
+  --wallet-private-key  Optional base58 private key for wallet proof flow (runtime only, never saved)
   --gateway-base-url, -g  Gateway public HTTPS URL for orchestrator callbacks
   --gateway-token, -t     Gateway bearer token (defaults to API key)
   --skip-gateway-registration  Skip gateway URL registration with orchestrator
@@ -2136,6 +2183,8 @@ Config subcommands:
 Examples:
   traderclaw signup
   traderclaw setup
+  traderclaw login --wallet-private-key <base58_key>
+  TRADERCLAW_WALLET_PRIVATE_KEY=<base58_key> traderclaw login
   traderclaw precheck --dry-run --output precheck.log
   traderclaw precheck --allow-install
   traderclaw install --wizard

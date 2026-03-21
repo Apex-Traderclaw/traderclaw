@@ -33,15 +33,11 @@
         "type": "string",
         "description": "Solana wallet public key (auto-populated after session establishment)"
       },
-      "walletPrivateKey": {
-        "type": "string",
-        "description": "Solana wallet private key in base58 (only needed for re-auth when wallet already exists on account)"
-      },
       "apiTimeout": {
         "type": "integer",
         "minimum": 1000,
         "maximum": 120000,
-        "default": 30000,
+        "default": 80000,
         "description": "HTTP request timeout in milliseconds"
       },
       "agentId": {
@@ -84,12 +80,6 @@
     },
     "walletPublicKey": {
       "label": "Wallet Public Key",
-      "advanced": true
-    },
-    "walletPrivateKey": {
-      "label": "Wallet Private Key",
-      "placeholder": "base58 encoded private key",
-      "sensitive": true,
       "advanced": true
     },
     "apiTimeout": {
