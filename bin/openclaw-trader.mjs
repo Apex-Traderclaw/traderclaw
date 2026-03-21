@@ -854,7 +854,7 @@ async function cmdLogin(args) {
   }
 
   if (!pluginConfig.apiKey) {
-    printError("apiKey not set. Run 'traderclaw setup' first.");
+    printError("apiKey not set. Run 'traderclaw signup' or 'traderclaw setup --signup' for a new account, or 'traderclaw setup' to enter an existing key.");
     process.exit(1);
   }
 
@@ -907,7 +907,8 @@ async function cmdLogout() {
   writeConfig(config);
 
   printSuccess("  Local session cleared.");
-  print("  Run 'traderclaw login' to re-authenticate.\n");
+  print("  Run 'traderclaw login' to re-authenticate (your API key must still be in config).");
+  print("  New account or lost API key: run 'traderclaw signup' or 'traderclaw setup --signup' on this machine — not via the agent.\n");
 }
 
 async function cmdStatus() {
@@ -2107,6 +2108,7 @@ Usage: traderclaw <command> [options]
 
 Commands:
   setup              Set up the plugin (signup or API key, session, wallet)
+  signup             Create a new account (alias for: setup --signup; run locally, not via the agent)
   precheck           Run environment checks (dry-run or allow-install)
   install            Launch installer flows (--wizard for localhost GUI)
   login              Re-authenticate (challenge flow, new session)
@@ -2132,6 +2134,7 @@ Config subcommands:
   config reset       Remove plugin configuration
 
 Examples:
+  traderclaw signup
   traderclaw setup
   traderclaw precheck --dry-run --output precheck.log
   traderclaw precheck --allow-install
@@ -2165,6 +2168,9 @@ async function main() {
   switch (command) {
     case "setup":
       await cmdSetup(args.slice(1));
+      break;
+    case "signup":
+      await cmdSetup(["--signup", ...args.slice(1)]);
       break;
     case "precheck":
       await cmdPrecheck(args.slice(1));

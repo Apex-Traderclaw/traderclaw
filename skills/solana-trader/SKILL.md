@@ -19,9 +19,16 @@ You interact with the orchestrator **exclusively through plugin tools** (e.g. `s
 **Critical rules:**
 - **You do NOT have direct HTTP/API access.** Never attempt to call REST endpoints, use curl/fetch, or construct API URLs. You cannot reach the orchestrator that way.
 - **You do NOT manage authentication.** Bearer tokens, access tokens, API keys, and session credentials are handled automatically by the plugin runtime. Every tool call is pre-authenticated. You never see or touch these tokens.
+- **You never sign up, register, or change API keys or wallet keys.** Account creation and credential updates happen only when the **human** runs `traderclaw signup` or `traderclaw setup` / `traderclaw setup --signup` on their machine. There is no tool for signup — do not ask the user to paste a private key into chat; direct them to the CLI. If the session is invalid after logout, they run `traderclaw login` (API key must already be in config) or signup/setup if they need a new key.
 - **Never try to independently verify endpoints.** If you want to check system health, call `solana_system_status`. That IS your health check. Do not try to hit `/api/agents/active` or any other endpoint directly — you cannot, and attempting it will produce confusing errors.
 - **Tool errors ARE your diagnostics.** If a tool call returns an error, that error message is the definitive answer. Do not try to verify by calling the endpoint another way — there is no other way. Report the tool error and suggest the user run `traderclaw status` from their terminal if deeper diagnostics are needed.
 - **The CLI handles raw API access.** Users can run `traderclaw status`, `traderclaw config show`, and `traderclaw login` from their terminal for direct system diagnostics. You cannot and should not replicate this — point users to the CLI instead.
+
+### When trading tools fail: session, logout, or missing API key
+
+If `solana_system_status`, the startup gate, or other tools report auth or session errors:
+
+1. Tell the user to fix this **on their machine** in a terminal (not through you): `traderclaw login` to re-establish a session after `traderclaw logout`, or `traderclaw signup` / `traderclaw setup --signup` for a **new** account or missing API key.
 
 ---
 
@@ -1867,9 +1874,9 @@ Base URL: `https://api.traderclaw.ai`
 
 ### Session Auth Flow
 
-The plugin self-bootstraps without human intervention:
+The **runtime** refreshes or completes the challenge flow automatically once `apiKey` (and optionally `walletPrivateKey` for proof) exist in local plugin config. **Signup is not performed by the agent** — the human runs `traderclaw signup` or `traderclaw setup --signup` on the host.
 
-1. **Signup** — `POST /api/auth/signup` with `{ externalUserId }` → returns `apiKey`. Status `201`.
+1. **Signup (human / CLI only)** — `POST /api/auth/signup` with `{ externalUserId }` → returns `apiKey`. Status `201`. Invoked by `traderclaw signup` or `traderclaw setup --signup`, not by plugin tools.
 2. **Challenge** — `POST /api/session/challenge` with `{ apiKey, clientLabel }` → returns `{ challengeId, walletProofRequired }`. Status `201`.
    - If `walletProofRequired: false` → proceed directly to step 3.
    - If `walletProofRequired: true` → sign the challenge with a wallet private key, include `challengeId`, `walletPublicKey`, `walletSignature` in step 3.
@@ -1895,7 +1902,7 @@ All authenticated endpoints use `Authorization: Bearer <accessToken>`.
 
 | Method | Path | Required Params | Notes |
 |---|---|---|---|
-| `POST` | `/api/auth/signup` | `externalUserId` | No auth needed. Returns `apiKey`. Status `201` |
+| `POST` | `/api/auth/signup` | `externalUserId` | No auth needed. Returns `apiKey`. Status `201`. **CLI/human only** — not called by the agent |
 | `POST` | `/api/session/challenge` | `apiKey` | No auth needed. Returns `challengeId`, `walletProofRequired` |
 | `POST` | `/api/session/start` | `apiKey` | No auth needed. Returns `accessToken`, `refreshToken` |
 | `POST` | `/api/session/refresh` | `refreshToken` | No auth needed. Rotates tokens |

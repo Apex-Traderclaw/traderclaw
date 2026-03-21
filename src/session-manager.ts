@@ -12,15 +12,6 @@ export interface SessionTokens {
   };
 }
 
-export interface SignupResult {
-  ok: boolean;
-  externalUserId: string;
-  tier: string;
-  scopes: string[];
-  apiKey: string;
-  createdAt: string;
-}
-
 export interface ChallengeResult {
   ok: boolean;
   walletProofRequired: boolean;
@@ -201,23 +192,6 @@ export class SessionManager {
     this.log = config.logger || { info: console.log, warn: console.warn, error: console.error };
   }
 
-  async signup(externalUserId: string): Promise<SignupResult> {
-    const res = await rawFetch(
-      `${this.baseUrl}/api/auth/signup`,
-      "POST",
-      { externalUserId },
-      undefined,
-      this.timeout,
-    );
-
-    if (!res.ok) {
-      throw new Error(`Signup failed (HTTP ${res.status}): ${JSON.stringify(res.data)}`);
-    }
-
-    this.apiKey = res.data.apiKey;
-    return res.data as SignupResult;
-  }
-
   async requestChallenge(): Promise<ChallengeResult> {
     const body: Record<string, unknown> = {
       apiKey: this.apiKey,
@@ -332,7 +306,10 @@ export class SessionManager {
     }
 
     if (!this.apiKey) {
-      throw new Error("No apiKey configured. Run signup or provide an apiKey.");
+      throw new Error(
+        "No apiKey configured. On this machine run: traderclaw setup --signup (or traderclaw signup) for a new account, " +
+          "or add an API key via traderclaw setup. The agent cannot create accounts or change credentials.",
+      );
     }
 
     this.log.info("[session] Starting challenge flow...");
@@ -345,8 +322,8 @@ export class SessionManager {
       if (!this.walletPrivateKey) {
         throw new Error(
           "Wallet proof required but no walletPrivateKey configured. " +
-          "This account already has a wallet — you must provide the wallet private key to prove ownership. " +
-          "Set walletPrivateKey in plugin config or run: openclaw-trader config set walletPrivateKey <base58_key>"
+            "This account already has a wallet — set walletPrivateKey in plugin config on this host only (local signing). " +
+            "Run: traderclaw config set walletPrivateKey <base58_key> — do not paste keys into chat.",
         );
       }
 

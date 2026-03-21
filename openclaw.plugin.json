@@ -19,11 +19,11 @@
       },
       "apiKey": {
         "type": "string",
-        "description": "API key obtained from signup or https://traderclaw.ai/register"
+        "description": "API key from traderclaw signup / setup or https://traderclaw.ai/register — set on this machine via CLI, not by the agent"
       },
       "externalUserId": {
         "type": "string",
-        "description": "External user ID for signup (auto-generated if not provided)"
+        "description": "Optional external user ID for CLI signup (traderclaw signup); auto-generated if omitted"
       },
       "refreshToken": {
         "type": "string",

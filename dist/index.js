@@ -9,7 +9,7 @@ import {
 } from "./chunk-T4YWGIIR.js";
 import {
   SessionManager
-} from "./chunk-OITJKCHL.js";
+} from "./chunk-B57EOF5Y.js";
 
 // index.ts
 import { Type } from "@sinclair/typebox";
@@ -695,11 +695,13 @@ var solanaTraderPlugin = {
     const config = parseConfig(api.pluginConfig);
     const { orchestratorUrl, walletId, apiKey, apiTimeout } = config;
     if (!orchestratorUrl) {
-      api.logger.error("[solana-trader] orchestratorUrl is required in plugin config. Run: openclaw-trader setup");
+      api.logger.error("[solana-trader] orchestratorUrl is required in plugin config. Run: traderclaw setup");
       return;
     }
     if (!apiKey && !config.refreshToken) {
-      api.logger.error("[solana-trader] apiKey or refreshToken is required in plugin config. Run: openclaw-trader setup");
+      api.logger.error(
+        "[solana-trader] apiKey or refreshToken is required. Tell the user to run on their machine: traderclaw setup --signup (or traderclaw signup) for a new account, or traderclaw setup / traderclaw login if they already have an API key. The agent cannot sign up or edit credentials."
+      );
       return;
     }
     const sessionManager = new SessionManager({
@@ -712,7 +714,7 @@ var solanaTraderPlugin = {
       timeout: apiTimeout,
       onTokensRotated: (tokens) => {
         api.logger.info(
-          `[solana-trader] Session tokens rotated. New refreshToken: ${tokens.refreshToken.slice(0, 8)}... Update config with: openclaw-trader config set refreshToken ${tokens.refreshToken}`
+          `[solana-trader] Session tokens rotated. New refreshToken: ${tokens.refreshToken.slice(0, 8)}... Update config with: traderclaw config set refreshToken ${tokens.refreshToken}`
         );
       },
       logger: {
@@ -2651,7 +2653,7 @@ Context compaction triggered. MEMORY.md synced from last persisted state. Decisi
             `[solana-trader] Session initialization failed: ${err instanceof Error ? err.message : String(err)}`
           );
           api.logger.error(
-            "[solana-trader] Trading tools will fail until session is established. Run: openclaw-trader setup"
+            "[solana-trader] Trading tools will fail until session is established. User should run on this machine: traderclaw login (after logout) or traderclaw setup / traderclaw signup for a new account."
           );
           return;
         }
