@@ -1,0 +1,121 @@
+// OpenClaw Gateway Configuration — TraderClaw V1 (Single Agent)
+// Single "main" agent with 5-minute heartbeat + cron jobs for autonomous operation.
+// Without this config, the agent ONLY runs when a user sends a message.
+// With this config, the agent wakes every 5 minutes AND runs scheduled maintenance jobs.
+// See: docs/scheduling-architecture.md
+{
+  agents: {
+    list: [
+      {
+        id: "main",
+        default: true,
+        heartbeat: { every: "5m", target: "last" }
+        // Core trading loop — scan, analyze, decide, execute, monitor.
+        // Wakes every 5 minutes to check alpha buffer, positions, and market conditions.
+        // Also receives all cron jobs since V1 is a single-agent system.
+      }
+    ]
+  },
+
+  cron: {
+    enabled: true,
+    maxConcurrentRuns: 2,
+    sessionRetention: "24h",
+    runLog: {
+      maxBytes: "2mb",
+      keepLines: 2000
+    },
+    jobs: [
+      // ── Strategy & Learning ───────────────────────────────────────
+      {
+        id: "strategy-evolution",
+        schedule: "0 */4 * * *",          // Every 4 hours
+        agentId: "main",
+        message: "CRON_JOB: strategy_evolution — Review trade journal, compute weight adjustments, update strategy. Only update if sufficient closed trades have accumulated.",
+        enabled: true
+      },
+      {
+        id: "source-reputation",
+        schedule: "0 */3 * * *",          // Every 3 hours
+        agentId: "main",
+        message: "CRON_JOB: source_reputation_recalc — Analyze which alpha signal sources led to wins vs losses. Update reputation tracking in memory.",
+        enabled: true
+      },
+
+      // ── Risk & Audit ──────────────────────────────────────────────
+      {
+        id: "risk-audit",
+        schedule: "0 */2 * * *",          // Every 2 hours
+        agentId: "main",
+        message: "CRON_JOB: portfolio_risk_audit — Portfolio stress tests, exposure checks, correlation analysis, drawdown monitoring.",
+        enabled: true
+      },
+
+      // ── On-Chain Intelligence ─────────────────────────────────────
+      {
+        id: "meta-rotation",
+        schedule: "30 */3 * * *",         // Every 3 hours at :30
+        agentId: "main",
+        message: "CRON_JOB: meta_rotation_analysis — Analyze narrative clusters across recent scans and trades. Identify hot vs cooling metas. Write observations to memory.",
+        enabled: true
+      },
+
+      // ── Portfolio Maintenance ─────────────────────────────────────
+      {
+        id: "dead-money-sweep",
+        schedule: "0 */2 * * *",          // Every 2 hours
+        agentId: "main",
+        message: "CRON_JOB: dead_money_sweep — Check all open LOCAL_MANAGED positions for dead money. Exit stale positions. Tag as dead_money.",
+        enabled: true
+      },
+      {
+        id: "subscription-cleanup",
+        schedule: "0 * * * *",            // Every hour
+        agentId: "main",
+        message: "CRON_JOB: subscription_cleanup — Check active Bitquery subscriptions. Unsubscribe from streams no longer needed (sold tokens, closed positions).",
+        enabled: true
+      },
+
+      // ── Reporting ─────────────────────────────────────────────────
+      {
+        id: "daily-report",
+        schedule: "0 4 * * *",            // Daily at 04:00 UTC
+        agentId: "main",
+        message: "CRON_JOB: daily_performance_report — Calculate daily PnL, aggregate win/loss stats, source reputation summary, write comprehensive memory entry.",
+        enabled: true
+      },
+
+      // ── Whale / Smart Money Tracking ──────────────────────────────
+      {
+        id: "whale-watch",
+        schedule: "0 */2 * * *",          // Every 2 hours
+        agentId: "main",
+        message: "CRON_JOB: whale_activity_scan — Scan for large wallet movements, deployer activity, and accumulation patterns across watched tokens.",
+        enabled: true
+      }
+    ]
+  },
+
+  hooks: {
+    enabled: true,
+    token: "REPLACE_WITH_SECURE_TOKEN",
+    mappings: [
+      {
+        // High-priority alpha signals from SpyFly aggregator
+        // Triggers immediate agent turn outside heartbeat cadence
+        match: { path: "alpha-signal" },
+        action: "agent",
+        agentId: "main",
+        deliver: true
+      },
+      {
+        // Bitquery firehose alerts for on-chain discovery events
+        // Wakes agent for immediate analysis
+        match: { path: "firehose-alert" },
+        action: "agent",
+        agentId: "main",
+        deliver: true
+      }
+    ]
+  }
+}
