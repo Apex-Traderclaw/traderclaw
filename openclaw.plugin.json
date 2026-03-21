@@ -14,8 +14,7 @@
       },
       "walletId": {
         "type": "string",
-        "format": "uuid",
-        "description": "Wallet ID (UUID string) for this agent's trading account"
+        "description": "Wallet ID for this agent's trading account (UUID string from the orchestrator API)"
       },
       "apiKey": {
         "type": "string",
