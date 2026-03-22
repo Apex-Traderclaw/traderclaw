@@ -2,7 +2,7 @@ import { execSync, spawn } from "child_process";
 import { randomBytes } from "crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 import { choosePreferredProviderModel } from "./llm-model-preference.mjs";
 
 const CONFIG_DIR = join(homedir(), ".openclaw");
@@ -351,6 +351,126 @@ function seedPluginConfig(modeConfig, orchestratorUrl, configPath = CONFIG_FILE)
   return configPath;
 }
 
+/**
+ * Resolve OpenClaw cron job store path (same rules as Gateway: optional cron.store, ~ expansion).
+ * @param {Record<string, unknown>} config
+ * @returns {string}
+ */
+function resolveCronJobsStorePath(config) {
+  const raw = config?.cron?.store;
+  if (typeof raw === "string" && raw.trim()) {
+    let t = raw.trim();
+    if (t.startsWith("~")) {
+      t =
+        t === "~" || t === "~/" ? homedir() : join(homedir(), t.slice(2).replace(/^\/+/, ""));
+    }
+    if (t.startsWith("/") || (process.platform === "win32" && /^[A-Za-z]:[\\/]/.test(t))) {
+      return t;
+    }
+    return join(CONFIG_DIR, t);
+  }
+  return join(CONFIG_DIR, "cron", "jobs.json");
+}
+
+function cronJobStableId(job) {
+  if (!job || typeof job !== "object") return "";
+  const id = typeof job.id === "string" ? job.id.trim() : "";
+  if (id) return id;
+  const legacy = typeof job.jobId === "string" ? job.jobId.trim() : "";
+  return legacy;
+}
+
+/**
+ * Build a cron job record compatible with OpenClaw 2026+ store normalization (see ~/.openclaw/cron/jobs.json).
+ * @param {{ id: string, schedule: string, agentId: string, message: string, enabled?: boolean }} def
+ */
+function buildOpenClawCronStoreJob(def) {
+  const nameFromId = def.id
+    .split("-")
+    .map((w) => (w.length ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+    .join(" ");
+  return {
+    id: def.id,
+    name: nameFromId.length <= 60 ? nameFromId : nameFromId.slice(0, 59) + "…",
+    enabled: def.enabled !== false,
+    schedule: { kind: "cron", expr: def.schedule },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    agentId: def.agentId,
+    payload: {
+      kind: "agentTurn",
+      message: def.message,
+      lightContext: true,
+    },
+    delivery: { mode: "none" },
+    state: {},
+  };
+}
+
+/**
+ * Merge TraderClaw template cron jobs into the Gateway cron store (upsert by job id).
+ * Preserves user-defined jobs whose ids are not in the template set.
+ * @returns {{ storePath: string, added: number, updated: number, preserved: number, totalManaged: number }}
+ */
+function mergeTraderCronJobsIntoStore(storePath, templateJobs) {
+  const managedIds = new Set(templateJobs.map((j) => j.id).filter(Boolean));
+  let existing = { version: 1, jobs: [] };
+  try {
+    const raw = readFileSync(storePath, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const jobs = Array.isArray(parsed.jobs) ? parsed.jobs.filter(Boolean) : [];
+      existing = { version: 1, jobs };
+    }
+  } catch (err) {
+    if (err && err.code === "ENOENT") {
+      // New store file — only TraderClaw template jobs.
+    } else {
+      return {
+        storePath,
+        added: 0,
+        updated: 0,
+        preserved: 0,
+        totalManaged: templateJobs.length,
+        error: err?.message || String(err),
+        wrote: false,
+      };
+    }
+  }
+
+  const beforeKeys = new Set();
+  for (const j of existing.jobs) {
+    const k = cronJobStableId(j);
+    if (k) beforeKeys.add(k);
+  }
+
+  const preserved = existing.jobs.filter((j) => !managedIds.has(cronJobStableId(j)));
+  const built = templateJobs.map((def) => buildOpenClawCronStoreJob(def));
+  const next = { version: 1, jobs: [...preserved, ...built] };
+
+  let added = 0;
+  let updated = 0;
+  for (const id of managedIds) {
+    if (beforeKeys.has(id)) updated += 1;
+    else added += 1;
+  }
+
+  const dir = dirname(storePath);
+  mkdirSync(dir, { recursive: true });
+  const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n", "utf-8");
+  renameSync(tmp, storePath);
+
+  return {
+    storePath,
+    added,
+    updated,
+    preserved: preserved.length,
+    totalManaged: templateJobs.length,
+    wrote: true,
+  };
+}
+
 function mergePluginsAllowlist(modeConfig, configPath = CONFIG_FILE) {
   let config = {};
   try {
@@ -491,16 +611,21 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 
+  const cronStorePath = resolveCronJobsStorePath(config);
+  const cronMerge = mergeTraderCronJobsIntoStore(cronStorePath, targetJobs);
+
   return {
     configPath,
     agentsConfigured: targetAgents.length,
-    cronJobsAdded: 0,
-    cronJobsUpdated: 0,
+    cronJobsAdded: cronMerge.added,
+    cronJobsUpdated: cronMerge.updated,
     cronJobsTotal: targetJobs.length,
-    cronJobsManagedExternally: true,
+    cronJobsStorePath: cronMerge.storePath,
+    cronJobsStoreWriteOk: cronMerge.wrote === true,
+    cronJobsStoreError: cronMerge.error,
     removedLegacyCronJobs,
     hooksConfigured: config.hooks.mappings.length,
-    isV2
+    isV2,
   };
 }
 
@@ -1112,7 +1237,21 @@ export class InstallerStepEngine {
       await this.runStep("gateway_scheduling", "Configuring heartbeat and cron schedules", async () => {
         const result = configureGatewayScheduling(this.modeConfig, CONFIG_FILE);
         this.emitLog("gateway_scheduling", "info", `Agents configured: ${result.agentsConfigured}`);
-        this.emitLog("gateway_scheduling", "info", `Cron jobs target: ${result.cronJobsTotal} (managed by OpenClaw cron store/CLI).`);
+        if (result.cronJobsStoreWriteOk) {
+          this.emitLog(
+            "gateway_scheduling",
+            "info",
+            `Cron store: ${result.cronJobsStorePath} (${result.cronJobsTotal} TraderClaw jobs; +${result.cronJobsAdded} new, ~${result.cronJobsUpdated} updated).`,
+          );
+        } else if (result.cronJobsStoreError) {
+          this.emitLog(
+            "gateway_scheduling",
+            "warn",
+            `Cron store not updated (${result.cronJobsStorePath}): ${result.cronJobsStoreError}`,
+          );
+        } else {
+          this.emitLog("gateway_scheduling", "warn", "Cron store write did not complete; check permissions and disk space.");
+        }
         if (result.removedLegacyCronJobs) {
           this.emitLog("gateway_scheduling", "warn", "Removed legacy 'cron.jobs' from openclaw.json to keep config validation compatible.");
         }
