@@ -753,6 +753,21 @@ async function cmdSetup(args) {
     }
   }
 
+  // Re-authenticate WITH wallet proof so the saved refreshToken is accepted by
+  // the server after the account has a wallet.  Without this, the gateway gets a
+  // token issued pre-wallet that the server may reject on refresh.
+  if (lastSeenWalletPrivateKey && pluginConfig.walletPublicKey) {
+    print("\nStrengthening session with wallet proof...\n");
+    try {
+      pluginConfig.refreshToken = undefined;
+      sessionTokens = await establishSession(orchestratorUrl, pluginConfig, lastSeenWalletPrivateKey);
+      printSuccess("  Session re-established with wallet proof.");
+    } catch (err) {
+      printWarn(`  Wallet-proof re-auth skipped: ${err.message}`);
+      printWarn(`  The gateway may need ${WALLET_PRIVATE_KEY_ENV} in its service environment.`);
+    }
+  }
+
   print("\nWriting configuration...\n");
 
   const existingConfig = readConfig();
