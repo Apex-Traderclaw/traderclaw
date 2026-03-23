@@ -504,13 +504,16 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   const heartbeatPrompt =
     "Read HEARTBEAT.md (workspace context). Follow it strictly — execute the full trading cycle and report results to the user. Do NOT reply HEARTBEAT_OK. Always produce a visible summary of what you checked and did.";
 
+  /** Default periodic wake interval for TraderClaw installs (was 5m; stretched to reduce load). */
+  const defaultHeartbeatEvery = "30m";
+
   const v1Agents = [
-    { id: "main", default: true, heartbeat: { every: "5m", target: "last", prompt: heartbeatPrompt } }
+    { id: "main", default: true, heartbeat: { every: defaultHeartbeatEvery, target: "last", prompt: heartbeatPrompt } }
   ];
   const v2Agents = [
-    { id: "cto", default: true, heartbeat: { every: "5m", target: "last", prompt: heartbeatPrompt } },
-    { id: "execution-specialist", heartbeat: { every: "3m", target: "last", prompt: heartbeatPrompt } },
-    { id: "alpha-signal-analyst", heartbeat: { every: "5m", target: "last", prompt: heartbeatPrompt } },
+    { id: "cto", default: true, heartbeat: { every: defaultHeartbeatEvery, target: "last", prompt: heartbeatPrompt } },
+    { id: "execution-specialist", heartbeat: { every: defaultHeartbeatEvery, target: "last", prompt: heartbeatPrompt } },
+    { id: "alpha-signal-analyst", heartbeat: { every: defaultHeartbeatEvery, target: "last", prompt: heartbeatPrompt } },
     { id: "onchain-analyst" },
     { id: "social-analyst" },
     { id: "smart-money-tracker" },

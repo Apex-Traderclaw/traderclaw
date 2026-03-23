@@ -817,12 +817,13 @@ async function cmdSetup(args) {
   }
   const heartbeatPrompt =
     "Read HEARTBEAT.md (workspace context). Follow it strictly — execute the full trading cycle and report results to the user. Do NOT reply HEARTBEAT_OK. Always produce a visible summary of what you checked and did.";
+  const defaultHeartbeatEvery = "30m";
   const hasMainAgent = existingConfig.agents.list.some((a) => a && a.id === "main");
   if (!hasMainAgent) {
-    existingConfig.agents.list.push({ id: "main", default: true, heartbeat: { every: "5m", target: "last", prompt: heartbeatPrompt } });
+    existingConfig.agents.list.push({ id: "main", default: true, heartbeat: { every: defaultHeartbeatEvery, target: "last", prompt: heartbeatPrompt } });
   } else {
     const mainAgent = existingConfig.agents.list.find((a) => a.id === "main");
-    if (!mainAgent.heartbeat) mainAgent.heartbeat = { every: "5m", target: "last", prompt: heartbeatPrompt };
+    if (!mainAgent.heartbeat) mainAgent.heartbeat = { every: defaultHeartbeatEvery, target: "last", prompt: heartbeatPrompt };
     else mainAgent.heartbeat.prompt = heartbeatPrompt;
   }
   if (!existingConfig.cron || typeof existingConfig.cron !== "object") {
