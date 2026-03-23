@@ -485,6 +485,18 @@ I'll monitor this position and review after exit.
 - Run `traderclaw setup` to create or select a wallet
 - Verify the wallet ID: `traderclaw config show`
 
+**Heartbeat not sending messages to Telegram:**
+- OpenClaw's default heartbeat prompt tells the model "If nothing needs attention, reply HEARTBEAT_OK" — which is stripped and never delivered. Run `traderclaw setup` again (v1.0.16+) to set a custom prompt, or apply manually:
+
+```bash
+openclaw config set agents.list '[{"id":"main","default":true,"heartbeat":{"every":"5m","target":"last","prompt":"Read HEARTBEAT.md (workspace context). Follow it strictly — execute the full trading cycle and report results to the user. Do NOT reply HEARTBEAT_OK. Always produce a visible summary of what you checked and did."}}]'
+openclaw gateway restart
+```
+
+- Verify with `openclaw config get agents` — the `main` agent should have a `heartbeat.prompt` field.
+- Confirm Telegram is healthy: `openclaw channels status --probe`
+- You must have messaged the bot at least once for `target: "last"` to have a delivery route.
+
 **Tools returning errors:**
 - Run `traderclaw status` to check system health
 - Check if kill switch is enabled
