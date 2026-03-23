@@ -1,5 +1,7 @@
 # Trading Heartbeat
 
+**Installer:** `traderclaw install --wizard` and `traderclaw setup` copy this file into your OpenClaw **agent workspace root** (default `~/.openclaw/workspace/HEARTBEAT.md`). OpenClaw only loads `HEARTBEAT.md` from that directory (next to `AGENTS.md`), not from a nested `.openclaw` folder or from the plugin package alone. If you already have a non-empty `HEARTBEAT.md` there, the installer leaves it unchanged.
+
 Execute your full trading cycle from your solana-trader skill on every heartbeat. Never skip. Never reply HEARTBEAT_OK.
 
 ## First: Check Startup State
