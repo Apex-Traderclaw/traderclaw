@@ -1,6 +1,6 @@
 import { execSync, spawn } from "child_process";
 import { randomBytes } from "crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
 import { choosePreferredProviderModel } from "./llm-model-preference.mjs";
@@ -674,6 +674,64 @@ function deployGatewayConfig(modeConfig) {
   return { deployed: true, source: src, dest: destFile };
 }
 
+function expandHomePath(p) {
+  if (typeof p !== "string" || !p.trim()) return null;
+  let t = p.trim();
+  if (t.startsWith("~")) {
+    t = t === "~" || t === "~/" ? homedir() : join(homedir(), t.slice(2).replace(/^\/+/, ""));
+  }
+  return t;
+}
+
+/**
+ * OpenClaw loads HEARTBEAT.md only from the agent workspace root (default ~/.openclaw/workspace).
+ * See https://docs.openclaw.ai/concepts/agent-workspace
+ */
+export function resolveAgentWorkspaceDir(configPath = CONFIG_FILE) {
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    config = {};
+  }
+  const raw =
+    (typeof config.agents?.defaults?.workspace === "string" && config.agents.defaults.workspace.trim()) ||
+    (typeof config.agent?.workspace === "string" && config.agent.workspace.trim()) ||
+    "";
+  if (raw) {
+    const expanded = expandHomePath(raw);
+    if (expanded) return expanded;
+  }
+  return join(homedir(), ".openclaw", "workspace");
+}
+
+/**
+ * Copy skills/solana-trader/HEARTBEAT.md from the globally installed npm package into the workspace root.
+ * Skips overwrite if a non-empty file already exists (user may have customized it).
+ */
+export function deployWorkspaceHeartbeat(modeConfig) {
+  const npmRoot = getCommandOutput("npm root -g");
+  if (!npmRoot) return { deployed: false, reason: "npm_root_g_failed" };
+  const src = join(npmRoot, modeConfig.pluginPackage, "skills", "solana-trader", "HEARTBEAT.md");
+  if (!existsSync(src)) return { deployed: false, reason: "source_missing", src };
+
+  const workspaceDir = resolveAgentWorkspaceDir(CONFIG_FILE);
+  const dest = join(workspaceDir, "HEARTBEAT.md");
+  mkdirSync(workspaceDir, { recursive: true });
+
+  if (existsSync(dest)) {
+    try {
+      if (statSync(dest).size > 0) {
+        return { deployed: false, skipped: true, reason: "already_exists_nonempty", dest };
+      }
+    } catch {
+      // overwrite empty or unreadable
+    }
+  }
+  writeFileSync(dest, readFileSync(src, "utf-8"), "utf-8");
+  return { deployed: true, skipped: false, source: src, dest };
+}
+
 function listProviderModels(provider) {
   const cmd = `openclaw models list --all --provider ${shellQuote(provider)} --json`;
   const raw = getCommandOutput(cmd);
@@ -829,6 +887,9 @@ function verifyInstallation(modeConfig, apiKey) {
         : "run: traderclaw gateway ensure-persistent (or sudo loginctl enable-linger $USER)";
   }
 
+  const workspaceRoot = resolveAgentWorkspaceDir();
+  const heartbeatInWorkspace = existsSync(join(workspaceRoot, "HEARTBEAT.md"));
+
   return [
     { label: "OpenClaw platform", ok: commandExists("openclaw"), note: "not in PATH" },
     { label: `Trading CLI (${modeConfig.cliName})`, ok: commandExists(modeConfig.cliName), note: "not in PATH" },
@@ -843,6 +904,11 @@ function verifyInstallation(modeConfig, apiKey) {
       label: "Gateway survives SSH (systemd linger)",
       ok: !persistSnap.eligible || persistOk,
       note: persistNote,
+    },
+    {
+      label: "HEARTBEAT.md in workspace root",
+      ok: heartbeatInWorkspace,
+      note: heartbeatInWorkspace ? workspaceRoot : `expected ${join(workspaceRoot, "HEARTBEAT.md")}`,
     },
   ];
 }
@@ -1288,6 +1354,26 @@ export class InstallerStepEngine {
         this.emitLog("gateway_scheduling", "info", `Webhook hooks: ${result.hooksConfigured}`);
         const restart = await restartGateway();
         return { ...result, restart };
+      });
+
+      await this.runStep("workspace_heartbeat", "Installing HEARTBEAT.md into agent workspace", async () => {
+        const result = deployWorkspaceHeartbeat(this.modeConfig);
+        if (result.deployed) {
+          this.emitLog("workspace_heartbeat", "info", `Installed TraderClaw HEARTBEAT.md → ${result.dest}`);
+        } else if (result.skipped) {
+          this.emitLog(
+            "workspace_heartbeat",
+            "info",
+            `HEARTBEAT.md already present at ${result.dest} — not overwriting (edit or delete to replace).`,
+          );
+        } else {
+          this.emitLog(
+            "workspace_heartbeat",
+            "warn",
+            `Could not install HEARTBEAT.md automatically (${result.reason || "unknown"})${result.src ? `. Expected: ${result.src}` : ""}`,
+          );
+        }
+        return result;
       });
 
       await this.runStep("setup_handoff", "Preparing secure setup handoff", async () => {
