@@ -1,4 +1,4 @@
-# solana-trader (TraderClaw V1)
+# solana-traderclaw (TraderClaw V1)
 
 TraderClaw V1 plugin for autonomous Solana memecoin trading. Connects OpenClaw to a trading orchestrator that handles market data, risk enforcement, and trade execution. Includes a full memory layer with local persistence, episodic logging, deterministic compute tools, and OpenClaw-native memory integration.
 
@@ -34,19 +34,19 @@ The plugin gives OpenClaw tools to interact with the Solana trading orchestrator
 
 ### 1. Install the plugin
 
-The **npm package name** and **OpenClaw plugin id** are both **`solana-trader`** (so OpenClaw does not warn about id vs package mismatch). The global CLI binary is **`traderclaw`**.
+Install the **npm package** **`solana-traderclaw`**. The **OpenClaw plugin id** in `openclaw.json` stays **`solana-trader`** (same as `openclaw.plugin.json`). The global CLI binary is **`traderclaw`**.
 
 ```bash
-npm install -g solana-trader@1.0.17
+npm install -g solana-traderclaw@1.0.18
 ```
 
 Or install directly into OpenClaw:
 
 ```bash
-openclaw plugins install solana-trader@1.0.17
+openclaw plugins install solana-traderclaw@1.0.18
 ```
 
-The previous npm name **`solana-traderclaw-v1`** is retired; use **`solana-trader`** for new installs. Existing installs can `npm install -g solana-trader@latest` after you publish.
+**Names:** `solana-traderclaw` is the canonical npm package. Older names (`solana-trader`, `solana-traderclaw-v1`) may still resolve on npm for a time; prefer **`solana-traderclaw`**. OpenClaw may log a benign id hint if the npm package name and manifest `id` differ — config keys remain **`plugins.entries.solana-trader`**.
 
 ### 2. Run setup
 

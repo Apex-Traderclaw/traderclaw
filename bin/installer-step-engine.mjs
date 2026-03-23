@@ -9,8 +9,8 @@ import { getLinuxGatewayPersistenceSnapshot } from "./gateway-persistence-linux.
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 
-/** Older npm / plugin ids that may linger in ~/.openclaw/extensions on upgrades. */
-const LEGACY_TRADER_PLUGIN_IDS = ["traderclaw-v1", "solana-traderclaw-v1"];
+/** Older `plugins.entries` keys / npm-era ids to merge orchestrator URL for. */
+const LEGACY_TRADER_PLUGIN_IDS = ["traderclaw-v1", "solana-traderclaw-v1", "solana-trader"];
 
 function stripAnsi(text) {
   if (typeof text !== "string") return text;
@@ -260,7 +260,7 @@ function backupExistingPluginDir(pluginId, onEvent) {
 async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorUrl) {
   // `openclaw plugins install` calls writeConfigFile *during* the command. Plugin config schema
   // requires orchestratorUrl — so we must seed it *before* install, not only after.
-  // Also merge legacy plugins.entries.solana-trader (v1.0.3-era id) so old extensions don't fail validation.
+  // Also merge legacy plugins.entries.* (see LEGACY_TRADER_PLUGIN_IDS) so old configs still validate.
   mkdirSync(CONFIG_DIR, { recursive: true });
   mkdirSync(join(CONFIG_DIR, "extensions"), { recursive: true });
 
@@ -403,7 +403,8 @@ function buildOpenClawCronStoreJob(def) {
       message: def.message,
       lightContext: true,
     },
-    delivery: { mode: "none" },
+    // OpenClaw: "none" = no channel post; announce + last = summary to user's last chat (see OpenClaw cron delivery docs)
+    delivery: { mode: "announce", channel: "last", bestEffort: true },
     state: {},
   };
 }

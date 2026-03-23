@@ -1,6 +1,6 @@
 {
-  "name": "solana-trader",
-  "version": "1.0.17",
+  "name": "solana-traderclaw",
+  "version": "1.0.18",
   "description": "TraderClaw V1 — autonomous Solana memecoin trading agent plugin for OpenClaw",
   "type": "module",
   "main": "./dist/index.js",
@@ -8,11 +8,12 @@
     ".": "./dist/index.js"
   },
   "bin": {
-    "traderclaw": "./bin/openclaw-trader.mjs"
+    "traderclaw": "bin/traderclaw.cjs"
   },
   "files": [
     "dist/",
     "bin/*.mjs",
+    "bin/*.cjs",
     "skills/",
     "config/",
     "openclaw.plugin.json",

@@ -1,6 +1,6 @@
 # TraderClaw External Installer Guide (v1.0.7)
 
-This guide is for teams implementing a GUI/CLI installer around `solana-trader@1.0.17`.
+This guide is for teams implementing a GUI/CLI installer around `solana-traderclaw@1.0.18`.
 
 It aligns external installer behavior with the canonical contract in `INSTALL_CONTRACT_v1.0.7.md`.
 
@@ -53,14 +53,14 @@ openclaw gateway status
 Authoritative plugin load path:
 
 ```bash
-openclaw plugins install solana-trader@1.0.17
+openclaw plugins install solana-traderclaw@1.0.18
 openclaw gateway restart
 ```
 
 Optional global CLI binary:
 
 ```bash
-npm install -g solana-trader@1.0.17
+npm install -g solana-traderclaw@1.0.18
 ```
 
 ---
@@ -211,7 +211,7 @@ Informational non-blocking warnings:
 ## 10) Minimal End-to-End Script
 
 ```bash
-openclaw plugins install solana-trader@1.0.17
+openclaw plugins install solana-traderclaw@1.0.18
 openclaw config set gateway.mode local
 openclaw config set gateway.tailscale.mode off
 openclaw config set gateway.bind tailnet
@@ -231,7 +231,7 @@ curl -H "Authorization: Bearer <gatewayToken>" <gatewayBaseUrl>/health
 
 If the log shows `at Object.writeConfigFile (.../auth-profiles-...js)` during `openclaw plugins install`, that is OpenClaw **validating** `~/.openclaw/openclaw.json` before write — not a generic disk error.
 
-**Required `orchestratorUrl`:** The plugin manifest marks `orchestratorUrl` as required. `openclaw plugins install` calls `writeConfigFile` **during** that command, so `plugins.entries.<id>.config.orchestratorUrl` must be present **before** install completes. The wizard seeds the plugin id (`solana-trader`) and merges orchestrator URL for legacy entry keys still on disk from older releases (`traderclaw-v1`, `solana-traderclaw-v1`).
+**Required `orchestratorUrl`:** The plugin manifest marks `orchestratorUrl` as required. `openclaw plugins install` calls `writeConfigFile` **during** that command, so `plugins.entries.<id>.config.orchestratorUrl` must be present **before** install completes. The wizard seeds the plugin id (`solana-trader`) and merges orchestrator URL for legacy entry keys still on disk from older releases (`traderclaw-v1`, `solana-traderclaw-v1`, `solana-trader`).
 
 **`agents.defaults.heartbeat`:** OpenClaw’s schema requires `agents.defaults.heartbeat` (can be `{}`) whenever `agents.defaults` exists. The wizard sets this in the LLM step.
 

@@ -1,4 +1,4 @@
-> **Note:** The npm package was renamed to **`solana-trader`** (same as the OpenClaw plugin id) so the “entry hints solana-traderclaw-v1” mismatch below no longer applies after upgrading to that package.
+> **Note:** As of **`solana-traderclaw@1.0.18`**, use `npm install -g solana-traderclaw`. OpenClaw plugin id remains **`solana-trader`**. Historical logs below predate that alignment.
 
 root@vultr:~# # 1. Is heartbeat in the actual config?
 openclaw config get agents
