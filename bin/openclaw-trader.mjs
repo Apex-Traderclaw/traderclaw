@@ -9,7 +9,9 @@ import { execSync } from "child_process";
 import { createServer } from "http";
 import { sortModelsByPreference } from "./llm-model-preference.mjs";
 
-const VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')).version;
+const PACKAGE_JSON = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
+const VERSION = PACKAGE_JSON.version;
+const NPM_PACKAGE_NAME = typeof PACKAGE_JSON.name === "string" ? PACKAGE_JSON.name : "solana-traderclaw-v1";
 const PLUGIN_ID = "solana-trader";
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
@@ -976,6 +978,22 @@ async function cmdSetup(args) {
     } catch (err) {
       printWarn(`  Gateway persistence (optional): ${err.message || err}`);
     }
+  }
+
+  try {
+    const { deployWorkspaceHeartbeat } = await import("./installer-step-engine.mjs");
+    print("\nWorkspace HEARTBEAT.md...\n");
+    const hb = deployWorkspaceHeartbeat({ pluginPackage: NPM_PACKAGE_NAME });
+    if (hb.deployed) {
+      printSuccess(`  Installed HEARTBEAT.md → ${hb.dest}`);
+    } else if (hb.skipped) {
+      printInfo(`  HEARTBEAT.md already exists at ${hb.dest} — left unchanged.`);
+    } else {
+      printWarn(`  Could not install HEARTBEAT.md automatically (${hb.reason || "unknown"})`);
+      if (hb.src) printInfo(`  Expected source: ${hb.src}`);
+    }
+  } catch (err) {
+    printWarn(`  HEARTBEAT.md workspace install: ${err.message || err}`);
   }
 
   print("\n" + "=".repeat(60));
