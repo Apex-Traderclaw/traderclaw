@@ -306,7 +306,7 @@ Run continuously unless kill switch is active.
 
 | Loop | Steps | Trigger | Cadence |
 |---|---|---|---|
-| **Fast loop** (heartbeat) | Steps 0–7 | Heartbeat timer, discovery subscription, alpha webhook | Every ~5 minutes (or event-driven) |
+| **Fast loop** (heartbeat) | Steps 0–7 | Heartbeat timer, discovery subscription, alpha webhook | Every ~30 minutes by default (or event-driven) |
 | **Slow loop** (cron) | Cron jobs only | `CRON_JOB:` message from Gateway scheduler | Hourly to daily, per job |
 
 The fast loop handles real-time trading: safety checks, scanning, analysis, decisions, execution, and position monitoring. It does NOT run strategy evolution (Step 9) or deep trade review analysis (Step 8) — those run on cron cadence in isolated sessions.
@@ -369,7 +369,7 @@ You are asleep until something wakes you. There are four wake-up paths, and each
 
 | Wake-Up Trigger | What Happened | Your Path |
 |---|---|---|
-| **Scheduled heartbeat** (every ~5 min) | Timer fired, normal cycle | Run fast loop: Step -1 (MEMORY LOAD) → Step 0 → Step 1 (SCAN) → Step 1.5 → Step 1.75 → Step 2 → ... → Step 7 → Report to user |
+| **Scheduled heartbeat** (default ~30 min) | Timer fired, normal cycle | Run fast loop: Step -1 (MEMORY LOAD) → Step 0 → Step 1 (SCAN) → Step 1.5 → Step 1.75 → Step 2 → ... → Step 7 → Report to user |
 | **Discovery subscription event** | Orchestrator matched a token from your Bitquery subscription (e.g., new Pump.fun launch, LP change) | Step 0 → **skip Step 1/1.5/1.75** → go directly to Step 2 (ANALYZE) on the matched token |
 | **Alpha signal webhook** | SpyFly aggregator pushed a high-priority alpha call | Step 0 → **skip Step 1/1.5/1.75** → go directly to Step 2 (ANALYZE) on the signaled token |
 | **`CRON_JOB:` message** | Gateway cron scheduler fired a slow-loop job | **Skip the entire trading loop.** Execute ONLY the specified cron job, persist outputs, complete the turn. See "Cron Jobs (Slow Loop)" section below. |
@@ -586,7 +586,7 @@ This step covers **external alpha signal consumption** — processing curated tr
 
 2. **Buffer poll (heartbeat cycle):** Call `solana_alpha_signals` every heartbeat to retrieve lower-priority signals that were buffered from the WebSocket stream. These get merged into your normal scan candidates alongside Step 1 scan results and Step 1.75 discovery events.
 
-Both paths feed the same analysis pipeline. The difference is latency: webhook signals arrive within seconds, buffer signals arrive on the next heartbeat (up to 5 minutes later).
+Both paths feed the same analysis pipeline. The difference is latency: webhook signals arrive within seconds, buffer signals arrive on the next scheduled heartbeat (cadence set by `agents.*.heartbeat.every`, default ~30m).
 
 **First-time setup:**
 
@@ -1960,7 +1960,7 @@ The Gateway cron system is configured in `~/.openclaw/openclaw.json`:
   agents: {
     defaults: {
       heartbeat: {
-        every: "5m",
+        every: "30m",
         target: "last"
       }
     }
