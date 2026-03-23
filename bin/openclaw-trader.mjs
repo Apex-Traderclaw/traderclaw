@@ -496,6 +496,8 @@ async function cmdSetup(args) {
   let showWalletPrivateKey = false;
   let doSignupFlow = false;
   let signedUpThisSession = false;
+  let writeGatewayEnvFlag = false;
+  let noEnsureGatewayPersistent = false;
 
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === "--api-key" || args[i] === "-k") && args[i + 1]) {
@@ -527,6 +529,12 @@ async function cmdSetup(args) {
     }
     if (args[i] === "--signup") {
       doSignupFlow = true;
+    }
+    if (args[i] === "--write-gateway-env") {
+      writeGatewayEnvFlag = true;
+    }
+    if (args[i] === "--no-ensure-gateway-persistent") {
+      noEnsureGatewayPersistent = true;
     }
   }
   const runtimeWalletPrivateKey = getRuntimeWalletPrivateKey(walletPrivateKey);
@@ -930,6 +938,46 @@ async function cmdSetup(args) {
     printWarn("  The startup sequence will block before trading until credentials are active.");
   }
 
+  if (writeGatewayEnvFlag && lastSeenWalletPrivateKey) {
+    if (process.platform !== "linux" || process.env.WSL_DISTRO_NAME) {
+      printWarn(
+        "  --write-gateway-env is for Linux (non-WSL) systemd user gateways; skipped on this platform.",
+      );
+    } else {
+      try {
+        const { writeTraderclawGatewayWalletEnv } = await import("./gateway-persistence-linux.mjs");
+        writeTraderclawGatewayWalletEnv(lastSeenWalletPrivateKey);
+        printSuccess(
+          `  Wrote ${WALLET_PRIVATE_KEY_ENV} for the systemd user gateway (see ~/.config/systemd/user/openclaw-gateway.service.d/).`,
+        );
+        printInfo("  Run: openclaw gateway restart");
+      } catch (err) {
+        printWarn(`  Could not write gateway wallet env file: ${err.message || err}`);
+      }
+    }
+  } else if (writeGatewayEnvFlag && !lastSeenWalletPrivateKey) {
+    printWarn("  --write-gateway-env skipped: no wallet private key was available this session.");
+  }
+
+  if (!noEnsureGatewayPersistent) {
+    try {
+      const { ensureLinuxGatewayPersistence, isLinuxGatewayPersistenceEligible } = await import(
+        "./gateway-persistence-linux.mjs",
+      );
+      if (isLinuxGatewayPersistenceEligible()) {
+        print("\nGateway persistence (Linux)...\n");
+        await ensureLinuxGatewayPersistence({
+          emitLog: (level, text) => {
+            if (level === "warn") printWarn(`  ${text}`);
+            else printInfo(`  ${text}`);
+          },
+        });
+      }
+    } catch (err) {
+      printWarn(`  Gateway persistence (optional): ${err.message || err}`);
+    }
+  }
+
   print("\n" + "=".repeat(60));
   printSuccess("\n  Setup complete!\n");
   print("=".repeat(60));
@@ -959,6 +1007,32 @@ async function cmdSetup(args) {
   print("  traderclaw logout     Revoke current session");
   print("  traderclaw config     View current configuration");
   print("");
+}
+
+async function cmdGateway(args) {
+  const sub = args[0];
+  if (sub === "ensure-persistent") {
+    const { ensureLinuxGatewayPersistence } = await import("./gateway-persistence-linux.mjs");
+    print("\nTraderClaw — gateway persistence (Linux)\n");
+    const result = await ensureLinuxGatewayPersistence({
+      emitLog: (level, text) => {
+        if (level === "warn") printWarn(`  ${text}`);
+        else printInfo(`  ${text}`);
+      },
+    });
+    if (result.skipped) {
+      printInfo(`  Skipped: ${result.reason || "not applicable"}`);
+      return;
+    }
+    if (result.errors?.length) {
+      printWarn(`  Completed with notes: ${result.errors.join("; ")}`);
+    } else {
+      printSuccess("  Done. Gateway should survive SSH disconnect; use: openclaw gateway restart");
+    }
+    return;
+  }
+  printError("Unknown gateway subcommand. Try: traderclaw gateway ensure-persistent");
+  process.exit(1);
 }
 
 async function cmdLogin(args) {
@@ -1468,6 +1542,19 @@ async function cmdPrecheck(args) {
       log.pass("openclaw gateway status command succeeded");
     } catch {
       log.warn("openclaw gateway status returned non-zero");
+    }
+    try {
+      const { getLinuxGatewayPersistenceSnapshot } = await import("./gateway-persistence-linux.mjs");
+      const snap = getLinuxGatewayPersistenceSnapshot();
+      if (snap.eligible && snap.linger !== true) {
+        log.warn(
+          "systemd user linger not enabled — gateway may stop after SSH disconnect; run: traderclaw gateway ensure-persistent",
+        );
+      } else if (snap.eligible && snap.linger === true) {
+        log.pass("systemd user linger enabled (SSH-safe gateway)");
+      }
+    } catch {
+      log.warn("could not check systemd user linger (optional)");
     }
   } else {
     log.warn("skipping gateway status check (openclaw missing)");
@@ -2409,6 +2496,7 @@ Commands:
   signup             Create a new account (alias for: setup --signup; run locally, not via the agent)
   precheck           Run environment checks (dry-run or allow-install)
   install            Launch installer flows (--wizard for localhost GUI)
+  gateway            Gateway helpers (see subcommands below)
   login              Re-authenticate (uses refresh token when valid; full challenge only if needed)
   logout             Revoke current session and clear tokens
   status             Check connection health and wallet status
@@ -2425,6 +2513,11 @@ Setup options:
   --show-api-key     Extra hint after signup (full key is always shown once; confirm with API_KEY_STORED)
   --show-wallet-private-key  Reveal full wallet private key in setup output
   --signup           Force signup flow (create new account)
+  --write-gateway-env  Write TRADERCLAW_WALLET_PRIVATE_KEY to a systemd EnvironmentFile for the user gateway (Linux)
+  --no-ensure-gateway-persistent  Skip automatic Linux loginctl linger + user unit enable after setup
+
+Gateway subcommands:
+  gateway ensure-persistent   Linux: enable loginctl linger and systemd --user unit for OpenClaw gateway
 
 Login options:
   --wallet-private-key <k>  Base58 key for wallet proof when the server requires it (runtime only)
@@ -2444,6 +2537,7 @@ Examples:
   traderclaw precheck --allow-install
   traderclaw install --wizard
   traderclaw install --wizard --lane quick-local
+  traderclaw gateway ensure-persistent
   traderclaw setup --signup --user-id my_agent_001
   traderclaw setup --api-key oc_xxx --url https://api.traderclaw.ai
   traderclaw setup --gateway-base-url https://gateway.myhost.ts.net
@@ -2482,6 +2576,9 @@ async function main() {
       break;
     case "install":
       await cmdInstall(args.slice(1));
+      break;
+    case "gateway":
+      await cmdGateway(args.slice(1));
       break;
     case "login":
       await cmdLogin(args.slice(1));
