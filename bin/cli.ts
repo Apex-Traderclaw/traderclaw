@@ -307,11 +307,6 @@ async function cmdSetup(args: string[]) {
   API Key:       ${maskKey(apiKey)}
   Config:        ${CONFIG_FILE}
 `);
-  print("Next steps:");
-  print("  1. Install the plugin:     openclaw plugins install solana-traderclaw (or: npm install -g solana-traderclaw)");
-  print("  2. Restart the gateway:    openclaw gateway --restart");
-  print("  3. Start trading:          Ask OpenClaw to scan for opportunities");
-  print("");
   print("Quick commands:");
   print("  openclaw-trader status     Check connection health");
   print("  openclaw-trader config     View current configuration");
