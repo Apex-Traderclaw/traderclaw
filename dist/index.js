@@ -9,7 +9,7 @@ import {
 } from "./chunk-T4YWGIIR.js";
 import {
   SessionManager
-} from "./chunk-Y3TH3OBP.js";
+} from "./chunk-A7UG5RGA.js";
 
 // index.ts
 import { Type } from "@sinclair/typebox";
@@ -17,6 +17,7 @@ import { Type } from "@sinclair/typebox";
 // lib/x-client.mjs
 import { createHmac, randomBytes } from "crypto";
 var X_API_BASE = "https://api.twitter.com/2";
+var MAX_TWEET_LENGTH = 280;
 function percentEncode(str) {
   return encodeURIComponent(str).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
@@ -120,6 +121,62 @@ async function xApiFetch(method, endpoint, credentials, { body = null, queryPara
     data: responseData,
     rateLimitRemaining: rateLimitRemaining ? parseInt(rateLimitRemaining) : void 0
   };
+}
+function validateTweetText(text) {
+  if (!text || typeof text !== "string") {
+    return { valid: false, error: "Tweet text is required and must be a non-empty string." };
+  }
+  const trimmed = text.trim();
+  if (trimmed.length === 0) {
+    return { valid: false, error: "Tweet text cannot be empty." };
+  }
+  if (trimmed.length > MAX_TWEET_LENGTH) {
+    return { valid: false, error: `Tweet exceeds ${MAX_TWEET_LENGTH} characters (got ${trimmed.length}). Shorten the text.` };
+  }
+  return { valid: true, text: trimmed };
+}
+async function postTweet(credentials, text) {
+  const validation = validateTweetText(text);
+  if (!validation.valid) return { ok: false, error: validation.error };
+  const result = await xApiFetch("POST", "/tweets", credentials, {
+    body: { text: validation.text }
+  });
+  if (result.ok && result.data?.data?.id) {
+    const tweetId = result.data.data.id;
+    const username = credentials.username || "unknown";
+    return {
+      ok: true,
+      tweetId,
+      tweetUrl: `https://x.com/${username}/status/${tweetId}`,
+      text: validation.text
+    };
+  }
+  return result;
+}
+async function replyToTweet(credentials, tweetId, text) {
+  const validation = validateTweetText(text);
+  if (!validation.valid) return { ok: false, error: validation.error };
+  if (!tweetId || typeof tweetId !== "string") {
+    return { ok: false, error: "tweetId is required to reply." };
+  }
+  const result = await xApiFetch("POST", "/tweets", credentials, {
+    body: {
+      text: validation.text,
+      reply: { in_reply_to_tweet_id: tweetId }
+    }
+  });
+  if (result.ok && result.data?.data?.id) {
+    const replyId = result.data.data.id;
+    const username = credentials.username || "unknown";
+    return {
+      ok: true,
+      replyId,
+      replyUrl: `https://x.com/${username}/status/${replyId}`,
+      inReplyTo: tweetId,
+      text: validation.text
+    };
+  }
+  return result;
 }
 async function readMentions(credentials, { maxResults = 10, sinceId = null, paginationToken = null } = {}) {
   if (!credentials.userId) {
@@ -360,6 +417,60 @@ function registerXReadTools(api, Type2, xConfig, fallbackAgentId, logPrefix, opt
     })
   });
   api.logger.info(`${logPrefix} Registered 3 X/Twitter read tools (search, mentions, threads). Profiles: ${xConfig.ok ? Object.keys(xConfig.profiles).join(", ") || "none" : "unconfigured"}`);
+}
+function registerXTools(api, Type2, xConfig, fallbackAgentId, logPrefix, options) {
+  registerXReadTools(api, Type2, xConfig, fallbackAgentId, logPrefix, options);
+  const checkPermission = options?.checkPermission || null;
+  const json = (data) => ({
+    content: [{ type: "text", text: JSON.stringify(data, null, 2) }]
+  });
+  const wrapExecute = (toolName, fn) => async (toolCallId, params) => {
+    try {
+      if (checkPermission) {
+        const callingAgentId = params?._agentId || fallbackAgentId;
+        const permError = checkPermission(toolName, callingAgentId);
+        if (permError) {
+          return json({ error: permError, tool: toolName, agentId: callingAgentId });
+        }
+      }
+      const result = await fn(toolCallId, params ?? {});
+      return json(result);
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+  api.registerTool({
+    name: "x_post_tweet",
+    description: "Post a new tweet from the configured X profile (max 280 characters). Use for trade journaling, announcements, and community updates. Requires X app with Read + Write and OAuth 1.0a user tokens.",
+    parameters: Type2.Object({
+      text: Type2.String({ description: "Tweet body (plain text, max 280 chars after trim)" }),
+      agentId: Type2.Optional(Type2.String({ description: "Override agent ID (default: caller's agent identity)" }))
+    }),
+    execute: wrapExecute("x_post_tweet", async (_id, params) => {
+      const callerAgentId = params._agentId;
+      const creds = resolveAgentCredentials(xConfig, callerAgentId, params.agentId, fallbackAgentId);
+      if (!creds.ok) return { error: creds.error };
+      return postTweet(creds.credentials, params.text);
+    })
+  });
+  api.registerTool({
+    name: "x_reply_tweet",
+    description: "Reply to an existing tweet by ID from the configured X profile. Use for threading journal entries or engaging with mentions. Requires Read + Write OAuth 1.0a user tokens.",
+    parameters: Type2.Object({
+      tweetId: Type2.String({ description: "Target tweet ID to reply to" }),
+      text: Type2.String({ description: "Reply body (plain text, max 280 chars after trim)" }),
+      agentId: Type2.Optional(Type2.String({ description: "Override agent ID (default: caller's agent identity)" }))
+    }),
+    execute: wrapExecute("x_reply_tweet", async (_id, params) => {
+      const callerAgentId = params._agentId;
+      const creds = resolveAgentCredentials(xConfig, callerAgentId, params.agentId, fallbackAgentId);
+      if (!creds.ok) return { error: creds.error };
+      return replyToTweet(creds.credentials, params.tweetId, params.text);
+    })
+  });
+  api.logger.info(
+    `${logPrefix} Registered 5 X/Twitter tools (3 read + post + reply). Profiles: ${xConfig.ok ? Object.keys(xConfig.profiles).join(", ") || "none" : "unconfigured"}`
+  );
 }
 
 // lib/web-fetch.mjs
@@ -1139,29 +1250,42 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_trade_precheck",
-      description: "Pre-trade risk check \u2014 validates a proposed trade against risk rules, kill switch, entitlement limits, and on-chain conditions. Returns approved/denied with reasons and capped size. Always call this before executing a trade.",
+      description: "Pre-trade risk check \u2014 validates a proposed trade against risk rules, kill switch, entitlement limits, and on-chain conditions. Returns approved/denied with reasons and capped size. Always call this before executing a trade. Buy: sizeSol required; do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored.",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         side: Type.Union([Type.Literal("buy"), Type.Literal("sell")], { description: "Trade direction" }),
-        sizeSol: Type.Number({ description: "Intended position size in SOL" }),
+        sizeSol: Type.Optional(Type.Number({ description: "Position size in SOL \u2014 required for buy, omit for sell" })),
+        sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1\u2013100 (100 = full exit) \u2014 sell only; preferred over sizeTokens if both sent" })),
+        sizeTokens: Type.Optional(Type.Number({ description: "Token amount to sell \u2014 sell only; ignored if sellPct is also provided" })),
         slippageBps: Type.Optional(Type.Number({ description: "Slippage tolerance in basis points (e.g., 300 = 3%)" }))
       }),
-      execute: wrapExecute(
-        async (_id, params) => post("/api/trade/precheck", {
+      execute: wrapExecute(async (_id, params) => {
+        const body = {
           tokenAddress: params.tokenAddress,
           side: params.side,
-          sizeSol: params.sizeSol,
           slippageBps: params.slippageBps
-        })
-      )
+        };
+        if (params.side === "buy") {
+          body.sizeSol = params.sizeSol;
+        } else {
+          if (params.sellPct !== void 0) {
+            body.sellPct = params.sellPct;
+          } else if (params.sizeTokens !== void 0) {
+            body.sizeTokens = params.sizeTokens;
+          }
+        }
+        return post("/api/trade/precheck", body);
+      })
     });
     api.registerTool({
       name: "solana_trade_execute",
-      description: "Execute a trade on Solana via the SpyFly bot. Enforces risk rules before proxying to on-chain execution. Returns trade ID, position ID, and transaction signature. IMPORTANT: tpLevels alone (e.g. [10, 15]) means EACH level sells 100% of the position at that gain \u2014 use tpExits for partials (e.g. +10% sell 50%, +15% sell 100%).",
+      description: "Execute a trade on Solana via the SpyFly bot. Enforces risk rules before proxying to on-chain execution. Returns trade ID, position ID, and transaction signature. IMPORTANT: tpLevels alone (e.g. [10, 15]) means EACH level sells 100% of the position at that gain \u2014 use tpExits for partials (e.g. +10% sell 50%, +15% sell 100%). Buy: sizeSol required; do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored.",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         side: Type.Union([Type.Literal("buy"), Type.Literal("sell")], { description: "Trade direction" }),
-        sizeSol: Type.Number({ description: "Position size in SOL" }),
+        sizeSol: Type.Optional(Type.Number({ description: "Position size in SOL \u2014 required for buy, omit for sell" })),
+        sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1\u2013100 (100 = full exit) \u2014 sell only; preferred over sizeTokens if both sent" })),
+        sizeTokens: Type.Optional(Type.Number({ description: "Token amount to sell \u2014 sell only; ignored if sellPct is also provided" })),
         symbol: Type.String({ description: "Token symbol (e.g., BONK, WIF)" }),
         slippageBps: Type.Optional(Type.Number({ description: "Slippage in basis points (default: 300)" })),
         slPct: Type.Optional(Type.Number({ description: "Stop-loss percentage (e.g., 15 = 15% below entry)" })),
@@ -1206,13 +1330,21 @@ var solanaTraderPlugin = {
         const body = {
           tokenAddress: params.tokenAddress,
           side: params.side,
-          sizeSol: params.sizeSol,
           symbol: params.symbol,
           slippageBps: params.slippageBps,
           slPct: params.slPct,
           trailingStopPct: params.trailingStopPct,
           managementMode: params.managementMode
         };
+        if (params.side === "buy") {
+          body.sizeSol = params.sizeSol;
+        } else {
+          if (params.sellPct !== void 0) {
+            body.sellPct = params.sellPct;
+          } else if (params.sizeTokens !== void 0) {
+            body.sizeTokens = params.sizeTokens;
+          }
+        }
         const tpExits = params.tpExits;
         const slExits = params.slExits;
         if (Array.isArray(tpExits) && tpExits.length > 0) {
@@ -2892,11 +3024,11 @@ Context compaction triggered. MEMORY.md synced from last persisted state. Decisi
         }
       }
     });
-    registerXReadTools(api, Type, config.xConfig, config.agentId || "main", "[solana-trader]");
+    registerXTools(api, Type, config.xConfig, config.agentId || "main", "[solana-trader]");
     registerWebFetchTool(api, Type, "[solana-trader]");
-    const xToolCount = config.xConfig?.ok ? 3 : 0;
+    const xToolCount = config.xConfig?.ok ? 5 : 0;
     api.logger.info(
-      `[solana-trader] Registered ${67 + xToolCount} tools (67 trading + ${xToolCount} X/Twitter read) for walletId ${walletId} (session auth mode)`
+      `[solana-trader] Registered ${67 + xToolCount} tools (67 trading + ${xToolCount} X/Twitter) for walletId ${walletId} (session auth mode)`
     );
   }
 };

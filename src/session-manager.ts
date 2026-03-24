@@ -12,6 +12,15 @@ export interface SessionTokens {
   };
 }
 
+export interface SignupResult {
+  ok: boolean;
+  externalUserId: string;
+  tier: string;
+  scopes: string[];
+  apiKey: string;
+  createdAt: string;
+}
+
 export interface ChallengeResult {
   ok: boolean;
   walletProofRequired: boolean;
@@ -215,6 +224,23 @@ export class SessionManager {
     }
   }
 
+  async signup(externalUserId: string): Promise<SignupResult> {
+    const res = await rawFetch(
+      `${this.baseUrl}/api/auth/signup`,
+      "POST",
+      { externalUserId },
+      undefined,
+      this.timeout,
+    );
+
+    if (!res.ok) {
+      throw new Error(`Signup failed (HTTP ${res.status}): ${JSON.stringify(res.data)}`);
+    }
+
+    this.apiKey = res.data.apiKey;
+    return res.data as SignupResult;
+  }
+
   async requestChallenge(): Promise<ChallengeResult> {
     const body: Record<string, unknown> = {
       apiKey: this.apiKey,
@@ -381,7 +407,9 @@ export class SessionManager {
     }
 
     if (!this.accessToken) {
-      throw new Error("Failed to obtain access token after refresh.");
+      throw new Error(
+        `Session expired and could not be refreshed. Re-authentication required. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`,
+      );
     }
 
     return this.accessToken;

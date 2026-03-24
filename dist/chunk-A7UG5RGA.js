@@ -161,6 +161,20 @@ var SessionManager = class {
       this.accessTokenExpiresAt = initExp;
     }
   }
+  async signup(externalUserId) {
+    const res = await rawFetch(
+      `${this.baseUrl}/api/auth/signup`,
+      "POST",
+      { externalUserId },
+      void 0,
+      this.timeout
+    );
+    if (!res.ok) {
+      throw new Error(`Signup failed (HTTP ${res.status}): ${JSON.stringify(res.data)}`);
+    }
+    this.apiKey = res.data.apiKey;
+    return res.data;
+  }
   async requestChallenge() {
     const body = {
       apiKey: this.apiKey,
@@ -294,7 +308,9 @@ var SessionManager = class {
       this.refreshInFlight = null;
     }
     if (!this.accessToken) {
-      throw new Error("Failed to obtain access token after refresh.");
+      throw new Error(
+        `Session expired and could not be refreshed. Re-authentication required. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`
+      );
     }
     return this.accessToken;
   }

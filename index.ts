@@ -4,7 +4,7 @@ import { orchestratorRequest } from "./src/http-client.js";
 import { SessionManager } from "./src/session-manager.js";
 import { AlphaBuffer } from "./src/alpha-buffer.js";
 import { AlphaStreamManager } from "./src/alpha-ws.js";
-import { parseXConfig, registerXReadTools } from "./lib/x-tools.mjs";
+import { parseXConfig, registerXTools } from "./lib/x-tools.mjs";
 import { registerWebFetchTool } from "./lib/web-fetch.mjs";
 import * as fs from "fs";
 import * as path from "path";
@@ -574,32 +574,48 @@ const solanaTraderPlugin = {
 
     api.registerTool({
       name: "solana_trade_precheck",
-      description: "Pre-trade risk check — validates a proposed trade against risk rules, kill switch, entitlement limits, and on-chain conditions. Returns approved/denied with reasons and capped size. Always call this before executing a trade.",
+      description:
+        "Pre-trade risk check — validates a proposed trade against risk rules, kill switch, entitlement limits, and on-chain conditions. Returns approved/denied with reasons and capped size. Always call this before executing a trade. " +
+        "Buy: sizeSol required; do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored.",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         side: Type.Union([Type.Literal("buy"), Type.Literal("sell")], { description: "Trade direction" }),
-        sizeSol: Type.Number({ description: "Intended position size in SOL" }),
+        sizeSol: Type.Optional(Type.Number({ description: "Position size in SOL — required for buy, omit for sell" })),
+        sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1–100 (100 = full exit) — sell only; preferred over sizeTokens if both sent" })),
+        sizeTokens: Type.Optional(Type.Number({ description: "Token amount to sell — sell only; ignored if sellPct is also provided" })),
         slippageBps: Type.Optional(Type.Number({ description: "Slippage tolerance in basis points (e.g., 300 = 3%)" })),
       }),
-      execute: wrapExecute(async (_id, params) =>
-        post("/api/trade/precheck", {
+      execute: wrapExecute(async (_id, params) => {
+        const body: Record<string, unknown> = {
           tokenAddress: params.tokenAddress,
           side: params.side,
-          sizeSol: params.sizeSol,
           slippageBps: params.slippageBps,
-        }),
-      ),
+        };
+        if (params.side === "buy") {
+          body.sizeSol = params.sizeSol;
+        } else {
+          if (params.sellPct !== undefined) {
+            body.sellPct = params.sellPct;
+          } else if (params.sizeTokens !== undefined) {
+            body.sizeTokens = params.sizeTokens;
+          }
+        }
+        return post("/api/trade/precheck", body);
+      }),
     });
 
     api.registerTool({
       name: "solana_trade_execute",
       description:
         "Execute a trade on Solana via the SpyFly bot. Enforces risk rules before proxying to on-chain execution. Returns trade ID, position ID, and transaction signature. " +
-        "IMPORTANT: tpLevels alone (e.g. [10, 15]) means EACH level sells 100% of the position at that gain — use tpExits for partials (e.g. +10% sell 50%, +15% sell 100%).",
+        "IMPORTANT: tpLevels alone (e.g. [10, 15]) means EACH level sells 100% of the position at that gain — use tpExits for partials (e.g. +10% sell 50%, +15% sell 100%). " +
+        "Buy: sizeSol required; do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored.",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         side: Type.Union([Type.Literal("buy"), Type.Literal("sell")], { description: "Trade direction" }),
-        sizeSol: Type.Number({ description: "Position size in SOL" }),
+        sizeSol: Type.Optional(Type.Number({ description: "Position size in SOL — required for buy, omit for sell" })),
+        sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1–100 (100 = full exit) — sell only; preferred over sizeTokens if both sent" })),
+        sizeTokens: Type.Optional(Type.Number({ description: "Token amount to sell — sell only; ignored if sellPct is also provided" })),
         symbol: Type.String({ description: "Token symbol (e.g., BONK, WIF)" }),
         slippageBps: Type.Optional(Type.Number({ description: "Slippage in basis points (default: 300)" })),
         slPct: Type.Optional(Type.Number({ description: "Stop-loss percentage (e.g., 15 = 15% below entry)" })),
@@ -645,13 +661,21 @@ const solanaTraderPlugin = {
         const body: Record<string, unknown> = {
           tokenAddress: params.tokenAddress,
           side: params.side,
-          sizeSol: params.sizeSol,
           symbol: params.symbol,
           slippageBps: params.slippageBps,
           slPct: params.slPct,
           trailingStopPct: params.trailingStopPct,
           managementMode: params.managementMode,
         };
+        if (params.side === "buy") {
+          body.sizeSol = params.sizeSol;
+        } else {
+          if (params.sellPct !== undefined) {
+            body.sellPct = params.sellPct;
+          } else if (params.sizeTokens !== undefined) {
+            body.sizeTokens = params.sizeTokens;
+          }
+        }
         const tpExits = params.tpExits as Array<{ percent: number; amountPct: number }> | undefined;
         const slExits = params.slExits as Array<{ percent: number; amountPct: number }> | undefined;
         if (Array.isArray(tpExits) && tpExits.length > 0) {
@@ -2459,12 +2483,12 @@ const solanaTraderPlugin = {
       },
     });
 
-    registerXReadTools(api, Type, config.xConfig, config.agentId || "main", "[solana-trader]");
+    registerXTools(api, Type, config.xConfig, config.agentId || "main", "[solana-trader]");
     registerWebFetchTool(api, Type, "[solana-trader]");
 
-    const xToolCount = config.xConfig?.ok ? 3 : 0;
+    const xToolCount = config.xConfig?.ok ? 5 : 0;
     api.logger.info(
-      `[solana-trader] Registered ${67 + xToolCount} tools (67 trading + ${xToolCount} X/Twitter read) for walletId ${walletId} (session auth mode)`,
+      `[solana-trader] Registered ${67 + xToolCount} tools (67 trading + ${xToolCount} X/Twitter) for walletId ${walletId} (session auth mode)`,
     );
   },
 };

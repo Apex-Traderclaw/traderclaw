@@ -1,7 +1,7 @@
 {
   "id": "solana-trader",
   "name": "Solana Trader",
-  "description": "Autonomous Solana memecoin trading agent plugin — connects OpenClaw to a trading orchestrator for scanning, analysis, risk management, and execution.",
+  "description": "Team edition — Solana trading agent with X/Twitter journal & engagement. Full V1 trading capabilities plus 5 X tools.",
   "skills": ["skills/solana-trader"],
   "configSchema": {
     "type": "object",
@@ -14,15 +14,16 @@
       },
       "walletId": {
         "type": "string",
-        "description": "Wallet ID for this agent's trading account (UUID string from the orchestrator API)"
+        "format": "uuid",
+        "description": "Wallet ID (UUID string) for this agent's trading account"
       },
       "apiKey": {
         "type": "string",
-        "description": "API key from traderclaw signup / setup or https://traderclaw.ai/register — set on this machine via CLI, not by the agent"
+        "description": "API key obtained from signup or https://traderclaw.ai/register"
       },
       "externalUserId": {
         "type": "string",
-        "description": "Optional external user ID for CLI signup (traderclaw signup); auto-generated if omitted"
+        "description": "External user ID for signup (auto-generated if not provided)"
       },
       "refreshToken": {
         "type": "string",
@@ -32,11 +33,15 @@
         "type": "string",
         "description": "Solana wallet public key (auto-populated after session establishment)"
       },
+      "walletPrivateKey": {
+        "type": "string",
+        "description": "Solana wallet private key in base58 (only needed for re-auth when wallet already exists on account)"
+      },
       "apiTimeout": {
         "type": "integer",
         "minimum": 1000,
         "maximum": 120000,
-        "default": 80000,
+        "default": 30000,
         "description": "HTTP request timeout in milliseconds"
       },
       "agentId": {
@@ -50,6 +55,28 @@
       "gatewayToken": {
         "type": "string",
         "description": "Bearer token used by orchestrator when calling your Gateway /v1/responses."
+      },
+      "x": {
+        "type": "object",
+        "description": "X/Twitter configuration for journal & engagement tools",
+        "properties": {
+          "consumerKey": { "type": "string", "description": "X App consumer key (shared across all agents)" },
+          "consumerSecret": { "type": "string", "description": "X App consumer secret" },
+          "profiles": {
+            "type": "object",
+            "description": "Per-agent X profiles. Keys are agent IDs.",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "accessToken": { "type": "string" },
+                "accessTokenSecret": { "type": "string" },
+                "userId": { "type": "string" },
+                "username": { "type": "string" }
+              },
+              "required": ["accessToken", "accessTokenSecret"]
+            }
+          }
+        }
       }
     }
   },
@@ -79,6 +106,12 @@
     },
     "walletPublicKey": {
       "label": "Wallet Public Key",
+      "advanced": true
+    },
+    "walletPrivateKey": {
+      "label": "Wallet Private Key",
+      "placeholder": "base58 encoded private key",
+      "sensitive": true,
       "advanced": true
     },
     "apiTimeout": {

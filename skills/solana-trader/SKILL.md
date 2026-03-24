@@ -359,6 +359,23 @@ There is no context loss from this separation. Cron outputs flow into the persis
 
 ---
 
+### Step -1: MEMORY CONTEXT LOAD (mandatory, every non-cron cycle)
+
+Before any trading action, load context from all 3 memory layers:
+
+1. **Layer 1 — MEMORY.md** (auto-loaded): Confirm your durable state is present — tier, wallet, mode, strategy version, watchlist, regime canary, permanent learnings. If MEMORY.md is empty, you have NOT completed startup — run the Mandatory Startup Sequence first.
+2. **Layer 2 — Daily log** (auto-loaded): Read today's `memory/YYYY-MM-DD.md` to know what scans, trades, and analysis already happened. Avoid repeating work done earlier this session.
+3. **Layer 3 — Server-side memory**: Call `solana_memory_search` for context before acting:
+   - `"source_reputation"` — which alpha sources to trust
+   - `"strategy_drift_warning"` — any recent drift alerts
+   - `"pre_trade_rationale"` — your last few trade decisions for integrity check
+   - `"meta_rotation"` — current hot vs cooling narratives
+   - For any specific token you're about to analyze: `solana_memory_by_token` to check past outcomes
+
+This ensures every cycle starts with full context, not a blank slate. Only after loading context should you proceed to Step 0.
+
+---
+
 ### Step 0: INTERRUPT CHECK (Before Every Cycle)
 
 **How you wake up determines your path:**
@@ -2446,19 +2463,27 @@ When any of the following occur:
 
 ---
 
-## Social Intelligence & X Research
+## X/Twitter Journal & Engagement
 
-You have X/Twitter read tools for social research on tokens. Social data is a **confidence modifier** — it supplements on-chain analysis, never replaces it. Use social intel to validate community strength, detect narrative shifts, and spot exhaustion signals.
+> **Reference:** See `refs/x-journal.md` for full posting guidelines, content templates, rate limits, and credential setup.
 
-### X Read Tools Available
+You have 5 X/Twitter tools available: `x_post_tweet`, `x_reply_tweet`, `x_read_mentions`, `x_search_tweets`, `x_get_thread`. Use them to journal trade recaps, market commentary, and engage with the community. Post 1-3 times daily. Keep it data-driven and crypto-native.
+
+### X Tools Available
 
 | Tool | Purpose | X API Tier Required |
 |---|---|---|
+| `x_post_tweet` | Post a tweet (trade recaps, market commentary, alpha calls) | Pay-as-you-go+ |
+| `x_reply_tweet` | Reply to a tweet (community engagement, thread building) | Pay-as-you-go+ |
 | `x_search_tweets` | Search recent tweets by keyword, cashtag, hashtag, or advanced query | Pay-as-you-go+ |
 | `x_read_mentions` | Read recent @mentions of the configured X profile | Pay-as-you-go+ |
 | `x_get_thread` | Read a full conversation thread by tweet ID | Pay-as-you-go+ |
 
 If X credentials are not configured, these tools return an error and you skip social analysis — rely on on-chain data and alpha signals alone. Social intel is supplementary.
+
+### Social Intelligence & X Research
+
+Social data is a **confidence modifier** — it supplements on-chain analysis, never replaces it. Use social intel to validate community strength, detect narrative shifts, and spot exhaustion signals.
 
 ### Resolving Token Social Links (Bitquery → Smart Link Parsing)
 
@@ -2727,9 +2752,11 @@ Each user configures their own X/Twitter API developer account tokens in the plu
 | Alpha | `solana_alpha_signals` | Get buffered alpha signals (unseen, filtered) |
 | Alpha | `solana_alpha_history` | Query historical pings (1 year, `GET /api/pings`) |
 | Alpha | `solana_alpha_sources` | Source stats (signal count, avg score per source) |
-| Social | `x_search_tweets` | Search tweets by keyword, cashtag, or advanced query (social research) |
-| Social | `x_read_mentions` | Read @mentions of configured X profile |
-| Social | `x_get_thread` | Read full conversation thread by tweet ID |
+| X/Social | `x_post_tweet` | Post a tweet (trade recaps, market commentary, alpha calls) |
+| X/Social | `x_reply_tweet` | Reply to a tweet (community engagement, thread building) |
+| X/Social | `x_search_tweets` | Search tweets by keyword, cashtag, or advanced query (social research) |
+| X/Social | `x_read_mentions` | Read @mentions of configured X profile |
+| X/Social | `x_get_thread` | Read full conversation thread by tweet ID |
 | Social | `web_fetch_url` | Fetch a URL and extract structured content (website analysis, metadata URI) |
 
 ---
