@@ -18,8 +18,9 @@ Plugin (this package)
   ├── Local persistence (state, decisions, bulletin, patterns)
   │     └── .traderclaw-v1-data/
   │
-  └── OpenClaw native memory (auto-loaded every session)
-        ├── MEMORY.md (durable facts — always in context)
+  └── OpenClaw workspace (default ~/.openclaw/workspace/, auto-loaded every session)
+        ├── STATE.md (machine-written durable state from solana_state_save)
+        ├── MEMORY.md (optional — your narrative notes; not overwritten by state save)
         └── memory/YYYY-MM-DD.md (daily logs — today + yesterday)
 ```
 
@@ -198,9 +199,9 @@ openclaw gateway restart
 
 The plugin implements a 3-layer memory architecture that uses OpenClaw's native infrastructure plus custom tools to eliminate amnesia between sessions.
 
-### Layer 1: Durable Facts (`MEMORY.md`)
+### Layer 1: Durable state (`STATE.md`) and narrative (`MEMORY.md`)
 
-OpenClaw automatically loads `MEMORY.md` into agent context at every session start — zero tool calls needed. When `solana_state_save` is called, it writes both a JSON state file AND updates `MEMORY.md` with curated durable facts: tier, wallet, mode, strategy version, watchlist, permanent learnings, and regime canary.
+OpenClaw loads workspace markdown from the agent workspace root. **`STATE.md`** is updated by `solana_state_save` with a human-readable mirror of durable facts (tier, wallet, mode, strategy version, watchlist, permanent learnings, regime canary). **`MEMORY.md`** is for your own notes — the plugin does not overwrite it. JSON state still lives under `.traderclaw-v1-data/state/` as before.
 
 ### Layer 2: Episodic Memory (Daily Logs + Bootstrap Injection)
 
@@ -214,7 +215,7 @@ Unlimited retention via the orchestrator API. `solana_memory_write` / `solana_me
 
 ### Memory Flush Hook
 
-The `memory:flush` hook fires automatically when OpenClaw is about to trim context. It syncs `MEMORY.md` from the last persisted state and writes a compaction marker to the daily log. This is an automatic safety net — no agent action needed.
+The `memory:flush` hook fires automatically when OpenClaw is about to trim context. It syncs **`STATE.md`** from the last persisted JSON state and writes a compaction marker to the daily log. This is an automatic safety net — no agent action needed.
 
 ### Bootstrap Hook (`agent:bootstrap`)
 
@@ -240,9 +241,10 @@ Entitlement fallback chain: live API fetch → cached file → durable state →
 │   └── shared/             # Team bulletin (JSONL)
 ```
 
-Plus OpenClaw-native paths at project root:
+Plus OpenClaw workspace paths (default `~/.openclaw/workspace/`):
 ```
-MEMORY.md                   # Curated durable facts (auto-loaded by OpenClaw)
+STATE.md                    # Machine-written durable state mirror (from solana_state_save)
+MEMORY.md                   # Optional agent narrative (not overwritten by the plugin)
 memory/
 ├── 2026-03-19.md           # Today's daily log (auto-loaded by OpenClaw)
 ├── 2026-03-18.md           # Yesterday's daily log (auto-loaded by OpenClaw)
@@ -410,7 +412,7 @@ Free tier is sufficient for daily trade journaling. Pay-as-you-go is recommended
 ### Local Durable State
 | Tool | Description |
 |------|-------------|
-| `solana_state_save` | Save agent state to local JSON (also writes MEMORY.md) |
+| `solana_state_save` | Save agent state to local JSON (also writes STATE.md under the workspace) |
 | `solana_state_read` | Read agent state from local JSON |
 
 ### Episodic Decision Log
@@ -463,7 +465,7 @@ Free tier is sufficient for daily trade journaling. Pay-as-you-go is recommended
 | Hook | Trigger | What It Does |
 |------|---------|--------------|
 | `agent:bootstrap` | Every session start | Injects durable state, decisions, bulletin, snapshot, and entitlements into context |
-| `memory:flush` | Before OpenClaw context compaction | Syncs MEMORY.md from persisted state, writes compaction marker to daily log |
+| `memory:flush` | Before OpenClaw context compaction | Syncs STATE.md from persisted state, writes compaction marker to daily log |
 
 ## Skills
 
@@ -525,6 +527,13 @@ Trade executed. TradeId: 15, PositionId: 4, TX: 5xK...
 I'll monitor this position and review after exit.
 ```
 
+## Session and file reload
+
+- **Telegram:** use **`/new`** to start a fresh chat thread or **`/reset`** to reset session state with your provider, as supported by your Telegram bot integration.
+- **After editing workspace files** (`HEARTBEAT.md`, `STATE.md`, `MEMORY.md`, skills): restart the gateway so changes are picked up consistently: `openclaw gateway restart`.
+- **History:** OpenClaw may not ship `openclaw agents clear-history` on your build — do not rely on that subcommand; prefer Telegram session commands and gateway restart.
+- **Heartbeats:** fresh installs set `heartbeat.target: "telegram"`, `isolatedSession: true`, `lightContext: true`, and `channels.defaults.heartbeat.showOk: true` so scheduled cycles deliver reliably (see installer `configureGatewayScheduling`).
+
 ## Troubleshooting
 
 **Plugin won't load:**
@@ -551,15 +560,16 @@ I'll monitor this position and review after exit.
 - OpenClaw's default heartbeat prompt tells the model "If nothing needs attention, reply HEARTBEAT_OK" — which is stripped and never delivered. Run `traderclaw setup` again (v1.0.16+) to set a custom prompt, or apply manually:
 
 ```bash
-openclaw config set agents.list '[{"id":"main","default":true,"heartbeat":{"every":"30m","target":"last","prompt":"Read HEARTBEAT.md (workspace context). Follow it strictly — execute the full trading cycle and report results to the user. Do NOT reply HEARTBEAT_OK. Always produce a visible summary of what you checked and did."}}]'
+openclaw config set agents.list '[{"id":"main","default":true,"heartbeat":{"every":"30m","target":"telegram","isolatedSession":true,"lightContext":true,"prompt":"Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Execute a full trading cycle: Steps 0 through 10. The cycle is NOT complete until all 10 steps are done including Step 8 (memory write-back), Step 9 (X post), and Step 10 (report). Do not stop early. Do not infer or repeat old tasks from prior chats. Never reply HEARTBEAT_OK. Never end your message with a question."}}]'
 openclaw gateway restart
 ```
 
-- Verify with `openclaw config get agents` — the `main` agent should have a `heartbeat.prompt` field.
+- Verify with `openclaw config get agents` — the `main` agent should have `heartbeat.prompt`, `target`, `isolatedSession`, and `lightContext`.
 - Confirm Telegram is healthy: `openclaw channels status --probe`
-- You must have messaged the bot at least once for `target: "last"` to have a delivery route.
+- Prefer `target: "telegram"` over `"last"` so delivery does not depend on a prior channel contact.
 
 **Scheduled cron jobs run but you never see Telegram/WhatsApp output:**
+- The installer merges **six** prescriptive managed jobs (`alpha-scan`, `dead-money-sweep`, `source-reputation-recalc`, `meta-rotation-analysis`, `strategy-evolution`, `daily-performance-report`). Older templates such as `subscription-cleanup` or `whale-watch` are no longer in that managed set; re-run **`traderclaw setup`** to refresh `~/.openclaw/cron/jobs.json`, or edit jobs manually. User-defined cron jobs whose ids are not in the template set are preserved on merge.
 - TraderClaw templates merged into `~/.openclaw/cron/jobs.json` use **`delivery.mode: "announce"`** with **`channel: "last"`** so each completed isolated job posts a summary to the same channel you last used (see [OpenClaw cron delivery](https://docs.clawd.bot/automation/cron-jobs)).
 - If you installed before this behavior: run **`traderclaw setup`** again so the installer re-merges cron jobs, or stop the gateway and edit managed job entries in `~/.openclaw/cron/jobs.json` — set **`delivery`** to `{ "mode": "announce", "channel": "last", "bestEffort": true }` for each TraderClaw job (or remove `delivery` entirely; isolated jobs default to announce when omitted).
 - The same **`last`** requirement as heartbeat applies: message the bot at least once so the gateway knows where to deliver.
@@ -572,5 +582,7 @@ openclaw gateway restart
 **Memory/state not persisting:**
 - Check that the `dataDir` config points to a writable location
 - Default is `<cwd>/.traderclaw-v1-data` — verify permissions
-- Check `MEMORY.md` exists at project root after first `solana_state_save` call
-- Check `memory/` directory for daily log files
+- Check **`STATE.md`** exists under `~/.openclaw/workspace/` after first `solana_state_save` call (not `process.cwd()` — required for systemd installs)
+- Check `memory/` under the same workspace for daily log files
+
+**X / Twitter posting:** with X credentials and skills aligned, `x_post_tweet` has been validated end-to-end in production installs after config + workspace updates.
