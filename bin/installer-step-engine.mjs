@@ -87,6 +87,7 @@ function ensureTelegramGroupPolicyOpenForWizard(configPath = CONFIG_FILE) {
   if (tg.groupPolicy === "open") return { changed: false };
 
   tg.groupPolicy = "open";
+  ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
   return { changed: true };
@@ -760,6 +761,7 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
     config.channels.defaults.heartbeat.showOk = true;
   }
 
+  ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 
@@ -795,6 +797,7 @@ function ensureOpenResponsesEnabled(configPath = CONFIG_FILE) {
   if (!config.gateway.http.endpoints.responses) config.gateway.http.endpoints.responses = {};
   config.gateway.http.endpoints.responses.enabled = true;
 
+  ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
   return configPath;
@@ -954,6 +957,7 @@ function seedXConfig(modeConfig, configPath = CONFIG_FILE, wizardOpts = {}) {
     }
   }
 
+  ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
   return { configured: true, consumerKey: "***", profilesFound, agentIds };
@@ -1019,6 +1023,7 @@ function persistXProfileIdentities(configPath, modeConfig, identities) {
     if (touched) profilesTouched++;
   }
   if (profilesTouched === 0) return { written: 0 };
+  ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
   return { written: profilesTouched };
@@ -1464,6 +1469,7 @@ export class InstallerStepEngine {
       return { attempted: true, success: false, reason: "no_missing_gateway_defaults" };
     }
 
+    ensureAgentsDefaultsSchemaCompat(config);
     mkdirSync(CONFIG_DIR, { recursive: true });
     const backupPath = `${CONFIG_FILE}.bak.${Date.now()}`;
     writeFileSync(backupPath, rawOriginal, "utf-8");
