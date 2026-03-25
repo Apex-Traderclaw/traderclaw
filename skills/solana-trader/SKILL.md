@@ -304,10 +304,10 @@ Run continuously unless kill switch is active.
 
 | Loop | Steps | Trigger | Cadence |
 |---|---|---|---|
-| **Fast loop** (heartbeat) | Steps 0–7 | Heartbeat timer, discovery subscription, alpha webhook | Every ~30 minutes by default (or event-driven) |
+| **Fast loop** (heartbeat) | HEARTBEAT.md Steps 0–10 | Heartbeat timer, discovery subscription, alpha webhook | Every ~30 minutes by default (or event-driven) |
 | **Slow loop** (cron) | Cron jobs only | `CRON_JOB:` message from Gateway scheduler | Hourly to daily, per job |
 
-The fast loop handles real-time trading: safety checks, scanning, analysis, decisions, execution, and position monitoring. It does NOT run strategy evolution (Step 9) or deep trade review analysis (Step 8) — those run on cron cadence in isolated sessions.
+The heartbeat fast loop runs the full **HEARTBEAT.md** ladder through Step 10 (including memory write-back, optional X post, user report). It does **not** run **SKILL** Step 9 **EVOLVE** (strategy weight updates) or **SKILL** Step 8 **deep** review / pattern mining — those are **cron-only** (see sections labeled `CRON-ONLY` below). Inline `solana_trade_review` after closes still happens in the fast loop.
 
 The fast loop READS outputs from cron jobs every cycle:
 - `solana_strategy_state` → feature weights (updated by `strategy_evolution` cron)
@@ -326,7 +326,7 @@ There is no context loss from this separation. Cron outputs flow into the persis
 ```
 1. WAKE UP — heartbeat timer, discovery event, or alpha webhook
        ↓
-1.5. Step -1: MEMORY CONTEXT LOAD — read MEMORY.md, check daily log, search server-side memory
+1.5. Step -1: MEMORY CONTEXT LOAD — read STATE.md + daily log, search server-side memory
        ↓
 2. Step 0: INTERRUPT CHECK — identify wake-up trigger, check kill switch, check dead money, STRATEGY INTEGRITY CHECK
        ↓
@@ -348,13 +348,23 @@ There is no context loss from this separation. Cron outputs flow into the persis
        ↓
 11. Step 7: MONITOR POSITIONS — check exits, trailing stops, dead money, partial takes
        ↓
-12. Step 8: REVIEW — honest post-trade journaling (inline: outcome tags, deep: cron)
+--- HEARTBEAT.md numbering (do not confuse with SKILL Step 8/9 below) ---
        ↓
-13. Step 8.5: STRUCTURED LEARNING LOG — decision-level learning entries (on errors/misses/surprises)
+12. HEARTBEAT Step 8: MEMORY WRITE-BACK — solana_state_save → STATE.md, solana_daily_log, solana_memory_write
        ↓
-14. USER COMMUNICATION — report cycle summary to user (never silent)
+13. HEARTBEAT Step 9: X POST (if configured)
        ↓
-15. SLEEP — wait for next heartbeat or event-driven wake-up
+14. HEARTBEAT Step 10: REPORT USER — visible summary; cycle complete only here
+       ↓
+--- SKILL-only steps (CRON-heavy; not the same numbers as HEARTBEAT Steps 8–10) ---
+       ↓
+15. SKILL Step 8 (CRON-ONLY deep review): pattern mining + deep journaling — see section below
+       ↓
+16. SKILL Step 8.5: STRUCTURED LEARNING LOG — decision-level learning entries
+       ↓
+17. SKILL Step 9 (CRON-ONLY): EVOLVE — strategy evolution cron
+       ↓
+18. SLEEP — wait for next heartbeat or event-driven wake-up
 ```
 
 ---
@@ -363,7 +373,7 @@ There is no context loss from this separation. Cron outputs flow into the persis
 
 Before any trading action, load context from all 3 memory layers:
 
-1. **Layer 1 — MEMORY.md** (auto-loaded): Confirm your durable state is present — tier, wallet, mode, strategy version, watchlist, regime canary, permanent learnings. If MEMORY.md is empty, you have NOT completed startup — run the Mandatory Startup Sequence first.
+1. **Layer 1 — STATE.md** (auto-loaded): Machine-written durable state from `solana_state_save` — tier, wallet, mode, strategy version, watchlist, regime canary, permanent learnings. **MEMORY.md** is for your narrative notes only. If STATE.md is empty, you have NOT completed startup — run the Mandatory Startup Sequence first.
 2. **Layer 2 — Daily log** (auto-loaded): Read today's `memory/YYYY-MM-DD.md` to know what scans, trades, and analysis already happened. Avoid repeating work done earlier this session.
 3. **Layer 3 — Server-side memory**: Call `solana_memory_search` for context before acting:
    - `"source_reputation"` — which alpha sources to trust
@@ -401,7 +411,7 @@ If the incoming message starts with `CRON_JOB:`, you are in a **cron session**. 
 6. Report results to user (see each job's "Report to user" section)
 7. Complete the turn — do nothing else
 
-Recognized cron job IDs: `strategy_evolution`, `daily_performance_report`, `source_reputation_recalc`, `dead_money_sweep`, `subscription_cleanup`, `meta_rotation_analysis`
+Managed cron job ids (installer defaults): `alpha-scan`, `dead-money-sweep`, `source-reputation-recalc`, `meta-rotation-analysis`, `strategy-evolution`, `daily-performance-report`. Payloads use `CRON_JOB: <snake_case>` prefixes. Older installs may still list legacy job ids until the store is migrated.
 
 If you receive a `CRON_JOB:` message with an unrecognized job ID, log a warning via `solana_memory_write` and complete the turn without action.
 
@@ -415,7 +425,7 @@ When woken by a heartbeat, discovery subscription, or alpha signal, you already 
 
 Before any trading action, load context from all 3 memory layers:
 
-1. **Layer 1 — MEMORY.md** (auto-loaded): Confirm your durable state is present — tier, wallet, mode, strategy version, watchlist, regime canary, permanent learnings. If MEMORY.md is empty, you have NOT completed startup — run the Mandatory Startup Sequence first.
+1. **Layer 1 — STATE.md** (auto-loaded): Machine-written durable state from `solana_state_save` — tier, wallet, mode, strategy version, watchlist, regime canary, permanent learnings. **MEMORY.md** is for your narrative notes only. If STATE.md is empty, you have NOT completed startup — run the Mandatory Startup Sequence first.
 2. **Layer 2 — Daily log** (auto-loaded): Read today's `memory/YYYY-MM-DD.md` to know what scans, trades, and analysis already happened. Avoid repeating work done earlier this session.
 3. **Layer 3 — Server-side memory**: Call `solana_memory_search` for context before acting:
    - `"source_reputation"` — which alpha sources to trust
@@ -1296,7 +1306,7 @@ If X credentials are not configured, skip this check. It is supplementary — on
 
 ### User Communication (mandatory, end of every non-cron cycle)
 
-After completing your trading cycle (Steps -1 through 7), send a brief summary to the user. Never run a silent cycle. Always communicate what you did, even if no trades were made.
+After completing your trading cycle (Steps -1 through 7, then **HEARTBEAT.md** Steps 8–10 for heartbeat runs), send a brief summary to the user. Never run a silent cycle. Always communicate what you did, even if no trades were made.
 
 **Summary should include:**
 - What you scanned and how many candidates were found
@@ -1310,7 +1320,9 @@ Keep it concise — 3-5 sentences for a quiet cycle, more detail if trades were 
 
 ---
 
-### Step 8: REVIEW — Honest Journaling
+### SKILL Step 8 (CRON-ONLY — deep review; not HEARTBEAT Steps 8–10): REVIEW — Honest Journaling
+
+> **Numbering:** HEARTBEAT.md uses Steps 8–10 for memory write-back, X post, and user report. This **SKILL** section is the long-form trade-review step; deep pattern mining stays on cron.
 
 > **Two components:** Trade review has an **inline** part and a **cron** part.
 > - **Inline (fast loop):** When a position closes during the fast loop, immediately call `solana_trade_review` with the fields below. This is lightweight outcome tagging — it stays in the fast loop so data is captured while context is fresh.
@@ -1441,9 +1453,9 @@ Resolved by: strategy_evolution cron, LRN-20260315-001 chain (3 linked entries o
 
 ---
 
-### Step 9: EVOLVE — Strategy Weight Update
+### SKILL Step 9 (CRON-ONLY — not HEARTBEAT Step 9): EVOLVE — Strategy Weight Update
 
-> **Cron cadence only.** This step runs every 4-6 hours via the `strategy_evolution` cron job in an isolated session. It does NOT run during the heartbeat fast loop. The fast loop reads current weights via `solana_strategy_state` but never updates them. All weight updates happen here, in the cron session, where you have full context to do deep retrospective analysis without competing with real-time trading.
+> **Cron cadence only.** This step runs every 4 hours via the `strategy_evolution` cron job (`strategy-evolution` job id) in an isolated session. It does NOT run during the heartbeat fast loop. The fast loop reads current weights via `solana_strategy_state` but never updates them. All weight updates happen here, in the cron session, where you have full context to do deep retrospective analysis without competing with real-time trading.
 
 Evolve your weights only after accumulating enough closed trade reviews.
 
@@ -1696,7 +1708,7 @@ Cron jobs run in **isolated sessions** separate from the trading loop. Each job 
 When you receive a `CRON_JOB:` message, execute ONLY the specified job below. Do not run the trading loop.
 
 **Memory Context Load (mandatory for every cron job):** Before executing any cron job logic, load context from all 3 memory layers:
-1. **Layer 1 — MEMORY.md** (auto-loaded): Read your durable state — tier, wallet, mode, strategy version.
+1. **Layer 1 — STATE.md** (auto-loaded): Read machine-written durable state — tier, wallet, mode, strategy version. Use **MEMORY.md** for narrative notes if present.
 2. **Layer 2 — Daily log** (auto-loaded): Check today's log for recent activity and prior cron runs.
 3. **Layer 3 — Server-side memory**: Call `solana_memory_search` for context specific to this job (see each job's tools section for what to search). This ensures cron jobs build on prior knowledge, not start from scratch.
 
@@ -1968,7 +1980,7 @@ During this cron job:
 
 ### Gateway Cron Configuration Reference
 
-The Gateway cron system is configured in `~/.openclaw/openclaw.json`:
+TraderClaw enables cron in `~/.openclaw/openclaw.json` and merges **six** managed job definitions into `~/.openclaw/cron/jobs.json` (OpenClaw may reject inline `cron.jobs` in `openclaw.json` — the installer removes legacy inline jobs). Illustrative shape:
 
 ```json5
 {
@@ -1976,8 +1988,16 @@ The Gateway cron system is configured in `~/.openclaw/openclaw.json`:
     defaults: {
       heartbeat: {
         every: "30m",
-        target: "last"
+        target: "telegram",
+        isolatedSession: true,
+        lightContext: true
       }
+    }
+  },
+
+  channels: {
+    defaults: {
+      heartbeat: { showOk: true }
     }
   },
 
@@ -1988,54 +2008,12 @@ The Gateway cron system is configured in `~/.openclaw/openclaw.json`:
     runLog: {
       maxBytes: "2mb",
       keepLines: 2000
-    },
-    jobs: [
-      {
-        id: "strategy-evolution",
-        schedule: "0 */4 * * *",
-        agentId: "trader",
-        message: "CRON_JOB: strategy_evolution",
-        enabled: true
-      },
-      {
-        id: "daily-performance-report",
-        schedule: "0 4 * * *",
-        agentId: "trader",
-        message: "CRON_JOB: daily_performance_report",
-        enabled: true
-      },
-      {
-        id: "source-reputation-recalc",
-        schedule: "0 */3 * * *",
-        agentId: "trader",
-        message: "CRON_JOB: source_reputation_recalc",
-        enabled: true
-      },
-      {
-        id: "dead-money-sweep",
-        schedule: "0 */2 * * *",
-        agentId: "trader",
-        message: "CRON_JOB: dead_money_sweep",
-        enabled: true
-      },
-      {
-        id: "subscription-cleanup",
-        schedule: "0 * * * *",
-        agentId: "trader",
-        message: "CRON_JOB: subscription_cleanup",
-        enabled: true
-      },
-      {
-        id: "meta-rotation-analysis",
-        schedule: "30 */3 * * *",
-        agentId: "trader",
-        message: "CRON_JOB: meta_rotation_analysis",
-        enabled: true
-      }
-    ]
+    }
   }
 }
 ```
+
+**Managed job ids** (see `traderCronPrescriptiveJobs` in the installer): `alpha-scan`, `dead-money-sweep`, `source-reputation-recalc`, `meta-rotation-analysis`, `strategy-evolution`, `daily-performance-report` — each with a full prescriptive `message` payload in the store file.
 
 **Key config notes:**
 - `maxConcurrentRuns: 2` — at most 2 cron jobs can execute simultaneously (prevents resource exhaustion)
@@ -2194,9 +2172,11 @@ Use:
 
 You have a 3-layer memory system using OpenClaw's native infrastructure + custom tools. This eliminates amnesia between sessions.
 
-### Layer 1: Durable Facts (`MEMORY.md` — Always In Context)
+### Layer 1: Durable state (`STATE.md`) and narrative (`MEMORY.md`)
 
-OpenClaw automatically loads `MEMORY.md` into your context at **every session start** — zero tool calls needed. When you call `solana_state_save`, it writes both a JSON state file AND updates `MEMORY.md` with your most important durable facts (tier, wallet, mode, strategy version, watchlist, permanent learnings, regime canary). This means your core identity and config are always available without any search or tool call.
+OpenClaw loads workspace markdown from the agent workspace root. **`STATE.md`** is the machine-written mirror from `solana_state_save` (tier, wallet, mode, strategy version, watchlist, permanent learnings, regime canary). **`MEMORY.md`** is your own durable notes — the plugin does not overwrite it.
+
+When you call `solana_state_save`, it persists JSON under the plugin data dir and updates **`STATE.md`** in `~/.openclaw/workspace/`.
 
 ### Layer 2: Episodic Memory (`memory/YYYY-MM-DD.md` + Bootstrap Injection)
 
@@ -2210,7 +2190,7 @@ Uses `solana_memory_write` / `solana_memory_search` / `solana_memory_by_token` (
 
 ### Memory Flush Before Compaction
 
-The `memory:flush` hook fires automatically when OpenClaw is about to trim your context. It saves your current state to `MEMORY.md` and writes a compaction marker to the daily log. You don't need to do anything — this is automatic safety net.
+The `memory:flush` hook fires automatically when OpenClaw is about to trim your context. It syncs **`STATE.md`** from the last persisted JSON state and writes a compaction marker to the daily log. You don't need to do anything — this is automatic safety net.
 
 ### Bootstrap Files (Auto-Injected at Session Start)
 
@@ -2224,8 +2204,8 @@ The `memory:flush` hook fires automatically when OpenClaw is about to trim your 
 
 ### Memory Tools Reference
 
-**Durable State (local, survives sessions — also writes MEMORY.md):**
-- `solana_state_save` — persist strategy weights, watchlists, counters, regime observations. Also updates `MEMORY.md`.
+**Durable State (local, survives sessions — also writes STATE.md):**
+- `solana_state_save` — persist strategy weights, watchlists, counters, regime observations. Also updates **`STATE.md`** (not MEMORY.md).
 - `solana_state_read` — mid-session reads (bootstrap already provides initial state)
 
 **OpenClaw Native Memory (auto-loaded daily logs):**
@@ -2270,7 +2250,7 @@ Write memory at decision boundaries, not just at session end:
 ### Mandatory Session-End Checklist (Non-Negotiable)
 
 Execute in this exact order before completing any session:
-1. `solana_state_save` — persist your durable state (also updates MEMORY.md automatically)
+1. `solana_state_save` — persist your durable state (also updates STATE.md automatically)
 2. `solana_decision_log` — log every significant decision made this session
 3. `solana_team_bulletin_post` — post a `position_update` bulletin with your session status
 4. `solana_context_snapshot_write` — write portfolio world-view for next session bootstrap
