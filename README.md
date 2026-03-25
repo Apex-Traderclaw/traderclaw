@@ -73,7 +73,7 @@ openclaw gateway restart
 traderclaw install --wizard
 ```
 
-This opens a localhost UI that runs prechecks, lane-aware setup, gateway validation, optional Telegram setup, and final verification. It also installs **`HEARTBEAT.md` into your OpenClaw agent workspace root** (default `~/.openclaw/workspace/HEARTBEAT.md`) from the packaged skill so heartbeats load the TraderClaw checklist without manual `cp`. `traderclaw setup` does the same.
+This opens a localhost UI that runs prechecks, lane-aware setup, gateway validation, optional Telegram setup, and final verification. **X (Twitter) OAuth fields in the wizard are optional** — leave all four blank to run without X; you can add credentials later in `openclaw.json` or via env (`X_CONSUMER_KEY`, `X_CONSUMER_SECRET`, per-agent `X_ACCESS_TOKEN_*`). It also installs **`HEARTBEAT.md` into your OpenClaw agent workspace root** (default `~/.openclaw/workspace/HEARTBEAT.md`) from the packaged skill so heartbeats load the TraderClaw checklist without manual `cp`. `traderclaw setup` does the same.
 
 ### Optional: Run CLI prechecks directly
 

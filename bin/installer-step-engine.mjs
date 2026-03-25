@@ -1713,18 +1713,14 @@ export class InstallerStepEngine {
 export function assertWizardXCredentials(modeConfig, options = {}) {
   const t = (s) => (typeof s === "string" ? s.trim() : "");
   const o = options || {};
-  if (modeConfig.pluginId === "solana-trader-v2") {
-    const need = ["xConsumerKey", "xConsumerSecret", "xAccessTokenCto", "xAccessTokenCtoSecret", "xAccessTokenIntern", "xAccessTokenInternSecret"];
-    for (const k of need) {
-      if (!t(o[k])) return `Missing required X/Twitter field: ${k}`;
-    }
-    return null;
-  }
-  const need = ["xConsumerKey", "xConsumerSecret", "xAccessTokenMain", "xAccessTokenMainSecret"];
-  for (const k of need) {
-    if (!t(o[k])) return `Missing required X/Twitter field: ${k}`;
-  }
-  return null;
+  const need =
+    modeConfig.pluginId === "solana-trader-v2"
+      ? ["xConsumerKey", "xConsumerSecret", "xAccessTokenCto", "xAccessTokenCtoSecret", "xAccessTokenIntern", "xAccessTokenInternSecret"]
+      : ["xConsumerKey", "xConsumerSecret", "xAccessTokenMain", "xAccessTokenMainSecret"];
+  const filled = need.filter((k) => t(o[k])).length;
+  if (filled === 0) return null;
+  if (filled === need.length) return null;
+  return `X/Twitter credentials are optional: leave all ${need.length} fields blank, or fill every field (OAuth app key/secret plus user access token and secret for each profile).`;
 }
 
 export function createInstallerStepEngine(modeConfig, options = {}, hooks = {}) {

@@ -1791,29 +1791,29 @@ function wizardHtml(defaults) {
         </div>
       </div>
       <div class="card" id="xCard">
-        <h3>Required: X (Twitter) OAuth 1.0a</h3>
-        <p class="muted">App keys plus user access token for the <code>main</code> agent profile (journal &amp; engagement tools).</p>
+        <h3>Optional: X (Twitter) OAuth 1.0a</h3>
+        <p class="muted">Skip this section to use trading and Telegram without X. When set, app keys plus user access token enable the <code>main</code> agent profile (journal &amp; engagement tools).</p>
         <div class="grid">
           <div>
-            <label>X consumer key (required)</label>
+            <label>X consumer key (optional)</label>
             <input id="xConsumerKey" type="password" autocomplete="off" placeholder="From your X Developer App" />
           </div>
           <div>
-            <label>X consumer secret (required)</label>
+            <label>X consumer secret (optional)</label>
             <input id="xConsumerSecret" type="password" autocomplete="off" />
           </div>
         </div>
         <div class="grid" style="margin-top:12px;">
           <div>
-            <label>X access token — main profile (required)</label>
+            <label>X access token — main profile (optional)</label>
             <input id="xAccessTokenMain" type="password" autocomplete="off" placeholder="User access token for the posting account" />
           </div>
           <div>
-            <label>X access token secret — main profile (required)</label>
+            <label>X access token secret — main profile (optional)</label>
             <input id="xAccessTokenMainSecret" type="password" autocomplete="off" />
           </div>
         </div>
-        <p class="muted">Create an app at <a href="https://developer.x.com" target="_blank" rel="noopener noreferrer">developer.x.com</a> with OAuth 1.0a Read and Write. Values are written to <code>openclaw.json</code> under the plugin <code>x</code> block.</p>
+        <p class="muted">If you use X: create an app at <a href="https://developer.x.com" target="_blank" rel="noopener noreferrer">developer.x.com</a> with OAuth 1.0a Read and Write, and fill all four fields above (or leave all blank). Values are written to <code>openclaw.json</code> under the plugin <code>x</code> block.</p>
       </div>
       <div class="card" id="startCard">
         <div class="grid">
@@ -1946,11 +1946,19 @@ function wizardHtml(defaults) {
           && Boolean(llmProviderEl.value.trim())
           && Boolean(llmCredentialEl.value.trim())
           && Boolean(telegramTokenEl.value.trim())
-          && Boolean(xConsumerKeyEl.value.trim())
-          && Boolean(xConsumerSecretEl.value.trim())
-          && Boolean(xAccessTokenMainEl.value.trim())
-          && Boolean(xAccessTokenMainSecretEl.value.trim())
         );
+      }
+
+      /** All-or-nothing: 0 or 4 non-empty X fields; partial is invalid. */
+      function xWizardFieldsStatus() {
+        const fields = [
+          xConsumerKeyEl.value.trim(),
+          xConsumerSecretEl.value.trim(),
+          xAccessTokenMainEl.value.trim(),
+          xAccessTokenMainSecretEl.value.trim(),
+        ];
+        const filled = fields.filter(Boolean).length;
+        return { filled, total: 4, ok: filled === 0 || filled === 4 };
       }
 
       function updateStartButtonState() {
@@ -1963,7 +1971,7 @@ function wizardHtml(defaults) {
           return;
         }
         startBtn.removeAttribute("aria-busy");
-        startBtn.disabled = llmCatalogLoading || !hasRequiredInputs();
+        startBtn.disabled = llmCatalogLoading || !hasRequiredInputs() || !xWizardFieldsStatus().ok;
         if (!llmCatalogLoading) {
           startBtn.textContent = "Start Installation";
         }
@@ -2132,10 +2140,12 @@ function wizardHtml(defaults) {
           manualEl.textContent = "Telegram bot token is required before starting installation.";
           return;
         }
-        if (!payload.xConsumerKey || !payload.xConsumerSecret || !payload.xAccessTokenMain || !payload.xAccessTokenMainSecret) {
+        const xStatus = xWizardFieldsStatus();
+        if (!xStatus.ok) {
           stateEl.textContent = "blocked";
           readyEl.textContent = "";
-          manualEl.textContent = "X (Twitter) consumer key, consumer secret, access token, and access token secret are required before starting installation.";
+          manualEl.textContent =
+            "X (Twitter) credentials are optional: leave all four fields blank, or fill consumer key, consumer secret, access token, and access token secret.";
           return;
         }
 
