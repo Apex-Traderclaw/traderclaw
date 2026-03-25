@@ -584,8 +584,8 @@ function mergePluginsAllowlist(modeConfig, configPath = CONFIG_FILE) {
 }
 
 /**
- * Six managed cron jobs with prescriptive tool chains (VPS report 2026-03-24).
- * Replaces vague one-line templates so the agent actually invokes tools.
+ * Managed cron jobs with prescriptive tool chains (VPS report 2026-03-24).
+ * Schedules are staggered (minutes :00 / :15 / :30 / :45) where possible to avoid pile-ups.
  * @param {string} agentId
  * @returns {Array<{ id: string, schedule: string, agentId: string, message: string, enabled: boolean }>}
  */
@@ -605,6 +605,14 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: dead_money_sweep. You are running the dead money sweep. Do these steps: 1) Call solana_state_load to get all open positions. 2) For each open position, call solana_token_snapshot to get current price and volume. 3) Identify dead money: positions where price has not moved >5% in either direction for 4+ hours, OR volume has dropped below $5K, OR the token is trending toward zero with no recovery signals. 4) For any dead money position, execute an exit via solana_trade (sell). 5) Call solana_daily_log with what you found and any exits executed. Do NOT just list positions — actually check each one and act on dead money.",
+      enabled: true,
+    },
+    {
+      id: "risk-audit",
+      schedule: "30 */2 * * *",
+      agentId,
+      message:
+        "CRON_JOB: portfolio_risk_audit. You are running a portfolio risk and exposure audit. Do these steps: 1) Call solana_killswitch_status and solana_capital_status to confirm trading is allowed and you know available capital and limits. 2) Call solana_positions (or solana_state_load) to list all open positions with PnL and size. 3) For each material position, call solana_token_risk and solana_token_liquidity to check stress: liquidity depth, concentration, rug/momentum flags. 4) Call solana_journal_summary and solana_trades (recent window) to estimate correlation risk (many positions in one narrative?) and drawdown context. 5) Call solana_risk_denials for recent blocks. 6) Call solana_memory_write with category 'portfolio_risk_audit' summarizing exposure, worst-case scenarios, and any recommended risk-off actions. 7) Call solana_daily_log with a short audit summary. Do not open new trades in this job — audit only.",
       enabled: true,
     },
     {
@@ -629,6 +637,22 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: strategy_evolution. You are running the strategy evolution cycle (SKILL.md Step 9). Do these steps: 1) Call solana_journal_summary to review recent trade performance, win rate, and patterns. 2) Call solana_strategy_state to see current feature weights and strategy version. 3) Call solana_memory_search for 'pre_trade_rationale' to review your recent decision reasoning. 4) Call solana_memory_search for patterns like 'momentum_win', 'bad_liquidity', 'late_entry' to find what features predicted wins vs losses. 5) Analyze which weights need adjustment based on evidence. 6) If you have 20+ closed trades since last evolution: call solana_strategy_update with adjusted weights (respect anti-drift guardrails: max delta ±0.10, floor 0.02, cap 0.40, sum 0.95-1.05). Increment strategy version. 7) Call solana_memory_write with category 'strategy_evolution' documenting your reasoning. 8) Call solana_daily_log with evolution results. Only update weights if evidence supports it.",
+      enabled: true,
+    },
+    {
+      id: "subscription-cleanup",
+      schedule: "15 * * * *",
+      agentId,
+      message:
+        "CRON_JOB: subscription_cleanup. You are reconciling Bitquery streaming subscriptions. Do these steps: 1) Call solana_bitquery_subscriptions to list all active streams and expiry/status. 2) Call solana_positions (or solana_state_load) to know which token mints you still hold or actively monitor. 3) For subscriptions tied to sold/closed tokens or obsolete discovery templates, call solana_bitquery_unsubscribe with the subscriptionId. 4) For streams you must keep but that are expired or near expiry, call solana_bitquery_subscription_reopen as needed. 5) Do NOT mass-resubscribe every run — only fix drift (stale or expired). 6) Call solana_daily_log with what you closed or renewed. Follow SKILL.md subscription lifecycle: avoid subscribe/unsubscribe churn.",
+      enabled: true,
+    },
+    {
+      id: "whale-watch",
+      schedule: "45 */2 * * *",
+      agentId,
+      message:
+        "CRON_JOB: whale_activity_scan. You are scanning for large-wallet and smart-money style activity on relevant tokens. Do these steps: 1) Call solana_scan_launches or solana_scan_hot_pairs (as appropriate) to pick a short list of high-attention mints. 2) For each candidate mint, call solana_token_flows and solana_token_holders to detect large buys/sells, top holder shifts, and unusual accumulation or distribution. 3) Optionally use solana_bitquery_catalog with a template suited to large transfers if raw flow data is insufficient. 4) Call solana_memory_write with category 'whale_watch' summarizing notable wallets, flows, and whether action is warranted. 5) Call solana_daily_log with findings. This is surveillance — do not trade unless your strategy and risk checks already justify it.",
       enabled: true,
     },
     {
