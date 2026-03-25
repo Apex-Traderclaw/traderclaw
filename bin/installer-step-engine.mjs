@@ -619,7 +619,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "0 * * * *",
       agentId,
       message:
-        "CRON_JOB: alpha_scan. You are running the hourly alpha scan. Do these steps in order: 1) Call solana_scan_launches to get the latest token launches. 2) For each token with volume > $20K and market cap > $50K, call solana_token_snapshot to get full stats. 3) Call solana_token_risk for any token that passes the snapshot check. 4) If a token passes all filters (risk score acceptable, liquidity sufficient, holder distribution healthy), call solana_token_holders and solana_token_flows for deep analysis. 5) Score qualifying tokens using your strategy weights from solana_strategy_state. 6) If any token scores above your entry threshold, execute via solana_trade with proper position sizing. 7) Call solana_daily_log with a summary of what you scanned, how many tokens passed each filter stage, and any trades executed. Do NOT just describe what you would do — actually call the tools.",
+        "CRON_JOB: alpha_scan — Call solana_scan_launches to find new token launches from the last hour. For each candidate, call solana_token_snapshot to check price, volume, and age. Filter for: 24h volume above 50000 USD, market cap above 10000 USD. For tokens that pass, call solana_token_holders to check holder distribution (skip if top holder owns more than 30 percent), then solana_token_risk to check for mint/freeze authority (hard skip if present). If a token passes all checks, call solana_alpha_submit to add it to the alpha buffer for the CTO's next heartbeat evaluation. Log all scanned tokens and results using solana_memory_write. Do not execute trades directly — only submit to alpha buffer. Do not ask questions.",
       enabled: true,
     },
     {
@@ -627,7 +627,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "0 */2 * * *",
       agentId,
       message:
-        "CRON_JOB: dead_money_sweep. You are running the dead money sweep. Do these steps: 1) Call solana_state_load to get all open positions. 2) For each open position, call solana_token_snapshot to get current price and volume. 3) Identify dead money: positions where price has not moved >5% in either direction for 4+ hours, OR volume has dropped below $5K, OR the token is trending toward zero with no recovery signals. 4) For any dead money position, execute an exit via solana_trade (sell). 5) Call solana_daily_log with what you found and any exits executed. Do NOT just list positions — actually check each one and act on dead money.",
+        "CRON_JOB: dead_money_sweep — Check all open LOCAL_MANAGED positions for dead money. Exit stale positions. Tag as dead_money.",
       enabled: true,
     },
     {
@@ -635,7 +635,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "30 */2 * * *",
       agentId,
       message:
-        "CRON_JOB: portfolio_risk_audit. You are running a portfolio risk and exposure audit. Do these steps: 1) Call solana_killswitch_status and solana_capital_status to confirm trading is allowed and you know available capital and limits. 2) Call solana_positions (or solana_state_load) to list all open positions with PnL and size. 3) For each material position, call solana_token_risk and solana_token_liquidity to check stress: liquidity depth, concentration, rug/momentum flags. 4) Call solana_journal_summary and solana_trades (recent window) to estimate correlation risk (many positions in one narrative?) and drawdown context. 5) Call solana_risk_denials for recent blocks. 6) Call solana_memory_write with category 'portfolio_risk_audit' summarizing exposure, worst-case scenarios, and any recommended risk-off actions. 7) Call solana_daily_log with a short audit summary. Do not open new trades in this job — audit only.",
+        "CRON_JOB: portfolio_risk_audit — Portfolio stress tests, exposure checks, correlation analysis, drawdown monitoring. Produce risk report for CTO.",
       enabled: true,
     },
     {
@@ -643,7 +643,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "0 */3 * * *",
       agentId,
       message:
-        "CRON_JOB: source_reputation_recalc. You are recalculating alpha source reputation scores. Do these steps: 1) Call solana_alpha_history to get recent signal history (last 7 days). 2) Call solana_alpha_sources to get current per-source performance stats. 3) For each source, calculate: win rate (signals that led to profitable trades vs total signals), average return, signal-to-noise ratio (quality signals vs spam). 4) Call solana_memory_search for 'source_reputation' to get existing reputation data. 5) Update reputation scores: call solana_memory_write with category 'source_reputation' for each source with updated stats. 6) Flag any source whose win rate dropped below 30% or whose signals consistently fail filters. 7) Call solana_daily_log with reputation changes. Actually compute and write — do not just describe the process.",
+        "CRON_JOB: source_reputation_recalc — Analyze which alpha signal sources led to wins vs losses. Update reputation tracking in memory.",
       enabled: true,
     },
     {
@@ -651,7 +651,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "30 */3 * * *",
       agentId,
       message:
-        "CRON_JOB: meta_rotation_analysis. You are analyzing narrative/meta rotation in the memecoin market. Do these steps: 1) Call x_search_tweets with queries for trending memecoin narratives (e.g. 'solana memecoin', 'new meta', 'pump fun') to see what people are talking about. 2) Call solana_scan_launches to see what categories of tokens are launching (AI, animals, political, celebrity, etc). 3) Call solana_memory_search for 'meta_rotation' to get your previous rotation observations. 4) Analyze: which narratives are heating up (increasing launches + social volume)? Which are cooling down (fewer launches, declining interest)? Are there any new narratives emerging? 5) Call solana_memory_write with category 'meta_rotation' documenting: hot narratives, cooling narratives, emerging narratives, and any rotation signals. 6) Call solana_daily_log with your rotation analysis. Do the actual research — do not just list categories.",
+        "CRON_JOB: meta_rotation_analysis — Analyze narrative clusters across recent scans and trades. Identify hot vs cooling metas. Write observations to memory.",
       enabled: true,
     },
     {
@@ -659,7 +659,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "0 */4 * * *",
       agentId,
       message:
-        "CRON_JOB: strategy_evolution. You are running the strategy evolution cycle (SKILL.md Step 9). Do these steps: 1) Call solana_journal_summary to review recent trade performance, win rate, and patterns. 2) Call solana_strategy_state to see current feature weights and strategy version. 3) Call solana_memory_search for 'pre_trade_rationale' to review your recent decision reasoning. 4) Call solana_memory_search for patterns like 'momentum_win', 'bad_liquidity', 'late_entry' to find what features predicted wins vs losses. 5) Analyze which weights need adjustment based on evidence. 6) If you have 20+ closed trades since last evolution: call solana_strategy_update with adjusted weights (respect anti-drift guardrails: max delta ±0.10, floor 0.02, cap 0.40, sum 0.95-1.05). Increment strategy version. 7) Call solana_memory_write with category 'strategy_evolution' documenting your reasoning. 8) Call solana_daily_log with evolution results. Only update weights if evidence supports it.",
+        "CRON_JOB: strategy_evolution — Review trade journal, compute weight adjustments, update strategy. Only update if sufficient closed trades have accumulated.",
       enabled: true,
     },
     {
@@ -667,7 +667,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "15 * * * *",
       agentId,
       message:
-        "CRON_JOB: subscription_cleanup. You are reconciling Bitquery streaming subscriptions. Do these steps: 1) Call solana_bitquery_subscriptions to list all active streams and expiry/status. 2) Call solana_positions (or solana_state_load) to know which token mints you still hold or actively monitor. 3) For subscriptions tied to sold/closed tokens or obsolete discovery templates, call solana_bitquery_unsubscribe with the subscriptionId. 4) For streams you must keep but that are expired or near expiry, call solana_bitquery_subscription_reopen as needed. 5) Do NOT mass-resubscribe every run — only fix drift (stale or expired). 6) Call solana_daily_log with what you closed or renewed. Follow SKILL.md subscription lifecycle: avoid subscribe/unsubscribe churn.",
+        "CRON_JOB: subscription_cleanup — Check active Bitquery subscriptions. Unsubscribe from streams no longer needed (sold tokens, closed positions).",
       enabled: true,
     },
     {
@@ -675,7 +675,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "45 */2 * * *",
       agentId,
       message:
-        "CRON_JOB: whale_activity_scan. You are scanning for large-wallet and smart-money style activity on relevant tokens. Do these steps: 1) Call solana_scan_launches or solana_scan_hot_pairs (as appropriate) to pick a short list of high-attention mints. 2) For each candidate mint, call solana_token_flows and solana_token_holders to detect large buys/sells, top holder shifts, and unusual accumulation or distribution. 3) Optionally use solana_bitquery_catalog with a template suited to large transfers if raw flow data is insufficient. 4) Call solana_memory_write with category 'whale_watch' summarizing notable wallets, flows, and whether action is warranted. 5) Call solana_daily_log with findings. This is surveillance — do not trade unless your strategy and risk checks already justify it.",
+        "CRON_JOB: whale_activity_scan — Scan for large wallet movements, deployer activity, accumulation patterns. Detect smart money consensus and fresh wallet surges.",
       enabled: true,
     },
     {
@@ -683,7 +683,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "0 4 * * *",
       agentId,
       message:
-        "CRON_JOB: daily_performance_report. You are generating the daily performance report. Do these steps: 1) Call solana_state_load to get current portfolio state (positions, capital, realized PnL). 2) Call solana_journal_summary to get trade performance stats. 3) Call solana_memory_search for 'meta_rotation' to get current market narrative state. 4) Call solana_memory_search for 'source_reputation' to get alpha source performance. 5) Compile a daily summary: total PnL (realized + unrealized), number of trades, win rate, best/worst trade, current open positions, capital remaining, strategy version, market regime. 6) Post the summary to X using x_post_tweet on the solana-trader profile. Keep under 280 chars — focus on key stats (PnL, win rate, trades, regime). 7) Call solana_daily_log with the full detailed report. Make it data-driven — actual numbers, not vague descriptions.",
+        "CRON_JOB: daily_performance_report — Calculate daily PnL, aggregate win/loss stats, source reputation summary, write comprehensive memory entry.",
       enabled: true,
     },
   ];

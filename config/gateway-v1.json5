@@ -30,14 +30,14 @@
       {
         id: "strategy-evolution",
         schedule: "0 */4 * * *",          // Every 4 hours
-        agentId: "main",
+        agentId: "strategy-researcher",
         message: "CRON_JOB: strategy_evolution — Review trade journal, compute weight adjustments, update strategy. Only update if sufficient closed trades have accumulated.",
         enabled: true
       },
       {
         id: "source-reputation",
         schedule: "0 */3 * * *",          // Every 3 hours
-        agentId: "main",
+        agentId: "alpha-signal-analyst",
         message: "CRON_JOB: source_reputation_recalc — Analyze which alpha signal sources led to wins vs losses. Update reputation tracking in memory.",
         enabled: true
       },
@@ -46,8 +46,8 @@
       {
         id: "risk-audit",
         schedule: "0 */2 * * *",          // Every 2 hours
-        agentId: "main",
-        message: "CRON_JOB: portfolio_risk_audit — Portfolio stress tests, exposure checks, correlation analysis, drawdown monitoring.",
+        agentId: "risk-officer",
+        message: "CRON_JOB: portfolio_risk_audit — Portfolio stress tests, exposure checks, correlation analysis, drawdown monitoring. Produce risk report for CTO.",
         enabled: true
       },
 
@@ -55,23 +55,39 @@
       {
         id: "meta-rotation",
         schedule: "30 */3 * * *",         // Every 3 hours at :30
-        agentId: "main",
+        agentId: "onchain-analyst",
         message: "CRON_JOB: meta_rotation_analysis — Analyze narrative clusters across recent scans and trades. Identify hot vs cooling metas. Write observations to memory.",
         enabled: true
       },
 
-      // ── Portfolio Maintenance ─────────────────────────────────────
+      // ── V2 Specialist Agents ──────────────────────────────────────
+      {
+        id: "whale-watch",
+        schedule: "0 */2 * * *",          // Every 2 hours
+        agentId: "smart-money-tracker",
+        message: "CRON_JOB: whale_activity_scan — Scan for large wallet movements, deployer activity, accumulation patterns. Detect smart money consensus and fresh wallet surges.",
+        enabled: true
+      },
+      {
+        id: "sentiment-trend",
+        schedule: "0 */4 * * *",          // Every 4 hours
+        agentId: "social-analyst",
+        message: "CRON_JOB: sentiment_trend_analysis — Analyze Twitter/X trending tokens, influencer clustering, mention velocity, narrative exhaustion signals. Write to memory.",
+        enabled: true
+      },
+
+      // ── Portfolio Maintenance (CTO) ───────────────────────────────
       {
         id: "dead-money-sweep",
         schedule: "0 */2 * * *",          // Every 2 hours
-        agentId: "main",
+        agentId: "cto",
         message: "CRON_JOB: dead_money_sweep — Check all open LOCAL_MANAGED positions for dead money. Exit stale positions. Tag as dead_money.",
         enabled: true
       },
       {
         id: "subscription-cleanup",
         schedule: "0 * * * *",            // Every hour
-        agentId: "main",
+        agentId: "cto",
         message: "CRON_JOB: subscription_cleanup — Check active Bitquery subscriptions. Unsubscribe from streams no longer needed (sold tokens, closed positions).",
         enabled: true
       },
@@ -80,17 +96,26 @@
       {
         id: "daily-report",
         schedule: "0 4 * * *",            // Daily at 04:00 UTC
-        agentId: "main",
+        agentId: "cto",
         message: "CRON_JOB: daily_performance_report — Calculate daily PnL, aggregate win/loss stats, source reputation summary, write comprehensive memory entry.",
         enabled: true
       },
 
-      // ── Whale / Smart Money Tracking ──────────────────────────────
+      // ── V2 Execution Health ───────────────────────────────────────
       {
-        id: "whale-watch",
-        schedule: "0 */2 * * *",          // Every 2 hours
-        agentId: "main",
-        message: "CRON_JOB: whale_activity_scan — Scan for large wallet movements, deployer activity, and accumulation patterns across watched tokens.",
+        id: "execution-health",
+        schedule: "0 */6 * * *",          // Every 6 hours
+        agentId: "execution-specialist",
+        message: "CRON_JOB: execution_health_review — Review recent trade executions for slippage patterns, timing efficiency, failed transactions. Report execution quality metrics.",
+        enabled: true
+      },
+
+      // ── Alpha Scanning ──────────────────────────────────────────────
+      {
+        id: "alpha-scan",
+        schedule: "0 * * * *",            // Every hour
+        agentId: "alpha-signal-analyst",
+        message: "CRON_JOB: alpha_scan — Call solana_scan_launches to find new token launches from the last hour. For each candidate, call solana_token_snapshot to check price, volume, and age. Filter for: 24h volume above 50000 USD, market cap above 10000 USD. For tokens that pass, call solana_token_holders to check holder distribution (skip if top holder owns more than 30 percent), then solana_token_risk to check for mint/freeze authority (hard skip if present). If a token passes all checks, call solana_alpha_submit to add it to the alpha buffer for the CTO's next heartbeat evaluation. Log all scanned tokens and results using solana_memory_write. Do not execute trades directly — only submit to alpha buffer. Do not ask questions.",
         enabled: true
       }
     ]
