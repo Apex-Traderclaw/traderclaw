@@ -1566,7 +1566,7 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_capital_status",
-      description: "Get your current capital status \u2014 SOL balance, open position count, unrealized PnL, daily notional used, daily loss, and effective limits (adjusted by entitlements).",
+      description: "Get your current capital status \u2014 SOL balance, open position count, unrealized/realized PnL, daily notional used, daily loss, and effective limits. **PnL:** `totalUnrealizedPnl` / `totalRealizedPnl` are USD (DB); use `totalUnrealizedPnlSol` / `totalRealizedPnlSol` / `totalPnlSol` for SOL (derived via `solPriceUsd`, same as positions API).",
       parameters: Type.Object({}),
       execute: wrapExecute(
         async () => get(`/api/capital/status?walletId=${walletId}`)
@@ -1574,7 +1574,7 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_positions",
-      description: "List your current trading positions with unrealized PnL, entry price, current price, stop-loss/take-profit settings, and management mode. Call at the START of every trading cycle for interrupt check. Also use to detect dead money (flat positions).",
+      description: "List trading positions with mark-to-market. **PnL:** `realizedPnl` / `unrealizedPnl` are USD as stored; prefer `realizedPnlSol` / `unrealizedPnlSol` when reasoning in SOL. `unrealizedReturnPct` is ROI on cost basis (for sweep-dead-tokens logic). See response `pnlNote`.",
       parameters: Type.Object({
         status: Type.Optional(Type.String({ description: "Filter by status: 'open', 'closed', or omit for all" }))
       }),
@@ -1583,6 +1583,38 @@ var solanaTraderPlugin = {
         if (params.status) path2 += `&status=${params.status}`;
         return get(path2);
       })
+    });
+    api.registerTool({
+      name: "solana_wallet_token_balance",
+      description: "Read on-chain SPL token balance (UI amount) for your trading wallet and a token mint. Same balance path as server exit monitoring (`balanceOf`).",
+      parameters: Type.Object({
+        tokenAddress: Type.String({ description: "SPL token mint address" })
+      }),
+      execute: wrapExecute(
+        async (_id, params) => post("/api/wallet/token-balance", {
+          walletId,
+          tokenAddress: params.tokenAddress
+        })
+      )
+    });
+    api.registerTool({
+      name: "solana_sweep_dead_tokens",
+      description: "Sell 100% of each OPEN position whose unrealizedReturnPct is \u2264 -maxLossPct (default 80), using the same mark-to-market as positions. Use dryRun:true first to list candidates. Executes sequential full exits (sellPct 100). Requires trade:execute scope.",
+      parameters: Type.Object({
+        maxLossPct: Type.Optional(
+          Type.Number({ description: "Threshold: sweep when unrealizedReturnPct <= -maxLossPct (default 80)" })
+        ),
+        slippageBps: Type.Optional(Type.Number({ description: "Per-exit slippage in bps (default 300)" })),
+        dryRun: Type.Optional(Type.Boolean({ description: "If true, only return candidate tokens without selling" }))
+      }),
+      execute: wrapExecute(
+        async (_id, params) => post("/api/wallet/sweep-dead-tokens", {
+          walletId,
+          maxLossPct: params.maxLossPct,
+          slippageBps: params.slippageBps,
+          dryRun: params.dryRun
+        })
+      )
     });
     api.registerTool({
       name: "solana_funding_instructions",
