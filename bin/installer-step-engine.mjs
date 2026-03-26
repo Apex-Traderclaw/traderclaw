@@ -619,7 +619,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "0 * * * *",
       agentId,
       message:
-        "CRON_JOB: alpha_scan — Call solana_scan_launches to find new token launches from the last hour. For each candidate, call solana_token_snapshot to check price, volume, and age. Filter for: 24h volume above 50000 USD, market cap above 10000 USD. For tokens that pass, call solana_token_holders to check holder distribution (skip if top holder owns more than 30 percent), then solana_token_risk to check for mint/freeze authority (hard skip if present). If a token passes all checks, call solana_alpha_submit to add it to the alpha buffer for the CTO's next heartbeat evaluation. Log all scanned tokens and results using solana_memory_write. Do not execute trades directly — only submit to alpha buffer. Do not ask questions.",
+        "CRON_JOB: alpha_scan — Call solana_scan_launches to find new token launches from the last hour. For each candidate, call solana_token_snapshot to check price, volume, and age. Filter for: 24h volume above 50000 USD, market cap above 10000 USD. For tokens that pass, call solana_token_holders to check holder distribution (skip if top holder owns more than 30 percent), then solana_token_risk to check for mint/freeze authority (hard skip if present). If a token passes all checks, use solana_trade_precheck and consider trade execution using solana_trade_execute. Log all scanned tokens and results using solana_memory_write. Do not ask questions.",
       enabled: true,
     },
     {
