@@ -1254,14 +1254,31 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_trade_precheck",
-      description: "Pre-trade risk check \u2014 validates a proposed trade against risk rules, kill switch, entitlement limits, and on-chain conditions. Returns approved/denied with reasons and capped size. Always call this before executing a trade. Buy: sizeSol required; do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored.",
+      description: "Pre-trade risk check \u2014 validates a proposed trade against risk rules, kill switch, entitlement limits, and on-chain conditions. Returns approved/denied with reasons and capped size. Always call this before executing a trade. Buy: sizeSol required; do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored. Optional exit fields (trailingStopPct, trailingStop) are accepted to mirror execute payloads; sizing logic ignores them.",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         side: Type.Union([Type.Literal("buy"), Type.Literal("sell")], { description: "Trade direction" }),
         sizeSol: Type.Optional(Type.Number({ description: "Position size in SOL \u2014 required for buy, omit for sell" })),
         sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1\u2013100 (100 = full exit) \u2014 sell only; preferred over sizeTokens if both sent" })),
         sizeTokens: Type.Optional(Type.Number({ description: "Token amount to sell \u2014 sell only; ignored if sellPct is also provided" })),
-        slippageBps: Type.Optional(Type.Number({ description: "Slippage tolerance in basis points (e.g., 300 = 3%)" }))
+        slippageBps: Type.Optional(Type.Number({ description: "Slippage tolerance in basis points (e.g., 300 = 3%)" })),
+        trailingStopPct: Type.Optional(Type.Number({ description: "Optional \u2014 same as execute; ignored for policy sizing" })),
+        trailingStop: Type.Optional(
+          Type.Object({
+            levels: Type.Array(
+              Type.Object({
+                percentage: Type.Number({ description: "Trailing drawdown % from the armed high once the level is active" }),
+                amount: Type.Optional(Type.Number({ description: "% of position to sell at this level (1\u2013100). Server default 100." })),
+                triggerAboveATH: Type.Optional(
+                  Type.Number({
+                    description: "Optional. % above session ATH before this level arms. If omitted, API defaults to 100 (2\xD7 ATH)."
+                  })
+                )
+              }),
+              { minItems: 1, maxItems: 5, description: "Multi-level trailing (optional on precheck)" }
+            )
+          })
+        )
       }),
       execute: wrapExecute(async (_id, params) => {
         const body = {
@@ -1269,6 +1286,13 @@ var solanaTraderPlugin = {
           side: params.side,
           slippageBps: params.slippageBps
         };
+        if (params.trailingStopPct !== void 0) {
+          body.trailingStopPct = params.trailingStopPct;
+        }
+        const ts = params.trailingStop;
+        if (ts?.levels && Array.isArray(ts.levels) && ts.levels.length > 0) {
+          body.trailingStop = ts;
+        }
         if (params.side === "buy") {
           body.sizeSol = params.sizeSol;
         } else {
@@ -1283,7 +1307,7 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_trade_execute",
-      description: "Execute a trade on Solana via the SpyFly bot. Enforces risk rules before proxying to on-chain execution. Returns trade ID, position ID, and transaction signature. IMPORTANT: tpLevels alone (e.g. [10, 15]) means EACH level sells 100% of the position at that gain \u2014 use tpExits for partials (e.g. +10% sell 50%, +15% sell 100%). Buy: sizeSol required; do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored.",
+      description: "Execute a trade on Solana via the SpyFly bot. Enforces risk rules before proxying to on-chain execution. Returns trade ID, position ID, and transaction signature. IMPORTANT: tpLevels alone (e.g. [10, 15]) means EACH level sells 100% of the position at that gain \u2014 use tpExits for partials (e.g. +10% sell 50%, +15% sell 100%). Trailing: use `trailingStopPct` for a single simple trailing %, or `trailingStop.levels` (1\u20135) for multi-level trailing with optional `triggerAboveATH` per level (% above session ATH before that level arms; if omitted, server defaults to 100 i.e. 2\xD7 ATH). When both are sent, `trailingStop` wins. Buy: sizeSol required; do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored.",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         side: Type.Union([Type.Literal("buy"), Type.Literal("sell")], { description: "Trade direction" }),
@@ -1318,7 +1342,37 @@ var solanaTraderPlugin = {
             { description: "Multi-level stop-loss with partial exits (optional). Otherwise use slPct for a single full exit." }
           )
         ),
-        trailingStopPct: Type.Optional(Type.Number({ description: "Trailing stop percentage" })),
+        trailingStopPct: Type.Optional(
+          Type.Number({
+            description: "Single trailing-stop % (legacy). Ignored if `trailingStop` is provided."
+          })
+        ),
+        trailingStop: Type.Optional(
+          Type.Object({
+            levels: Type.Array(
+              Type.Object({
+                percentage: Type.Number({
+                  description: "Once armed, sell when price drops this % from the high (trailing drawdown)."
+                }),
+                amount: Type.Optional(
+                  Type.Number({
+                    description: "% of position to sell when this level fires (1\u2013100). Server default 100."
+                  })
+                ),
+                triggerAboveATH: Type.Optional(
+                  Type.Number({
+                    description: "Optional. Session price must reach this % above session ATH before this level arms (e.g. 50 \u2192 1.5\xD7 ATH). If omitted, API defaults to 100 (2\xD7 ATH)."
+                  })
+                )
+              }),
+              {
+                minItems: 1,
+                maxItems: 5,
+                description: "Ordered trailing-stop levels (up to 5)."
+              }
+            )
+          })
+        ),
         managementMode: Type.Optional(
           Type.Union([Type.Literal("LOCAL_MANAGED"), Type.Literal("SERVER_MANAGED")], {
             description: "Advisory only \u2014 server decides position mode internally. Sent for future compatibility."
@@ -1337,9 +1391,14 @@ var solanaTraderPlugin = {
           symbol: params.symbol,
           slippageBps: params.slippageBps,
           slPct: params.slPct,
-          trailingStopPct: params.trailingStopPct,
           managementMode: params.managementMode
         };
+        const tsExecute = params.trailingStop;
+        if (tsExecute?.levels && Array.isArray(tsExecute.levels) && tsExecute.levels.length > 0) {
+          body.trailingStop = tsExecute;
+        } else if (params.trailingStopPct !== void 0) {
+          body.trailingStopPct = params.trailingStopPct;
+        }
         if (params.side === "buy") {
           body.sizeSol = params.sizeSol;
         } else {
