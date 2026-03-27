@@ -8,8 +8,12 @@ import {
   orchestratorRequest
 } from "./chunk-T4YWGIIR.js";
 import {
+  readRecoverySecretFromDisk,
+  writeRecoverySecretToOpenclawAtomic
+} from "./chunk-SBYHSJLU.js";
+import {
   SessionManager
-} from "./chunk-GYXPEC7O.js";
+} from "./chunk-PZCY6BQK.js";
 
 // index.ts
 import { Type } from "@sinclair/typebox";
@@ -781,6 +785,7 @@ function parseConfig(raw) {
   const gatewayBaseUrl = typeof obj.gatewayBaseUrl === "string" ? obj.gatewayBaseUrl : void 0;
   const gatewayToken = typeof obj.gatewayToken === "string" ? obj.gatewayToken : void 0;
   const dataDir = typeof obj.dataDir === "string" ? obj.dataDir : void 0;
+  const recoverySecret = typeof obj.recoverySecret === "string" ? obj.recoverySecret : void 0;
   const xConfig = parseXConfig(obj);
   return {
     orchestratorUrl,
@@ -789,6 +794,7 @@ function parseConfig(raw) {
     externalUserId,
     refreshToken,
     walletPublicKey,
+    recoverySecret,
     apiTimeout,
     agentId,
     gatewayBaseUrl,
@@ -921,6 +927,22 @@ var solanaTraderPlugin = {
       walletPrivateKeyProvider: () => {
         const runtimeKey = process.env.TRADERCLAW_WALLET_PRIVATE_KEY || "";
         return runtimeKey.trim() || void 0;
+      },
+      recoverySecretProvider: async () => {
+        const fromDisk = readRecoverySecretFromDisk();
+        if (fromDisk) return fromDisk;
+        const s = config.recoverySecret;
+        return typeof s === "string" && s.trim().length > 0 ? s.trim() : void 0;
+      },
+      onRecoverySecretRotated: (newSecret) => {
+        try {
+          writeRecoverySecretToOpenclawAtomic(newSecret);
+          api.logger.info("[solana-trader] Persisted rotated recovery secret to openclaw.json");
+        } catch (err) {
+          api.logger.warn(
+            `[solana-trader] Failed to write rotated recovery secret: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
       },
       clientLabel: "openclaw-plugin-runtime",
       timeout: apiTimeout,
