@@ -153,13 +153,6 @@ var SessionManager = class {
     this.timeout = config.timeout || 15e3;
     this.onTokensRotated = config.onTokensRotated;
     this.log = config.logger || { info: console.log, warn: console.warn, error: console.error };
-    const initTok = config.initialAccessToken;
-    const initExp = config.initialAccessTokenExpiresAt;
-    const skewMs = 5e3;
-    if (initTok && initExp != null && Date.now() < initExp - skewMs) {
-      this.accessToken = initTok;
-      this.accessTokenExpiresAt = initExp;
-    }
   }
   async signup(externalUserId) {
     const res = await rawFetch(
@@ -362,8 +355,6 @@ var SessionManager = class {
     if (this.onTokensRotated) {
       this.onTokensRotated({
         refreshToken: tokens.refreshToken,
-        accessToken: tokens.accessToken,
-        accessTokenExpiresAt: this.accessTokenExpiresAt,
         walletPublicKey: this.walletPublicKey || void 0
       });
     }
