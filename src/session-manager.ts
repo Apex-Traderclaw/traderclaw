@@ -204,7 +204,9 @@ export class SessionManager {
   private log: { info: (msg: string) => void; warn: (msg: string) => void; error: (msg: string) => void };
   private refreshInFlight: Promise<void> | null = null;
   private refreshTokenTtlMs: number = 0;
-  private proactiveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private accessTokenTtlMs: number = 0;
+  private tokenGeneration = 0;
+  private proactiveRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private proactiveRefreshRunning = false;
 
   constructor(config: SessionManagerConfig) {
@@ -303,6 +305,8 @@ export class SessionManager {
       throw new Error("No refresh token available. Must authenticate via challenge flow.");
     }
 
+    const genBefore = this.tokenGeneration;
+
     const res = await rawFetch(
       `${this.baseUrl}/api/session/refresh`,
       "POST",
@@ -313,9 +317,13 @@ export class SessionManager {
 
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) {
-        this.accessToken = null;
-        this.refreshTokenValue = null;
-        this.accessTokenExpiresAt = 0;
+        if (this.tokenGeneration === genBefore) {
+          this.accessToken = null;
+          this.refreshTokenValue = null;
+          this.accessTokenExpiresAt = 0;
+        } else {
+          this.log.info("[session] Stale 401/403 ignored — tokens already rotated by concurrent call.");
+        }
         throw new Error("Refresh token expired or revoked. Must re-authenticate via challenge flow.");
       }
       throw new Error(`Token refresh failed (HTTP ${res.status}): ${JSON.stringify(res.data)}`);
@@ -400,15 +408,7 @@ export class SessionManager {
       return this.accessToken;
     }
 
-    if (!this.refreshInFlight) {
-      this.refreshInFlight = this.ensureRefreshed();
-    }
-
-    try {
-      await this.refreshInFlight;
-    } finally {
-      this.refreshInFlight = null;
-    }
+    await this.unifiedRefresh();
 
     if (!this.accessToken) {
       throw new Error(
@@ -423,15 +423,7 @@ export class SessionManager {
     this.accessToken = null;
     this.accessTokenExpiresAt = 0;
 
-    if (!this.refreshInFlight) {
-      this.refreshInFlight = this.ensureRefreshed();
-    }
-
-    try {
-      await this.refreshInFlight;
-    } finally {
-      this.refreshInFlight = null;
-    }
+    await this.unifiedRefresh();
 
     if (!this.accessToken) {
       throw new Error(
@@ -440,6 +432,21 @@ export class SessionManager {
     }
 
     return this.accessToken;
+  }
+
+  /**
+   * Single-mutex refresh: all paths (proactive timer, on-demand getAccessToken,
+   * handleUnauthorized) funnel through here so only one refresh HTTP call is
+   * ever in-flight. Prevents the race where two concurrent refresh() calls
+   * with the same rotating refresh token kill the session.
+   */
+  private async unifiedRefresh(): Promise<void> {
+    if (!this.refreshInFlight) {
+      this.refreshInFlight = this.ensureRefreshed().finally(() => {
+        this.refreshInFlight = null;
+      });
+    }
+    await this.refreshInFlight;
   }
 
   isAuthenticated(): boolean {
@@ -468,9 +475,11 @@ export class SessionManager {
   }
 
   private applyTokens(tokens: SessionTokens): void {
+    this.tokenGeneration++;
     this.accessToken = tokens.accessToken;
     this.refreshTokenValue = tokens.refreshToken;
     this.accessTokenExpiresAt = Date.now() + tokens.accessTokenTtlSeconds * 1000;
+    this.accessTokenTtlMs = tokens.accessTokenTtlSeconds * 1000;
     this.refreshTokenTtlMs = (tokens.refreshTokenTtlSeconds || 0) * 1000;
     this.sessionId = tokens.session.id;
     this.tier = tokens.session.tier;
@@ -489,14 +498,19 @@ export class SessionManager {
   }
 
   /**
-   * Schedule a background token refresh well before the refresh token expires.
-   * Uses 50% of refresh token TTL (clamped between 2 min and 20 min).
-   * Each successful refresh rotates both tokens, keeping the chain alive
-   * even when no tool calls are happening (idle heartbeat gaps, gateway restarts).
+   * Schedule a repeating background token refresh. Uses setInterval so the
+   * chain cannot silently break if a single cycle fails to re-schedule.
+   *
+   * Interval = min(50% refresh-token TTL, accessTokenTtl - 2.5 min buffer),
+   * clamped between 2 min and 20 min. Falls back to 10 min when TTLs unknown.
+   *
+   * Goes through unifiedRefresh() so it shares the same mutex as on-demand
+   * callers and can fall back to the full challenge flow when refresh tokens
+   * are permanently revoked.
    */
   private scheduleProactiveRefresh(): void {
     if (this.proactiveRefreshTimer) {
-      clearTimeout(this.proactiveRefreshTimer);
+      clearInterval(this.proactiveRefreshTimer);
       this.proactiveRefreshTimer = null;
     }
 
@@ -511,17 +525,22 @@ export class SessionManager {
       intervalMs = DEFAULT_INTERVAL_MS;
     }
 
-    this.proactiveRefreshTimer = setTimeout(async () => {
+    if (this.accessTokenTtlMs > 0) {
+      const accessBasedMs = Math.max(MIN_INTERVAL_MS, this.accessTokenTtlMs - 150_000);
+      intervalMs = Math.min(intervalMs, accessBasedMs);
+    }
+
+    this.log.info(`[session] Proactive refresh scheduled every ${Math.round(intervalMs / 1000)}s`);
+
+    this.proactiveRefreshTimer = setInterval(async () => {
       if (this.proactiveRefreshRunning) return;
       this.proactiveRefreshRunning = true;
       try {
-        if (!this.refreshTokenValue) return;
         this.log.info(`[session] Proactive token refresh (interval: ${Math.round(intervalMs / 1000)}s)...`);
-        await this.refresh();
+        await this.unifiedRefresh();
         this.log.info("[session] Proactive refresh succeeded — token chain extended.");
       } catch (err: any) {
-        this.log.warn(`[session] Proactive refresh failed: ${err.message}. Will retry next cycle or on-demand.`);
-        this.scheduleProactiveRefresh();
+        this.log.warn(`[session] Proactive refresh failed: ${err.message}. Will retry next interval or on-demand.`);
       } finally {
         this.proactiveRefreshRunning = false;
       }
@@ -534,7 +553,7 @@ export class SessionManager {
 
   destroy(): void {
     if (this.proactiveRefreshTimer) {
-      clearTimeout(this.proactiveRefreshTimer);
+      clearInterval(this.proactiveRefreshTimer);
       this.proactiveRefreshTimer = null;
     }
   }

@@ -9,7 +9,7 @@ import {
 } from "./chunk-T4YWGIIR.js";
 import {
   SessionManager
-} from "./chunk-QSICXLW7.js";
+} from "./chunk-GYXPEC7O.js";
 
 // index.ts
 import { Type } from "@sinclair/typebox";
