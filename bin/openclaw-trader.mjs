@@ -1015,11 +1015,6 @@ async function cmdSetup(args) {
   printWarn(
     `  For the OpenClaw gateway (Telegram/agent tools), the same env must be set on the gateway service — not only in this shell. See: ${TRADERCLAW_SESSION_TROUBLESHOOTING_URL}`,
   );
-  print("Next steps:");
-  print("  1. Install the plugin:     openclaw plugins install solana-traderclaw (or: npm install -g solana-traderclaw)");
-  print("  2. Restart the gateway:    openclaw gateway --restart");
-  print("  3. Start trading:          Ask OpenClaw to scan for opportunities");
-  print("");
   print("Session commands:");
   print("  traderclaw status     Check connection health (auto-refreshes session)");
   print("  traderclaw login      Re-authenticate (challenge flow)");
