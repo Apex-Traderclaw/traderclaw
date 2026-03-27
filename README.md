@@ -1,13 +1,13 @@
-# solana-traderclaw (TraderClaw V1 — team features)
+# traderclaw-team-v1-upgraded-public
 
-Team edition of the TraderClaw V1 plugin for autonomous Solana memecoin trading. Full V1 trading capabilities plus 5 X/Twitter tools for journaling and community engagement. Connects OpenClaw to a trading orchestrator that handles market data, risk enforcement, and trade execution. Includes a full memory layer with local persistence, episodic logging, deterministic compute tools, and OpenClaw-native memory integration.
+Public edition of the upgraded TraderClaw V1 plugin for autonomous Solana memecoin trading. Identical to the team edition with one difference: X/Twitter tools are read-only (social intel only, no posting). 94 Solana tools + 3 X/Twitter read tools = 97 total. Full trading lifecycle. Connects OpenClaw to a trading orchestrator that handles market data, risk enforcement, and trade execution. Includes a full memory layer with local persistence, episodic logging, deterministic compute tools, intelligence lab, standardized tool envelopes, prompt scrubbing, and OpenClaw-native memory integration.
 
 ## Architecture
 
 ```
 OpenClaw Agent (brain: reasoning, decisions, strategy evolution)
        │
-       │ calls 72 typed tools (67 trading + 5 X)
+       │ calls 97 typed tools (94 trading + 3 X read-only)
        ▼
 Plugin (this package)
   ├── HTTP ──→ Orchestrator (data + risk + execution)
@@ -18,9 +18,8 @@ Plugin (this package)
   ├── Local persistence (state, decisions, bulletin, patterns)
   │     └── .traderclaw-v1-data/
   │
-  └── OpenClaw workspace (default ~/.openclaw/workspace/, auto-loaded every session)
-        ├── STATE.md (machine-written durable state from solana_state_save)
-        ├── MEMORY.md (optional — your narrative notes; not overwritten by state save)
+  └── OpenClaw native memory (auto-loaded every session)
+        ├── MEMORY.md (durable facts — always in context)
         └── memory/YYYY-MM-DD.md (daily logs — today + yesterday)
 ```
 
@@ -35,19 +34,15 @@ The plugin gives OpenClaw tools to interact with the Solana trading orchestrator
 
 ### 1. Install the plugin
 
-Install the **npm package** **`solana-traderclaw`**. The **OpenClaw plugin id** in `openclaw.json` stays **`solana-trader`** (same as `openclaw.plugin.json`). The global CLI binary is **`traderclaw`**.
-
 ```bash
-npm install -g solana-traderclaw@1.0.20
+npm install -g traderclaw-team-v1-upgraded
 ```
 
 Or install directly into OpenClaw:
 
 ```bash
-openclaw plugins install solana-traderclaw@1.0.20
+openclaw plugins install traderclaw-team-v1-upgraded
 ```
-
-**Names:** `solana-traderclaw` is the canonical npm package (this release includes X/Twitter journal tools). Older names may still resolve on npm for a time; prefer **`solana-traderclaw`**. OpenClaw may log a benign id hint if the npm package name and manifest `id` differ — config keys remain **`plugins.entries.solana-trader`**.
 
 ### 2. Run setup
 
@@ -73,7 +68,7 @@ openclaw gateway restart
 traderclaw install --wizard
 ```
 
-This opens a localhost UI that runs prechecks, lane-aware setup, gateway validation, optional Telegram setup, and final verification. **X (Twitter) OAuth fields in the wizard are optional** — leave all four blank to run without X; you can add credentials later in `openclaw.json` or via env (`X_CONSUMER_KEY`, `X_CONSUMER_SECRET`, per-agent `X_ACCESS_TOKEN_*`). It also installs **`HEARTBEAT.md` into your OpenClaw agent workspace root** (default `~/.openclaw/workspace/HEARTBEAT.md`) from the packaged skill so heartbeats load the TraderClaw checklist without manual `cp`. `traderclaw setup` does the same.
+This opens a localhost UI that runs prechecks, lane-aware setup, gateway validation, optional Telegram setup, and final verification.
 
 ### Optional: Run CLI prechecks directly
 
@@ -150,14 +145,6 @@ traderclaw config reset         # Remove all plugin config
 
 Available config keys: `orchestratorUrl`, `walletId`, `apiKey`, `apiTimeout`, `refreshToken`, `walletPublicKey`, `walletPrivateKey`, `gatewayBaseUrl`, `gatewayToken`, `agentId`
 
-Wallet proof note: if login/session challenge requires wallet ownership proof, provide the key at runtime with `--wallet-private-key` or `TRADERCLAW_WALLET_PRIVATE_KEY`. It is used for local signing only and is not stored in `~/.openclaw/openclaw.json`.
-
-**Gateway process:** Telegram and other channels talk to the **OpenClaw gateway** process. That process must be able to read `TRADERCLAW_WALLET_PRIVATE_KEY` when the session refresh fails and a new challenge runs. Exporting the variable only in your SSH session does **not** set it for **systemd** (or Docker, etc.). Configure it in the gateway unit’s environment per the troubleshooting guide below.
-
-**`traderclaw login`:** Uses the saved refresh token when valid (no wallet key needed). Use `traderclaw login --force-reauth` when you intentionally want a full API challenge (e.g. after `traderclaw logout`).
-
-**Session / auth / startup issues:** follow the official guide — [Installation → Troubleshooting (session expired, auth, logged out)](https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-auth-errors-or-the-agent-logged-out).
-
 ### `traderclaw --help`
 
 Print all available commands and options.
@@ -199,9 +186,9 @@ openclaw gateway restart
 
 The plugin implements a 3-layer memory architecture that uses OpenClaw's native infrastructure plus custom tools to eliminate amnesia between sessions.
 
-### Layer 1: Durable state (`STATE.md`) and narrative (`MEMORY.md`)
+### Layer 1: Durable Facts (`MEMORY.md`)
 
-OpenClaw loads workspace markdown from the agent workspace root. **`STATE.md`** is updated by `solana_state_save` with a human-readable mirror of durable facts (tier, wallet, mode, strategy version, watchlist, permanent learnings, regime canary). **`MEMORY.md`** is for your own notes — the plugin does not overwrite it. JSON state still lives under `.traderclaw-v1-data/state/` as before.
+OpenClaw automatically loads `MEMORY.md` into agent context at every session start — zero tool calls needed. When `solana_state_save` is called, it writes both a JSON state file AND updates `MEMORY.md` with curated durable facts: tier, wallet, mode, strategy version, watchlist, permanent learnings, and regime canary.
 
 ### Layer 2: Episodic Memory (Daily Logs + Bootstrap Injection)
 
@@ -215,7 +202,7 @@ Unlimited retention via the orchestrator API. `solana_memory_write` / `solana_me
 
 ### Memory Flush Hook
 
-The `memory:flush` hook fires automatically when OpenClaw is about to trim context. It syncs **`STATE.md`** from the last persisted JSON state and writes a compaction marker to the daily log. This is an automatic safety net — no agent action needed.
+The `memory:flush` hook fires automatically when OpenClaw is about to trim context. It syncs `MEMORY.md` from the last persisted state and writes a compaction marker to the daily log. This is an automatic safety net — no agent action needed.
 
 ### Bootstrap Hook (`agent:bootstrap`)
 
@@ -241,29 +228,20 @@ Entitlement fallback chain: live API fetch → cached file → durable state →
 │   └── shared/             # Team bulletin (JSONL)
 ```
 
-Plus OpenClaw workspace paths (default `~/.openclaw/workspace/`):
+Plus OpenClaw-native paths at project root:
 ```
-STATE.md                    # Machine-written durable state mirror (from solana_state_save)
-MEMORY.md                   # Optional agent narrative (not overwritten by the plugin)
+MEMORY.md                   # Curated durable facts (auto-loaded by OpenClaw)
 memory/
 ├── 2026-03-19.md           # Today's daily log (auto-loaded by OpenClaw)
 ├── 2026-03-18.md           # Yesterday's daily log (auto-loaded by OpenClaw)
 └── ...                     # Auto-pruned after 7 days
 ```
 
-## X/Twitter Setup
+## X/Twitter Setup (Read-Only Social Intel)
 
-The team edition includes 5 X/Twitter tools for trade journaling and community engagement. Setup requires an X Developer App.
+The public edition includes 3 read-only X/Twitter tools for social intelligence gathering (search tweets, read mentions, get threads). X posting is not included in the public edition.
 
-### 1. Create an X Developer App
-
-1. Go to [developer.x.com](https://developer.x.com) and sign in
-2. Create a new App (Free tier is sufficient for posting — 1,500 tweets/month)
-3. Note your **Consumer Key** and **Consumer Secret**
-4. Under "User authentication settings", enable OAuth 1.0a with Read and Write permissions
-5. Generate **Access Token** and **Access Token Secret** for the account that will post
-
-### 2. Configure via Environment Variables
+### Configure via Environment Variables
 
 ```bash
 export X_CONSUMER_KEY="your-app-consumer-key"
@@ -272,9 +250,7 @@ export X_ACCESS_TOKEN_MAIN="your-access-token"
 export X_ACCESS_TOKEN_MAIN_SECRET="your-access-token-secret"
 ```
 
-The installer will pick these up automatically during the `x_credentials` step.
-
-### 3. Or Configure via Plugin Config
+### Or Configure via Plugin Config
 
 Add to `~/.openclaw/openclaw.json` under the plugin entry:
 
@@ -297,17 +273,17 @@ Add to `~/.openclaw/openclaw.json` under the plugin entry:
 
 | Tier | Cost | Capabilities |
 |------|------|-------------|
-| Free | $0 | 1,500 posts/month (write-only) |
 | Pay-as-you-go | Per-credit | Read access (mentions, search, threads) |
 | Basic | $200/month | Higher limits, more read access |
 
-Free tier is sufficient for daily trade journaling. Pay-as-you-go is recommended if you want to read mentions and search.
+Pay-as-you-go or Basic tier is required for the read-only social intel tools.
 
-## Available Tools (72 — 67 trading + 5 X)
+## Available Tools (97 — 94 trading + 3 X read-only)
 
 ### Scanning
 | Tool | Description |
 |------|-------------|
+| `solana_scan` | Broad market scan — launches + hot pairs combined |
 | `solana_scan_launches` | Find new Solana token launches |
 | `solana_scan_hot_pairs` | Find high-volume trading pairs |
 | `solana_market_regime` | Get macro market state (bullish/bearish/neutral) |
@@ -330,7 +306,8 @@ Free tier is sufficient for daily trade journaling. Pay-as-you-go is recommended
 | Tool | Description |
 |------|-------------|
 | `solana_trade_precheck` | Pre-trade risk validation |
-| `solana_trade_execute` | Execute trade via SpyFly bot |
+| `solana_trade_execute` | Execute trade via SpyFly bot (full params) |
+| `solana_trade` | Execute trade (shorthand) |
 
 ### Reflection & Server-Side Memory
 | Tool | Description |
@@ -361,6 +338,8 @@ Free tier is sufficient for daily trade journaling. Pay-as-you-go is recommended
 | `solana_funding_instructions` | Deposit instructions |
 | `solana_wallets` | List all wallets |
 | `solana_wallet_create` | Create a new wallet |
+| `solana_wallet_token_balance` | Get SPL token balance for a specific mint |
+| `solana_sweep_dead_tokens` | Sell losing positions below loss threshold to cut losses and reclaim SOL |
 
 ### Entitlements
 | Tool | Description |
@@ -385,6 +364,13 @@ Free tier is sufficient for daily trade journaling. Pay-as-you-go is recommended
 | `solana_alpha_signals` | Retrieve buffered alpha signals |
 | `solana_alpha_history` | Query historical alpha signals |
 | `solana_alpha_sources` | Get source reputation statistics |
+| `solana_alpha_submit` | Submit candidate to alpha buffer for next heartbeat evaluation |
+
+### Firehose
+| Tool | Description |
+|------|-------------|
+| `solana_firehose_config` | Configure firehose filter parameters (volume, buyers, whale detection) |
+| `solana_firehose_status` | Check firehose health, throughput, and connection state |
 
 ### Bitquery Deep Scans
 | Tool | Description |
@@ -412,7 +398,7 @@ Free tier is sufficient for daily trade journaling. Pay-as-you-go is recommended
 ### Local Durable State
 | Tool | Description |
 |------|-------------|
-| `solana_state_save` | Save agent state to local JSON (also writes STATE.md under the workspace) |
+| `solana_state_save` | Save agent state to local JSON (also writes MEMORY.md) |
 | `solana_state_read` | Read agent state from local JSON |
 
 ### Episodic Decision Log
@@ -438,7 +424,29 @@ Free tier is sufficient for daily trade journaling. Pay-as-you-go is recommended
 | `solana_compute_confidence` | Weighted confidence score (on-chain, signal, social, smart money, risk penalty) |
 | `solana_compute_freshness_decay` | Freshness decay factor by signal age |
 | `solana_compute_position_limits` | Full position sizing ladder with reduction breakdown |
-| `solana_classify_deployer_risk` | Deployer wallet risk classification (LOW/MODERATE/HIGH/CRITICAL) |
+| `solana_compute_deployer_risk` | Deployer wallet risk classification (LOW/MEDIUM/HIGH) |
+| `solana_classify_deployer_risk` | Backward-compatible alias for solana_compute_deployer_risk |
+
+### Intelligence Lab (New in V1-Upgraded)
+| Tool | Description |
+|------|-------------|
+| `solana_candidate_write` | Write a trading candidate for evaluation |
+| `solana_candidate_get` | Get a trading candidate by ID |
+| `solana_candidate_label_outcome` | Label a candidate with actual outcome |
+| `solana_candidate_delta` | Compute prediction delta for a candidate |
+| `solana_source_trust_refresh` | Refresh trust scores for intelligence sources |
+| `solana_source_trust_get` | Get current trust score for a source |
+| `solana_model_score_candidate` | Score a candidate using the active model |
+| `solana_model_registry` | List registered scoring models |
+| `solana_model_promote` | Promote a challenger model to active |
+| `solana_contradiction_check` | Check for contradictions in signal data |
+| `solana_dataset_export` | Export labeled dataset for analysis |
+| `solana_deployer_trust_get` | Get deployer trust profile |
+| `solana_deployer_trust_refresh` | Refresh deployer trust from on-chain data |
+| `solana_evaluation_report` | Generate intelligence evaluation report |
+| `solana_replay_run` | Run a replay of historical decisions |
+| `solana_replay_report` | Get results of a replay run |
+| `solana_scrub_untrusted_text` | Scrub untrusted text for prompt injection |
 
 ### Deep Analysis
 | Tool | Description |
@@ -451,13 +459,11 @@ Free tier is sufficient for daily trade journaling. Pay-as-you-go is recommended
 |------|-------------|
 | `solana_daily_log` | Append to today's daily log (auto-loaded by OpenClaw next session, 7-day prune) |
 
-### X/Twitter
+### X/Twitter (Read-Only Social Intel)
 | Tool | Description |
 |------|-------------|
-| `x_post_tweet` | Post a tweet from the agent's configured X profile (max 280 chars) |
-| `x_reply_tweet` | Reply to a specific tweet |
-| `x_read_mentions` | Read recent @mentions (pay-as-you-go tier) |
 | `x_search_tweets` | Search recent tweets by keyword/hashtag |
+| `x_read_mentions` | Read recent @mentions (pay-as-you-go tier) |
 | `x_get_thread` | Read a full conversation thread |
 
 ## Hooks (2)
@@ -465,7 +471,7 @@ Free tier is sufficient for daily trade journaling. Pay-as-you-go is recommended
 | Hook | Trigger | What It Does |
 |------|---------|--------------|
 | `agent:bootstrap` | Every session start | Injects durable state, decisions, bulletin, snapshot, and entitlements into context |
-| `memory:flush` | Before OpenClaw context compaction | Syncs STATE.md from persisted state, writes compaction marker to daily log |
+| `memory:flush` | Before OpenClaw context compaction | Syncs MEMORY.md from persisted state, writes compaction marker to daily log |
 
 ## Skills
 
@@ -473,7 +479,7 @@ Free tier is sufficient for daily trade journaling. Pay-as-you-go is recommended
 The primary skill that teaches OpenClaw the complete trading lifecycle:
 
 1. **SCAN** — Find opportunities with launch/hot-pair scanners
-2. **ANALYZE** — Deep dive with 5 token analysis tools
+2. **ANALYZE** — Deep dive with 6 token analysis tools
 3. **THESIS** — Assemble full context with build_thesis
 4. **DECIDE** — Agent reasons over data using confidence scoring
 5. **PRECHECK** — Validate against risk rules
@@ -527,13 +533,6 @@ Trade executed. TradeId: 15, PositionId: 4, TX: 5xK...
 I'll monitor this position and review after exit.
 ```
 
-## Session and file reload
-
-- **Telegram:** use **`/new`** to start a fresh chat thread or **`/reset`** to reset session state with your provider, as supported by your Telegram bot integration.
-- **After editing workspace files** (`HEARTBEAT.md`, `STATE.md`, `MEMORY.md`, skills): restart the gateway so changes are picked up consistently: `openclaw gateway restart`.
-- **History:** OpenClaw may not ship `openclaw agents clear-history` on your build — do not rely on that subcommand; prefer Telegram session commands and gateway restart.
-- **Heartbeats:** fresh installs set `heartbeat.target: "telegram"`, `isolatedSession: true`, `lightContext: true`, and `channels.defaults.heartbeat.showOk: true` so scheduled cycles deliver reliably (see installer `configureGatewayScheduling`).
-
 ## Troubleshooting
 
 **Plugin won't load:**
@@ -554,29 +553,6 @@ I'll monitor this position and review after exit.
 - Run `traderclaw setup` to create or select a wallet
 - Verify the wallet ID: `traderclaw config show`
 
-**Wizard (`traderclaw install --wizard`) fails on `install_plugin_package` with `ENOENT` / `…/solana-traderclaw/package.json` / `file:solana-traderclaw`:**
-- Older installers used `spawn` with `shell: true`, which on Linux could drop npm’s argv so npm treated the package as a **local folder** under cwd (`/root` or `/tmp`). Current installers use **`shell: false`**, explicit **`--registry https://registry.npmjs.org/`** for registry installs, **`solana-traderclaw@latest`**, and a temp **`cwd`**. Upgrade `solana-traderclaw` and retry. If a stray directory `./solana-traderclaw` exists under that cwd, remove it: `rm -rf /tmp/solana-traderclaw` (and under `/root` if present).
-
-**Heartbeat not sending messages to Telegram:**
-- **Fresh `traderclaw setup`:** the installer runs `configureGatewayScheduling`, which sets a custom `heartbeat.prompt` on the `main` agent (no `HEARTBEAT_OK` escape). You only need the manual `openclaw config set` command below if you are on an older install or overwrote `agents.list`.
-- **`HEARTBEAT.md` must live in the agent workspace root** (default `~/.openclaw/workspace/HEARTBEAT.md`, next to `AGENTS.md`). A copy under `workspace/.openclaw/` or only inside the plugin package is **not** loaded as the heartbeat checklist. Copy from `skills/solana-trader/HEARTBEAT.md` in the installed package if needed. See [OpenClaw agent workspace](https://docs.openclaw.ai/concepts/agent-workspace).
-- OpenClaw's default heartbeat prompt tells the model "If nothing needs attention, reply HEARTBEAT_OK" — which is stripped and never delivered. Run `traderclaw setup` again (v1.0.16+) to set a custom prompt, or apply manually:
-
-```bash
-openclaw config set agents.list '[{"id":"main","default":true,"heartbeat":{"every":"30m","target":"telegram","isolatedSession":true,"lightContext":true,"prompt":"Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Execute a full trading cycle: Steps 0 through 10. The cycle is NOT complete until all 10 steps are done including Step 8 (memory write-back), Step 9 (X post), and Step 10 (report). Do not stop early. Do not infer or repeat old tasks from prior chats. Never reply HEARTBEAT_OK. Never end your message with a question."}}]'
-openclaw gateway restart
-```
-
-- Verify with `openclaw config get agents` — the `main` agent should have `heartbeat.prompt`, `target`, `isolatedSession`, and `lightContext`.
-- Confirm Telegram is healthy: `openclaw channels status --probe`
-- Prefer `target: "telegram"` over `"last"` so delivery does not depend on a prior channel contact.
-
-**Scheduled cron jobs run but you never see Telegram/WhatsApp output:**
-- The installer merges **six** prescriptive managed jobs (`alpha-scan`, `dead-money-sweep`, `source-reputation-recalc`, `meta-rotation-analysis`, `strategy-evolution`, `daily-performance-report`). Older templates such as `subscription-cleanup` or `whale-watch` are no longer in that managed set; re-run **`traderclaw setup`** to refresh `~/.openclaw/cron/jobs.json`, or edit jobs manually. User-defined cron jobs whose ids are not in the template set are preserved on merge.
-- TraderClaw templates merged into `~/.openclaw/cron/jobs.json` use **`delivery.mode: "announce"`** with **`channel: "last"`** so each completed isolated job posts a summary to the same channel you last used (see [OpenClaw cron delivery](https://docs.clawd.bot/automation/cron-jobs)).
-- If you installed before this behavior: run **`traderclaw setup`** again so the installer re-merges cron jobs, or stop the gateway and edit managed job entries in `~/.openclaw/cron/jobs.json` — set **`delivery`** to `{ "mode": "announce", "channel": "last", "bestEffort": true }` for each TraderClaw job (or remove `delivery` entirely; isolated jobs default to announce when omitted).
-- The same **`last`** requirement as heartbeat applies: message the bot at least once so the gateway knows where to deliver.
-
 **Tools returning errors:**
 - Run `traderclaw status` to check system health
 - Check if kill switch is enabled
@@ -585,7 +561,5 @@ openclaw gateway restart
 **Memory/state not persisting:**
 - Check that the `dataDir` config points to a writable location
 - Default is `<cwd>/.traderclaw-v1-data` — verify permissions
-- Check **`STATE.md`** exists under `~/.openclaw/workspace/` after first `solana_state_save` call (not `process.cwd()` — required for systemd installs)
-- Check `memory/` under the same workspace for daily log files
-
-**X / Twitter posting:** with X credentials and skills aligned, `x_post_tweet` has been validated end-to-end in production installs after config + workspace updates.
+- Check `MEMORY.md` exists at project root after first `solana_state_save` call
+- Check `memory/` directory for daily log files
