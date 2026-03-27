@@ -1,4 +1,7 @@
 import {
+  SessionManager
+} from "./chunk-PZCY6BQK.js";
+import {
   normalizeToolError,
   normalizeToolSuccess,
   renderToolEnvelope
@@ -19,6 +22,10 @@ import {
   scrubUntrustedText
 } from "./chunk-AI6MTHUN.js";
 import {
+  readRecoverySecretFromDisk,
+  writeRecoverySecretToOpenclawAtomic
+} from "./chunk-SBYHSJLU.js";
+import {
   generateBulletinDigest,
   generateDecisionDigest,
   generateEntitlementsDigest,
@@ -26,9 +33,6 @@ import {
   resolveMemoryDir,
   resolveWorkspaceRoot
 } from "./chunk-CMZLPU3Z.js";
-import {
-  SessionManager
-} from "./chunk-F3UKCPA4.js";
 
 // index.ts
 import { Type } from "@sinclair/typebox";
@@ -38,7 +42,6 @@ import * as path from "path";
 // lib/x-client.mjs
 import { createHmac, randomBytes } from "crypto";
 var X_API_BASE = "https://api.twitter.com/2";
-var MAX_TWEET_LENGTH = 280;
 function percentEncode(str) {
   return encodeURIComponent(str).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
@@ -116,16 +119,15 @@ async function xApiFetch(method, endpoint, credentials, { body = null, queryPara
     if (response.status === 401) {
       return {
         ok: false,
-        error: "Authentication failed. Check your X API credentials (consumer key/secret and access token/secret). Ensure the app has Read+Write permissions and tokens were regenerated after permission change.",
+        error: "Authentication failed. Check your X API credentials (consumer key/secret and access token/secret).",
         status: 401,
         data: responseData
       };
     }
     if (response.status === 403) {
-      const isWrite = method === "POST" || method === "PUT" || method === "DELETE";
       return {
         ok: false,
-        error: isWrite ? "Forbidden (403). X rejected this write request. Check that App permissions are set to Read+Write in the X developer portal and regenerate your access tokens after any permission change." : "Forbidden (403). This read endpoint requires a paid X API tier (pay-as-you-go or Basic). This does NOT affect posting \u2014 x_post_tweet and x_reply_tweet still work on Free tier.",
+        error: "Forbidden (403). This read endpoint requires a paid X API tier (pay-as-you-go or Basic).",
         status: 403,
         data: responseData
       };
@@ -143,62 +145,6 @@ async function xApiFetch(method, endpoint, credentials, { body = null, queryPara
     data: responseData,
     rateLimitRemaining: rateLimitRemaining ? parseInt(rateLimitRemaining) : void 0
   };
-}
-function validateTweetText(text) {
-  if (!text || typeof text !== "string") {
-    return { valid: false, error: "Tweet text is required and must be a non-empty string." };
-  }
-  const trimmed = text.trim();
-  if (trimmed.length === 0) {
-    return { valid: false, error: "Tweet text cannot be empty." };
-  }
-  if (trimmed.length > MAX_TWEET_LENGTH) {
-    return { valid: false, error: `Tweet exceeds ${MAX_TWEET_LENGTH} characters (got ${trimmed.length}). Shorten the text.` };
-  }
-  return { valid: true, text: trimmed };
-}
-async function postTweet(credentials, text) {
-  const validation = validateTweetText(text);
-  if (!validation.valid) return { ok: false, error: validation.error };
-  const result = await xApiFetch("POST", "/tweets", credentials, {
-    body: { text: validation.text }
-  });
-  if (result.ok && result.data?.data?.id) {
-    const tweetId = result.data.data.id;
-    const username = credentials.username || "unknown";
-    return {
-      ok: true,
-      tweetId,
-      tweetUrl: `https://x.com/${username}/status/${tweetId}`,
-      text: validation.text
-    };
-  }
-  return result;
-}
-async function replyToTweet(credentials, tweetId, text) {
-  const validation = validateTweetText(text);
-  if (!validation.valid) return { ok: false, error: validation.error };
-  if (!tweetId || typeof tweetId !== "string") {
-    return { ok: false, error: "tweetId is required to reply." };
-  }
-  const result = await xApiFetch("POST", "/tweets", credentials, {
-    body: {
-      text: validation.text,
-      reply: { in_reply_to_tweet_id: tweetId }
-    }
-  });
-  if (result.ok && result.data?.data?.id) {
-    const replyId = result.data.data.id;
-    const username = credentials.username || "unknown";
-    return {
-      ok: true,
-      replyId,
-      replyUrl: `https://x.com/${username}/status/${replyId}`,
-      inReplyTo: tweetId,
-      text: validation.text
-    };
-  }
-  return result;
 }
 async function readMentions(credentials, { maxResults = 10, sinceId = null, paginationToken = null } = {}) {
   if (!credentials.userId) {
@@ -381,35 +327,6 @@ function registerXTools(api, Type2, xConfig, fallbackAgentId, logPrefix, options
     }
   };
   api.registerTool({
-    name: "x_post_tweet",
-    description: "Post a tweet to X/Twitter from the calling agent's configured profile. Max 280 characters.",
-    parameters: Type2.Object({
-      text: Type2.String({ description: "Tweet text (max 280 characters)" }),
-      agentId: Type2.Optional(Type2.String({ description: "Override agent ID (default: caller's agent identity)" }))
-    }),
-    execute: wrapExecute("x_post_tweet", async (_id, params) => {
-      const callerAgentId = params._agentId;
-      const creds = resolveAgentCredentials(xConfig, callerAgentId, params.agentId, fallbackAgentId);
-      if (!creds.ok) return { error: creds.error };
-      return postTweet(creds.credentials, params.text);
-    })
-  });
-  api.registerTool({
-    name: "x_reply_tweet",
-    description: "Reply to a specific tweet on X/Twitter. Max 280 characters.",
-    parameters: Type2.Object({
-      tweetId: Type2.String({ description: "The tweet ID to reply to" }),
-      text: Type2.String({ description: "Reply text (max 280 characters)" }),
-      agentId: Type2.Optional(Type2.String({ description: "Override agent ID (default: caller's agent identity)" }))
-    }),
-    execute: wrapExecute("x_reply_tweet", async (_id, params) => {
-      const callerAgentId = params._agentId;
-      const creds = resolveAgentCredentials(xConfig, callerAgentId, params.agentId, fallbackAgentId);
-      if (!creds.ok) return { error: creds.error };
-      return replyToTweet(creds.credentials, params.tweetId, params.text);
-    })
-  });
-  api.registerTool({
     name: "x_read_mentions",
     description: "Read recent mentions of the agent's X profile. Requires pay-as-you-go or Basic tier X API access.",
     parameters: Type2.Object({
@@ -467,7 +384,7 @@ function registerXTools(api, Type2, xConfig, fallbackAgentId, logPrefix, options
       });
     })
   });
-  api.logger.info(`${logPrefix} Registered 5 X/Twitter tools. Profiles: ${xConfig.ok ? Object.keys(xConfig.profiles).join(", ") || "none" : "unconfigured"}`);
+  api.logger.info(`${logPrefix} Registered 3 X/Twitter read-only tools (social intel). Profiles: ${xConfig.ok ? Object.keys(xConfig.profiles).join(", ") || "none" : "unconfigured"}`);
 }
 
 // lib/web-fetch.mjs
@@ -779,6 +696,7 @@ function parseConfig(raw) {
   const bootstrapDecisionCount = typeof obj.bootstrapDecisionCount === "number" ? obj.bootstrapDecisionCount : 10;
   const bootstrapBulletinWindowHours = typeof obj.bootstrapBulletinWindowHours === "number" ? obj.bootstrapBulletinWindowHours : 24;
   const dailyLogRetentionDays = typeof obj.dailyLogRetentionDays === "number" ? obj.dailyLogRetentionDays : 30;
+  const recoverySecret = typeof obj.recoverySecret === "string" ? obj.recoverySecret : void 0;
   const xConfig = parseXConfig(obj);
   return {
     orchestratorUrl,
@@ -787,6 +705,7 @@ function parseConfig(raw) {
     externalUserId,
     refreshToken,
     walletPublicKey,
+    recoverySecret,
     apiTimeout,
     agentId,
     gatewayBaseUrl,
@@ -891,21 +810,79 @@ var solanaTraderPlugin = {
       );
       return;
     }
+    const dataDir = config.dataDir || path.join(process.cwd(), ".traderclaw-v1-data");
+    const sessionTokensPath = path.join(dataDir, "session-tokens.json");
+    const readSessionSidecar = () => {
+      try {
+        if (!fs.existsSync(sessionTokensPath)) return null;
+        const raw = JSON.parse(fs.readFileSync(sessionTokensPath, "utf-8"));
+        if (!raw || typeof raw !== "object") return null;
+        return raw;
+      } catch {
+        return null;
+      }
+    };
+    const writeSessionSidecarAtomic = (payload) => {
+      if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+      const tmp = `${sessionTokensPath}.${process.pid}.${Date.now()}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(payload, null, 2) + "\n", "utf-8");
+      fs.renameSync(tmp, sessionTokensPath);
+    };
+    const sidecar = readSessionSidecar();
+    const effectiveRefreshToken = typeof sidecar?.refreshToken === "string" && sidecar.refreshToken.length > 0 ? sidecar.refreshToken : config.refreshToken;
+    const effectiveWalletPublicKey = typeof sidecar?.walletPublicKey === "string" && sidecar.walletPublicKey.length > 0 ? sidecar.walletPublicKey : config.walletPublicKey;
+    let initialAccessToken;
+    let initialAccessTokenExpiresAt;
+    if (typeof sidecar?.accessToken === "string" && sidecar.accessToken.length > 0 && typeof sidecar?.accessTokenExpiresAt === "number" && Date.now() < sidecar.accessTokenExpiresAt - 5e3) {
+      initialAccessToken = sidecar.accessToken;
+      initialAccessTokenExpiresAt = sidecar.accessTokenExpiresAt;
+    }
+    api.logger.info(
+      `[solana-trader] Session: sidecar=${sidecar ? "yes" : "no"}, refreshToken=${effectiveRefreshToken ? "present (" + effectiveRefreshToken.slice(0, 8) + "...)" : "MISSING"}, apiKey=${apiKey ? "present" : "MISSING"}, walletPublicKey=${effectiveWalletPublicKey ? "present" : "MISSING"}`
+    );
     const sessionManager = new SessionManager({
       baseUrl: orchestratorUrl,
       apiKey: apiKey || "",
-      refreshToken: config.refreshToken,
-      walletPublicKey: config.walletPublicKey,
+      refreshToken: effectiveRefreshToken,
+      walletPublicKey: effectiveWalletPublicKey,
       walletPrivateKeyProvider: () => {
         const runtimeKey = process.env.TRADERCLAW_WALLET_PRIVATE_KEY || "";
         return runtimeKey.trim() || void 0;
       },
+      recoverySecretProvider: async () => {
+        const fromDisk = readRecoverySecretFromDisk();
+        if (fromDisk) return fromDisk;
+        const s = config.recoverySecret;
+        return typeof s === "string" && s.trim().length > 0 ? s.trim() : void 0;
+      },
+      onRecoverySecretRotated: (newSecret) => {
+        try {
+          writeRecoverySecretToOpenclawAtomic(newSecret);
+          api.logger.info("[solana-trader] Persisted rotated recovery secret to openclaw.json");
+        } catch (err) {
+          api.logger.warn(
+            `[solana-trader] Failed to write rotated recovery secret: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      },
       clientLabel: "openclaw-plugin-runtime",
       timeout: apiTimeout,
+      initialAccessToken,
+      initialAccessTokenExpiresAt,
       onTokensRotated: (tokens) => {
-        api.logger.info(
-          `[solana-trader] Session tokens rotated. New refreshToken: ${tokens.refreshToken.slice(0, 8)}... Update config with: traderclaw config set refreshToken ${tokens.refreshToken}`
-        );
+        try {
+          writeSessionSidecarAtomic({
+            refreshToken: tokens.refreshToken,
+            accessToken: tokens.accessToken,
+            accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+            walletPublicKey: tokens.walletPublicKey
+          });
+          api.logger.info(`[solana-trader] Persisted session tokens to ${sessionTokensPath}`);
+        } catch (err) {
+          api.logger.warn(
+            `[solana-trader] Failed to persist session sidecar: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
       },
       logger: {
         info: (msg) => api.logger.info(`[solana-trader] ${msg}`),
@@ -967,8 +944,8 @@ var solanaTraderPlugin = {
     const json = (data) => ({
       content: [{ type: "text", text: JSON.stringify(data, null, 2) }]
     });
-    const wrapExecute = (fn, sourceName) => async (toolCallId, params) => {
-      const toolName = sourceName || "solana_tool";
+    const wrapExecute = (sourceName, fn) => async (toolCallId, params) => {
+      const toolName = sourceName;
       try {
         const result = await fn(toolCallId, params ?? {});
         return json(JSON.parse(renderToolEnvelope(normalizeToolSuccess(result, toolName))));
@@ -977,7 +954,6 @@ var solanaTraderPlugin = {
       }
     };
     const workspaceRoot = resolveWorkspaceRoot(config.workspaceDir);
-    const dataDir = config.dataDir || path.join(process.cwd(), ".traderclaw-v1-data");
     const stateDir = path.join(dataDir, "state");
     const logsDir = path.join(dataDir, "logs");
     const sharedLogsDir = path.join(logsDir, "shared");
@@ -1142,13 +1118,13 @@ var solanaTraderPlugin = {
       name: "solana_scan_launches",
       description: "Scan for new Solana token launches (Pump.fun, Raydium, PumpSwap). Returns recent launches with initial metrics. Watch for deployer patterns \u2014 same deployer launching multiple tokens is a serial rugger red flag.",
       parameters: Type.Object({}),
-      execute: wrapExecute(async () => post("/api/scan/new-launches", {}))
+      execute: wrapExecute("solana_scan_launches", async () => post("/api/scan/new-launches", {}))
     });
     api.registerTool({
       name: "solana_scan_hot_pairs",
       description: "Find Solana trading pairs with high volume and price acceleration. Returns hot pairs ranked by activity.",
       parameters: Type.Object({}),
-      execute: wrapExecute(async () => post("/api/scan/hot-pairs", {}))
+      execute: wrapExecute("solana_scan_hot_pairs", async () => post("/api/scan/hot-pairs", {}))
     });
     api.registerTool({
       name: "solana_scan",
@@ -1156,7 +1132,7 @@ var solanaTraderPlugin = {
       parameters: Type.Object({
         mode: Type.Optional(Type.Union([Type.Literal("launches"), Type.Literal("hot_pairs"), Type.Literal("both")], { description: "Scan mode: launches, hot_pairs, or both (default: both)" }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_scan", async (_id, params) => {
         const mode = String(params.mode || "both");
         if (mode === "launches") return post("/api/scan/new-launches", {});
         if (mode === "hot_pairs") return post("/api/scan/hot-pairs", {});
@@ -1171,7 +1147,7 @@ var solanaTraderPlugin = {
       name: "solana_market_regime",
       description: "Get the current Solana market regime (bullish/bearish/neutral) with aggregate metrics like total DEX volume and trending sectors.",
       parameters: Type.Object({}),
-      execute: wrapExecute(async () => post("/api/market/regime", {}))
+      execute: wrapExecute("solana_market_regime", async () => post("/api/market/regime", {}))
     });
     api.registerTool({
       name: "solana_token_snapshot",
@@ -1180,6 +1156,7 @@ var solanaTraderPlugin = {
         tokenAddress: Type.String({ description: "Solana token mint address" })
       }),
       execute: wrapExecute(
+        "solana_token_snapshot",
         async (_id, params) => post("/api/token/snapshot", { tokenAddress: params.tokenAddress })
       )
     });
@@ -1190,6 +1167,7 @@ var solanaTraderPlugin = {
         tokenAddress: Type.String({ description: "Solana token mint address" })
       }),
       execute: wrapExecute(
+        "solana_token_holders",
         async (_id, params) => post("/api/token/holders", { tokenAddress: params.tokenAddress })
       )
     });
@@ -1200,6 +1178,7 @@ var solanaTraderPlugin = {
         tokenAddress: Type.String({ description: "Solana token mint address" })
       }),
       execute: wrapExecute(
+        "solana_token_flows",
         async (_id, params) => post("/api/token/flows", { tokenAddress: params.tokenAddress })
       )
     });
@@ -1210,6 +1189,7 @@ var solanaTraderPlugin = {
         tokenAddress: Type.String({ description: "Solana token mint address" })
       }),
       execute: wrapExecute(
+        "solana_token_liquidity",
         async (_id, params) => post("/api/token/liquidity", { tokenAddress: params.tokenAddress })
       )
     });
@@ -1220,7 +1200,19 @@ var solanaTraderPlugin = {
         tokenAddress: Type.String({ description: "Solana token mint address" })
       }),
       execute: wrapExecute(
+        "solana_token_risk",
         async (_id, params) => post("/api/token/risk", { tokenAddress: params.tokenAddress })
+      )
+    });
+    api.registerTool({
+      name: "solana_token_socials",
+      description: "Get social media and community metadata for a Solana token \u2014 Twitter/X handle, Telegram group, Discord, website, and other community links. Use during thesis building to check social presence and community strength.",
+      parameters: Type.Object({
+        tokenAddress: Type.String({ description: "Solana token mint address" })
+      }),
+      execute: wrapExecute(
+        "solana_token_socials",
+        async (_id, params) => post("/api/token/socials", { tokenAddress: params.tokenAddress })
       )
     });
     api.registerTool({
@@ -1231,6 +1223,7 @@ var solanaTraderPlugin = {
         maxSizeSol: Type.Optional(Type.Number({ description: "Advisory \u2014 max position size in SOL for risk pre-screen. Not in server schema; accepted but currently ignored." }))
       }),
       execute: wrapExecute(
+        "solana_build_thesis",
         async (_id, params) => post("/api/thesis/build", {
           tokenAddress: params.tokenAddress,
           maxSizeSol: params.maxSizeSol
@@ -1239,21 +1232,45 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_trade_precheck",
-      description: "Pre-trade risk check \u2014 validates a proposed trade against risk rules, kill switch, entitlement limits, and on-chain conditions. Returns approved/denied with reasons and capped size. Always call this before executing a trade. Buy: sizeSol required, do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored.",
+      description: "Pre-trade risk check \u2014 validates a proposed trade against risk rules, kill switch, entitlement limits, and on-chain conditions. Returns approved/denied with reasons and capped size. Always call this before executing a trade. Buy: sizeSol required; do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens are ignored. Optional exit fields (trailingStopPct, trailingStop) are accepted to mirror execute payloads; sizing logic ignores them.",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         side: Type.Union([Type.Literal("buy"), Type.Literal("sell")], { description: "Trade direction" }),
-        sizeSol: Type.Optional(Type.Number({ description: "Position size in SOL \u2014 required for buy, do not send for sell" })),
-        sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1\u2013100 (100 = full exit) \u2014 sell only. Preferred over sizeTokens if both sent." })),
-        sizeTokens: Type.Optional(Type.Number({ description: "Number of tokens to sell \u2014 sell only. Ignored if sellPct is also provided." })),
-        slippageBps: Type.Optional(Type.Number({ description: "Slippage tolerance in basis points (e.g., 300 = 3%)" }))
+        sizeSol: Type.Optional(Type.Number({ description: "Position size in SOL \u2014 required for buy, omit for sell" })),
+        sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1\u2013100 (100 = full exit) \u2014 sell only; preferred over sizeTokens if both sent" })),
+        sizeTokens: Type.Optional(Type.Number({ description: "Token amount to sell \u2014 sell only; ignored if sellPct is also provided" })),
+        slippageBps: Type.Optional(Type.Number({ description: "Slippage tolerance in basis points (e.g., 300 = 3%)" })),
+        trailingStopPct: Type.Optional(Type.Number({ description: "Optional \u2014 same as execute; ignored for policy sizing" })),
+        trailingStop: Type.Optional(
+          Type.Object({
+            levels: Type.Array(
+              Type.Object({
+                percentage: Type.Number({ description: "Trailing drawdown % from the armed high once the level is active" }),
+                amount: Type.Optional(Type.Number({ description: "% of position to sell at this level (1\u2013100). Server default 100." })),
+                triggerAboveATH: Type.Optional(
+                  Type.Number({
+                    description: "Optional. % above session ATH before this level arms. If omitted, API defaults to 100 (2\xD7 ATH)."
+                  })
+                )
+              }),
+              { minItems: 1, maxItems: 5, description: "Multi-level trailing (optional on precheck)" }
+            )
+          })
+        )
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_trade_precheck", async (_id, params) => {
         const body = {
           tokenAddress: params.tokenAddress,
           side: params.side,
           slippageBps: params.slippageBps
         };
+        if (params.trailingStopPct !== void 0) {
+          body.trailingStopPct = params.trailingStopPct;
+        }
+        const ts = params.trailingStop;
+        if (ts?.levels && Array.isArray(ts.levels) && ts.levels.length > 0) {
+          body.trailingStop = ts;
+        }
         if (params.side === "buy") {
           body.sizeSol = params.sizeSol;
         } else {
@@ -1268,7 +1285,7 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_trade_execute",
-      description: "Execute a trade on Solana via the SpyFly bot. Enforces risk rules before proxying to on-chain execution. Returns trade ID, position ID, and transaction signature. IMPORTANT: tpLevels alone (e.g. [10, 15]) means EACH level sells 100% of the position at that gain \u2014 use tpExits for partials (e.g. +10% sell 50%, +15% sell 100%). Buy: sizeSol required, do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored.",
+      description: "Execute a trade on Solana via the SpyFly bot. Enforces risk rules before proxying to on-chain execution. Returns trade ID, position ID, and transaction signature. IMPORTANT: tpLevels alone (e.g. [10, 15]) means EACH level sells 100% of the position at that gain \u2014 use tpExits for partials (e.g. +10% sell 50%, +15% sell 100%). Trailing: use `trailingStopPct` for a single simple trailing %, or `trailingStop.levels` (1\u20135) for multi-level trailing with optional `triggerAboveATH` per level (% above session ATH before that level arms; if omitted, server defaults to 100 i.e. 2\xD7 ATH). When both are sent, `trailingStop` wins. Buy: sizeSol required; do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored.",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         side: Type.Union([Type.Literal("buy"), Type.Literal("sell")], { description: "Trade direction" }),
@@ -1276,8 +1293,13 @@ var solanaTraderPlugin = {
         sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1\u2013100 (100 = full exit) \u2014 sell only. Preferred over sizeTokens if both sent." })),
         sizeTokens: Type.Optional(Type.Number({ description: "Number of tokens to sell \u2014 sell only. Ignored if sellPct is also provided." })),
         symbol: Type.String({ description: "Token symbol (e.g., BONK, WIF)" }),
-        slippageBps: Type.Optional(Type.Number({ description: "Slippage in basis points (default: 300)" })),
-        slPct: Type.Optional(Type.Number({ description: "Stop-loss percentage (e.g., 15 = 15% below entry)" })),
+        slippageBps: Type.Number({ description: "Slippage in basis points (REQUIRED, e.g., 300 = 3%)" }),
+        slPct: Type.Optional(Type.Number({ description: "Stop-loss percentage (e.g., 20 = 20% below entry)" })),
+        slLevels: Type.Optional(
+          Type.Array(Type.Number(), {
+            description: "Stop-loss % levels (simple). Each level triggers 100% exit. Use slExits for partial sells."
+          })
+        ),
         tpLevels: Type.Optional(
           Type.Array(Type.Number(), {
             description: "TP gain % from entry only \u2014 each level defaults to selling 100% of position. Prefer tpExits when you want partial sells."
@@ -1286,9 +1308,9 @@ var solanaTraderPlugin = {
         tpExits: Type.Optional(
           Type.Array(
             Type.Object({
-              percent: Type.Number({ description: "Take-profit trigger: % gain from entry (e.g. 10 = +10%)" }),
+              percent: Type.Number({ description: "Take-profit trigger: % gain from entry (e.g. 100 = +100%)" }),
               amountPct: Type.Number({
-                description: "% of position to sell at this TP (1\u2013100). Example: [{percent:10,amountPct:50},{percent:15,amountPct:100}]"
+                description: "% of position to sell at this TP (1\u2013100). Example: [{percent:100,amountPct:30},{percent:200,amountPct:100}]"
               })
             }),
             { description: "Per-level take-profit sizes. Sent to API as tpExits; overrides plain tpLevels for sizing." }
@@ -1303,7 +1325,37 @@ var solanaTraderPlugin = {
             { description: "Multi-level stop-loss with partial exits (optional). Otherwise use slPct for a single full exit." }
           )
         ),
-        trailingStopPct: Type.Optional(Type.Number({ description: "Trailing stop percentage" })),
+        trailingStopPct: Type.Optional(
+          Type.Number({
+            description: "Single trailing-stop % (legacy). Ignored if `trailingStop` is provided."
+          })
+        ),
+        trailingStop: Type.Optional(
+          Type.Object({
+            levels: Type.Array(
+              Type.Object({
+                percentage: Type.Number({
+                  description: "Once armed, sell when price drops this % from the high (trailing drawdown)."
+                }),
+                amount: Type.Optional(
+                  Type.Number({
+                    description: "% of position to sell when this level fires (1\u2013100). Server default 100."
+                  })
+                ),
+                triggerAboveATH: Type.Optional(
+                  Type.Number({
+                    description: "Optional. Session price must reach this % above session ATH before this level arms (e.g. 50 \u2192 1.5\xD7 ATH). If omitted, API defaults to 100 (2\xD7 ATH)."
+                  })
+                )
+              }),
+              {
+                minItems: 1,
+                maxItems: 5,
+                description: "Ordered trailing-stop levels (up to 5)."
+              }
+            )
+          })
+        ),
         managementMode: Type.Optional(
           Type.Union([Type.Literal("LOCAL_MANAGED"), Type.Literal("SERVER_MANAGED")], {
             description: "Advisory only \u2014 server decides position mode internally. Sent for future compatibility."
@@ -1311,7 +1363,7 @@ var solanaTraderPlugin = {
         ),
         idempotencyKey: Type.Optional(Type.String({ description: "Unique key to prevent duplicate executions (e.g., UUID). Server uses walletId + key for replay cache." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_trade_execute", async (_id, params) => {
         const headers = {};
         if (params.idempotencyKey) {
           headers["x-idempotency-key"] = String(params.idempotencyKey);
@@ -1322,9 +1374,14 @@ var solanaTraderPlugin = {
           symbol: params.symbol,
           slippageBps: params.slippageBps,
           slPct: params.slPct,
-          trailingStopPct: params.trailingStopPct,
           managementMode: params.managementMode
         };
+        const tsExecute = params.trailingStop;
+        if (tsExecute?.levels && Array.isArray(tsExecute.levels) && tsExecute.levels.length > 0) {
+          body.trailingStop = tsExecute;
+        } else if (params.trailingStopPct !== void 0) {
+          body.trailingStopPct = params.trailingStopPct;
+        }
         if (params.side === "buy") {
           body.sizeSol = params.sizeSol;
         } else {
@@ -1345,6 +1402,9 @@ var solanaTraderPlugin = {
         if (Array.isArray(slExits) && slExits.length > 0) {
           body.slExits = slExits;
         }
+        if (Array.isArray(params.slLevels) && params.slLevels.length > 0) {
+          body.slLevels = params.slLevels;
+        }
         return post("/api/trade/execute", body, Object.keys(headers).length > 0 ? headers : void 0);
       })
     });
@@ -1358,11 +1418,11 @@ var solanaTraderPlugin = {
         sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1\u2013100 \u2014 sell only" })),
         sizeTokens: Type.Optional(Type.Number({ description: "Number of tokens to sell \u2014 sell only" })),
         symbol: Type.String({ description: "Token symbol (e.g., BONK, WIF)" }),
-        slippageBps: Type.Optional(Type.Number({ description: "Slippage in basis points (default: 300)" })),
+        slippageBps: Type.Number({ description: "Slippage in basis points (REQUIRED, e.g., 300 = 3%)" }),
         slPct: Type.Optional(Type.Number({ description: "Stop-loss percentage" })),
         tpLevels: Type.Optional(Type.Array(Type.Number(), { description: "Take-profit gain % levels" }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_trade", async (_id, params) => {
         const body = {
           tokenAddress: params.tokenAddress,
           side: params.side,
@@ -1395,6 +1455,7 @@ var solanaTraderPlugin = {
         strategyVersion: Type.Optional(Type.String({ description: "Strategy version at time of trade (e.g., 'v1.3.0')" }))
       }),
       execute: wrapExecute(
+        "solana_trade_review",
         async (_id, params) => post("/api/trade/review", {
           tradeId: params.tradeId,
           tokenAddress: params.tokenAddress,
@@ -1419,6 +1480,7 @@ var solanaTraderPlugin = {
         strategyVersion: Type.Optional(Type.String({ description: "Strategy version at time of writing (e.g., 'v1.3.0')" }))
       }),
       execute: wrapExecute(
+        "solana_memory_write",
         async (_id, params) => post("/api/memory/write", {
           notes: params.notes,
           tags: params.tags,
@@ -1436,6 +1498,7 @@ var solanaTraderPlugin = {
         limit: Type.Optional(Type.Number({ description: "Advisory \u2014 max results to return. Not honored by server; storage applies internal cap (~50)." }))
       }),
       execute: wrapExecute(
+        "solana_memory_search",
         async (_id, params) => post("/api/memory/search", {
           query: params.query,
           limit: params.limit
@@ -1449,6 +1512,7 @@ var solanaTraderPlugin = {
         tokenAddress: Type.String({ description: "Solana token mint address" })
       }),
       execute: wrapExecute(
+        "solana_memory_by_token",
         async (_id, params) => post("/api/memory/by-token", {
           tokenAddress: params.tokenAddress
         })
@@ -1460,7 +1524,7 @@ var solanaTraderPlugin = {
       parameters: Type.Object({
         days: Type.Optional(Type.Number({ description: "Look back period in days (default: 7)" }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_journal_summary", async (_id, params) => {
         let reqPath = `/api/memory/journal-summary?walletId=${walletId}`;
         if (params.days) reqPath += `&lookbackDays=${params.days}`;
         return get(reqPath);
@@ -1471,6 +1535,7 @@ var solanaTraderPlugin = {
       description: "Read your current strategy state \u2014 feature weights and strategy version. These are YOUR learned preferences that evolve over time.",
       parameters: Type.Object({}),
       execute: wrapExecute(
+        "solana_strategy_state",
         async () => get(`/api/strategy/state?walletId=${walletId}`)
       )
     });
@@ -1489,6 +1554,7 @@ var solanaTraderPlugin = {
         )
       }),
       execute: wrapExecute(
+        "solana_strategy_update",
         async (_id, params) => post("/api/strategy/update", {
           featureWeights: params.featureWeights,
           strategyVersion: params.strategyVersion,
@@ -1508,6 +1574,7 @@ var solanaTraderPlugin = {
         )
       }),
       execute: wrapExecute(
+        "solana_killswitch",
         async (_id, params) => post("/api/killswitch", {
           enabled: params.enabled,
           mode: params.mode
@@ -1519,34 +1586,82 @@ var solanaTraderPlugin = {
       description: "Check the current kill switch state \u2014 whether it's enabled and in what mode.",
       parameters: Type.Object({}),
       execute: wrapExecute(
+        "solana_killswitch_status",
         async () => get(`/api/killswitch/status?walletId=${walletId}`)
       )
     });
     api.registerTool({
       name: "solana_capital_status",
-      description: "Get your current capital status \u2014 SOL balance, open position count, unrealized PnL, daily notional used, daily loss, and effective limits (adjusted by entitlements).",
+      description: "Get your current capital status \u2014 SOL balance, open position count, unrealized/realized PnL, daily notional used, daily loss, and effective limits. **PnL:** `totalUnrealizedPnl` / `totalRealizedPnl` are USD (DB); use `totalUnrealizedPnlSol` / `totalRealizedPnlSol` / `totalPnlSol` for SOL (derived via `solPriceUsd`, same as positions API).",
       parameters: Type.Object({}),
       execute: wrapExecute(
+        "solana_capital_status",
         async () => get(`/api/capital/status?walletId=${walletId}`)
       )
     });
     api.registerTool({
       name: "solana_positions",
-      description: "List your current trading positions with unrealized PnL, entry price, current price, stop-loss/take-profit settings, and management mode. Call at the START of every trading cycle for interrupt check. Also use to detect dead money (flat positions).",
+      description: "List trading positions with mark-to-market. **PnL:** `realizedPnl` / `unrealizedPnl` are USD as stored; prefer `realizedPnlSol` / `unrealizedPnlSol` when reasoning in SOL. `unrealizedReturnPct` is ROI on cost basis (for sweep-dead-tokens logic). See response `pnlNote`.",
       parameters: Type.Object({
         status: Type.Optional(Type.String({ description: "Filter by status: 'open', 'closed', or omit for all" }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_positions", async (_id, params) => {
         let reqPath = `/api/wallet/positions?walletId=${walletId}`;
         if (params.status) reqPath += `&status=${params.status}`;
         return get(reqPath);
       })
     });
     api.registerTool({
+      name: "solana_wallet_token_balance",
+      description: "Read on-chain SPL token balance (UI amount) for your trading wallet and a token mint. Same balance path as server exit monitoring (`balanceOf`).",
+      parameters: Type.Object({
+        tokenAddress: Type.String({ description: "SPL token mint address" })
+      }),
+      execute: wrapExecute(
+        "solana_wallet_token_balance",
+        async (_id, params) => post("/api/wallet/token-balance", {
+          walletId,
+          tokenAddress: params.tokenAddress
+        })
+      )
+    });
+    api.registerTool({
+      name: "solana_all_tokens_balance",
+      description: "Aggregate on-chain snapshot: native SOL balance plus SPL **uiAmount** for every mint tied to **open** positions, with optional mark-to-market **valueSol** per token and **tokensValueSolTotal** (same pricing path as position refresh). Use for portfolio-level balance checks without querying each mint separately.",
+      parameters: Type.Object({}),
+      execute: wrapExecute(
+        "solana_all_tokens_balance",
+        async () => post("/api/wallet/positions-balances", {
+          walletId
+        })
+      )
+    });
+    api.registerTool({
+      name: "solana_sweep_dead_tokens",
+      description: "Sell 100% of each OPEN position whose unrealizedReturnPct is \u2264 -maxLossPct (default 80), using the same mark-to-market as positions. Use dryRun:true first to list candidates. Executes sequential full exits (sellPct 100). Requires trade:execute scope.",
+      parameters: Type.Object({
+        maxLossPct: Type.Optional(
+          Type.Number({ description: "Threshold: sweep when unrealizedReturnPct <= -maxLossPct (default 80)" })
+        ),
+        slippageBps: Type.Optional(Type.Number({ description: "Per-exit slippage in bps (default 300)" })),
+        dryRun: Type.Optional(Type.Boolean({ description: "If true, only return candidate tokens without selling" }))
+      }),
+      execute: wrapExecute(
+        "solana_sweep_dead_tokens",
+        async (_id, params) => post("/api/wallet/sweep-dead-tokens", {
+          walletId,
+          maxLossPct: params.maxLossPct,
+          slippageBps: params.slippageBps,
+          dryRun: params.dryRun
+        })
+      )
+    });
+    api.registerTool({
       name: "solana_funding_instructions",
       description: "Get deposit instructions for funding your trading wallet with SOL.",
       parameters: Type.Object({}),
       execute: wrapExecute(
+        "solana_funding_instructions",
         async () => get(`/api/funding/instructions?walletId=${walletId}`)
       )
     });
@@ -1556,7 +1671,7 @@ var solanaTraderPlugin = {
       parameters: Type.Object({
         refresh: Type.Optional(Type.Boolean({ description: "If true, refresh balances from on-chain before returning" }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_wallets", async (_id, params) => {
         let reqPath = "/api/wallets";
         if (params.refresh) reqPath += "?refresh=true";
         return get(reqPath);
@@ -1573,6 +1688,7 @@ var solanaTraderPlugin = {
         includePrivateKey: Type.Optional(Type.Boolean({ description: "If true, return the private key in the response (only for newly generated wallets)" }))
       }),
       execute: wrapExecute(
+        "solana_wallet_create",
         async (_id, params) => post("/api/wallet/create", {
           label: params.label,
           publicKey: params.publicKey,
@@ -1583,24 +1699,30 @@ var solanaTraderPlugin = {
       )
     });
     api.registerTool({
-      name: "solana_token_balance",
-      description: "Get the balance of a specific SPL token in your trading wallet. Returns the token amount, decimals, and USD value estimate.",
+      name: "solana_wallet_token_balance",
+      description: "Get the on-chain SPL token balance (uiAmount \u2014 source of truth) for a specific mint in your trading wallet. Returns the token amount, decimals, and USD value estimate. Use to verify actual holdings when position balances seem inconsistent.",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address to check balance for" })
       }),
       execute: wrapExecute(
-        async (_id, params) => get(`/api/wallet/token-balance?walletId=${walletId}&tokenAddress=${params.tokenAddress}`)
+        "solana_wallet_token_balance",
+        async (_id, params) => post("/api/wallet/token-balance", { tokenAddress: params.tokenAddress })
       )
     });
     api.registerTool({
       name: "solana_sweep_dead_tokens",
-      description: "Sweep dust and dead token accounts from your wallet to reclaim rent SOL. Closes token accounts with negligible value and returns the recovered SOL to your wallet.",
+      description: "Sell 100% of open positions where unrealizedReturnPct \u2264 -maxLossPct to cut losses and reclaim SOL. NOT a dust/rent sweeper \u2014 this sells actual positions that are down beyond recovery. Use in dead_money_sweep cron or manual loss-cutting.",
       parameters: Type.Object({
-        minValueUsd: Type.Optional(Type.Number({ description: "Minimum USD value threshold \u2014 accounts below this are swept (default: 0.01)" }))
+        maxLossPct: Type.Optional(Type.Number({ description: "Maximum loss percentage threshold \u2014 positions down more than this % are sold (default: 80)" })),
+        slippageBps: Type.Optional(Type.Number({ description: "Slippage in basis points for the sell orders (default: server default)" })),
+        dryRun: Type.Optional(Type.Boolean({ description: "If true, return positions that would be sold without executing. Default: false" }))
       }),
       execute: wrapExecute(
+        "solana_sweep_dead_tokens",
         async (_id, params) => post("/api/wallet/sweep-dead-tokens", {
-          minValueUsd: params.minValueUsd
+          maxLossPct: params.maxLossPct,
+          slippageBps: params.slippageBps,
+          dryRun: params.dryRun
         })
       )
     });
@@ -1611,7 +1733,7 @@ var solanaTraderPlugin = {
         limit: Type.Optional(Type.Number({ description: "Max trades to return (1-200, default: 50)" })),
         offset: Type.Optional(Type.Number({ description: "Offset for pagination (default: 0)" }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_trades", async (_id, params) => {
         let reqPath = `/api/trades?walletId=${walletId}`;
         if (params.limit) reqPath += `&limit=${params.limit}`;
         if (params.offset) reqPath += `&offset=${params.offset}`;
@@ -1624,7 +1746,7 @@ var solanaTraderPlugin = {
       parameters: Type.Object({
         limit: Type.Optional(Type.Number({ description: "Max denials to return (1-200, default: 50)" }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_risk_denials", async (_id, params) => {
         let reqPath = `/api/risk-denials?walletId=${walletId}`;
         if (params.limit) reqPath += `&limit=${params.limit}`;
         return get(reqPath);
@@ -1634,19 +1756,19 @@ var solanaTraderPlugin = {
       name: "solana_entitlement_costs",
       description: "Get tier costs \u2014 what each tier (starter, pro, enterprise) costs and what capabilities it unlocks.",
       parameters: Type.Object({}),
-      execute: wrapExecute(async () => get("/api/entitlements/costs"))
+      execute: wrapExecute("solana_entitlement_costs", async () => get("/api/entitlements/costs"))
     });
     api.registerTool({
       name: "solana_entitlement_plans",
       description: "List available monthly entitlement plans that upgrade your trading limits (position size, daily notional, bandwidth). Shows price, duration, and limit boosts.",
       parameters: Type.Object({}),
-      execute: wrapExecute(async () => get("/api/entitlements/plans"))
+      execute: wrapExecute("solana_entitlement_plans", async () => get("/api/entitlements/plans"))
     });
     api.registerTool({
       name: "solana_entitlement_current",
       description: "Get your current entitlements \u2014 active tier, scope access, effective limits, and expiration details.",
       parameters: Type.Object({}),
-      execute: wrapExecute(async () => {
+      execute: wrapExecute("solana_entitlement_current", async () => {
         const result = await get(`/api/entitlements/current?walletId=${walletId}`);
         if (result && typeof result === "object") {
           try {
@@ -1665,6 +1787,7 @@ var solanaTraderPlugin = {
         planCode: Type.String({ description: "Plan code to purchase (e.g., 'pro_trader', 'bandwidth_boost')" })
       }),
       execute: wrapExecute(
+        "solana_entitlement_purchase",
         async (_id, params) => post("/api/entitlements/purchase", {
           planCode: params.planCode
         })
@@ -1679,6 +1802,7 @@ var solanaTraderPlugin = {
         })
       }),
       execute: wrapExecute(
+        "solana_entitlement_upgrade",
         async (_id, params) => post("/api/entitlements/upgrade", {
           targetTier: params.targetTier
         })
@@ -1688,7 +1812,7 @@ var solanaTraderPlugin = {
       name: "solana_bitquery_templates",
       description: "List all available pre-built Bitquery query templates with descriptions and required variables. Call this first to discover what templates are available before using solana_bitquery_catalog. Returns 50+ templates organized by category covering Pump.fun, PumpSwap, Raydium, Jupiter, BonkSwap, and generic DEX analytics.",
       parameters: Type.Object({}),
-      execute: wrapExecute(async () => ({
+      execute: wrapExecute("solana_bitquery_templates", async () => ({
         categories: {
           pumpFunCreation: [
             { path: "pumpFunCreation.trackNewTokens", description: "Track newly created Pump.fun tokens", variables: { since: "DateTime!", limit: "Int!" } },
@@ -1774,6 +1898,7 @@ var solanaTraderPlugin = {
         variables: Type.Object({}, { additionalProperties: true, description: "Variables required by the template (e.g., { token: 'MINT_ADDRESS', since: '2025-01-01T00:00:00Z' })" })
       }),
       execute: wrapExecute(
+        "solana_bitquery_catalog",
         async (_id, params) => post("/api/bitquery/catalog", {
           templatePath: params.templatePath,
           variables: params.variables || {}
@@ -1788,6 +1913,7 @@ var solanaTraderPlugin = {
         variables: Type.Optional(Type.Object({}, { additionalProperties: true, description: "GraphQL variables (e.g., { token: 'MINT_ADDRESS', since: '2025-01-01T00:00:00Z' })" }))
       }),
       execute: wrapExecute(
+        "solana_bitquery_query",
         async (_id, params) => post("/api/bitquery/query", {
           query: params.query,
           variables: params.variables || {}
@@ -1803,7 +1929,7 @@ var solanaTraderPlugin = {
         agentId: Type.Optional(Type.String({ description: "Agent ID for event-to-agent forwarding (e.g., 'main'). When set, orchestrator forwards each stream event to your registered Gateway via /v1/responses." })),
         subscriberType: Type.Optional(Type.Union([Type.Literal("agent"), Type.Literal("client")], { description: "Subscriber type. Inferred as 'agent' when agentId is present. Defaults to 'client'." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_bitquery_subscribe", async (_id, params) => {
         const body = {
           templateKey: params.templateKey,
           variables: params.variables || {}
@@ -1825,6 +1951,7 @@ var solanaTraderPlugin = {
         subscriptionId: Type.String({ description: "Subscription ID returned by solana_bitquery_subscribe (e.g., 'bqs_abc123...')" })
       }),
       execute: wrapExecute(
+        "solana_bitquery_unsubscribe",
         async (_id, params) => post("/api/bitquery/unsubscribe", {
           subscriptionId: params.subscriptionId
         })
@@ -1835,6 +1962,7 @@ var solanaTraderPlugin = {
       description: "List all active Bitquery subscriptions and bridge diagnostics. Returns connected clients, active streams, upstream connection status, and per-stream subscriber counts. Use for monitoring real-time data feed health.",
       parameters: Type.Object({}),
       execute: wrapExecute(
+        "solana_bitquery_subscriptions",
         async () => get("/api/bitquery/subscriptions/active")
       )
     });
@@ -1846,6 +1974,7 @@ var solanaTraderPlugin = {
         walletId: Type.Optional(Type.String({ description: "Wallet ID to reopen the subscription for. Defaults to the plugin's configured walletId." }))
       }),
       execute: wrapExecute(
+        "solana_bitquery_subscription_reopen",
         async (_id, params) => post("/api/bitquery/subscriptions/reopen", {
           subscriptionId: params.subscriptionId,
           ...params.walletId ? { walletId: params.walletId } : {}
@@ -1861,7 +1990,7 @@ var solanaTraderPlugin = {
         agentId: Type.Optional(Type.String({ description: "Agent ID to associate credentials with (default: 'main'). Omit to store as the default fallback." })),
         active: Type.Optional(Type.Boolean({ description: "Whether forwarding is active (default: true)" }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_gateway_credentials_set", async (_id, params) => {
         const body = {
           gatewayBaseUrl: params.gatewayBaseUrl,
           gatewayToken: params.gatewayToken
@@ -1876,6 +2005,7 @@ var solanaTraderPlugin = {
       description: "Get the currently registered Gateway credentials for event-to-agent forwarding. Returns the gatewayBaseUrl, agentId, active status, and masked token. Use to verify Gateway setup is correct.",
       parameters: Type.Object({}),
       execute: wrapExecute(
+        "solana_gateway_credentials_get",
         async () => get("/api/agents/gateway-credentials")
       )
     });
@@ -1884,6 +2014,7 @@ var solanaTraderPlugin = {
       description: "Delete your registered Gateway credentials. This disables event-to-agent forwarding \u2014 subscriptions with agentId will no longer forward events to your Gateway. Only use if decommissioning the Gateway.",
       parameters: Type.Object({}),
       execute: wrapExecute(
+        "solana_gateway_credentials_delete",
         async () => del("/api/agents/gateway-credentials")
       )
     });
@@ -1892,6 +2023,7 @@ var solanaTraderPlugin = {
       description: "List active agent sessions registered with the orchestrator. Returns session IDs, agent IDs, connection status, and subscription counts. Use for diagnostics \u2014 verify your agent is properly registered and its subscriptions are forwarding events.",
       parameters: Type.Object({}),
       execute: wrapExecute(
+        "solana_agent_sessions",
         async () => get("/api/agents/active")
       )
     });
@@ -2039,7 +2171,7 @@ var solanaTraderPlugin = {
         agentId: Type.Optional(Type.String({ description: "Agent ID for event-to-agent forwarding. Uses plugin config agentId as default." })),
         subscriberType: Type.Optional(Type.String({ description: "Subscriber type: 'agent' or 'client'." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_alpha_subscribe", async (_id, params) => {
         const effectiveAgentId = params.agentId || config.agentId;
         if (effectiveAgentId && alphaStreamManager.getAgentId() !== effectiveAgentId) {
           alphaStreamManager.setAgentId(effectiveAgentId);
@@ -2055,7 +2187,7 @@ var solanaTraderPlugin = {
       name: "solana_alpha_unsubscribe",
       description: "Unsubscribe from the SpyFly alpha signal stream and disconnect WebSocket. Use when shutting down or if kill switch is activated with TRADES_AND_STREAMS mode.",
       parameters: Type.Object({}),
-      execute: wrapExecute(async () => alphaStreamManager.unsubscribe())
+      execute: wrapExecute("solana_alpha_unsubscribe", async () => alphaStreamManager.unsubscribe())
     });
     api.registerTool({
       name: "solana_alpha_signals",
@@ -2066,7 +2198,7 @@ var solanaTraderPlugin = {
         kinds: Type.Optional(Type.Array(Type.String(), { description: "Filter by signal kind: 'ca_drop', 'milestone', 'update', 'risk', 'exit'" })),
         unseen: Type.Optional(Type.Boolean({ description: "If true (default), return only unseen signals and mark them as seen. Set false to get all buffered signals." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_alpha_signals", async (_id, params) => {
         const signals = alphaBuffer.getSignals({
           minScore: params.minScore,
           chain: params.chain,
@@ -2091,7 +2223,7 @@ var solanaTraderPlugin = {
         limit: Type.Optional(Type.Number({ description: "Max results (tier-capped: starter=10, pro=50, enterprise=200)" })),
         days: Type.Optional(Type.Number({ description: "Look back period in days. Converted to then/now timestamp range." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_alpha_history", async (_id, params) => {
         const queryParts = [];
         if (params.limit) queryParts.push(`limit=${params.limit}`);
         if (params.channelId) queryParts.push(`channelId=${params.channelId}`);
@@ -2110,7 +2242,7 @@ var solanaTraderPlugin = {
       name: "solana_alpha_sources",
       description: "Get per-source statistics from the alpha signal buffer \u2014 signal count, average systemScore, and source type for each channel. Use for quick reputation checks during signal processing and to identify high-quality vs low-quality sources.",
       parameters: Type.Object({}),
-      execute: wrapExecute(async () => ({
+      execute: wrapExecute("solana_alpha_sources", async () => ({
         sources: alphaBuffer.getSourceStatsAll(),
         bufferSize: alphaBuffer.getBufferSize(),
         subscribed: alphaStreamManager.isSubscribed()
@@ -2127,6 +2259,7 @@ var solanaTraderPlugin = {
         confidence: Type.Optional(Type.Number({ description: "Confidence score 0-100" }))
       }),
       execute: wrapExecute(
+        "solana_alpha_submit",
         async (_id, params) => post("/api/alpha/submit", {
           tokenAddress: params.tokenAddress,
           symbol: params.symbol,
@@ -2147,6 +2280,7 @@ var solanaTraderPlugin = {
         excludeDeployers: Type.Optional(Type.Array(Type.String(), { description: "List of deployer addresses to exclude from firehose" }))
       }),
       execute: wrapExecute(
+        "solana_firehose_config",
         async (_id, params) => post("/api/firehose/config", {
           volumeMinUsd: params.volumeMinUsd,
           buyerCountMin: params.buyerCountMin,
@@ -2160,13 +2294,13 @@ var solanaTraderPlugin = {
       name: "solana_firehose_status",
       description: "Check firehose health and stats \u2014 connection state, message throughput, filter config, buffer depth, and last event timestamp. Use to verify the real-time data stream is active and healthy.",
       parameters: Type.Object({}),
-      execute: wrapExecute(async () => get("/api/firehose/status"))
+      execute: wrapExecute("solana_firehose_status", async () => get("/api/firehose/status"))
     });
     api.registerTool({
       name: "solana_system_status",
       description: "Check orchestrator system health \u2014 uptime, connected services, database status, execution mode, and upstream API connectivity.",
       parameters: Type.Object({}),
-      execute: wrapExecute(async () => get("/api/system/status"))
+      execute: wrapExecute("solana_system_status", async () => get("/api/system/status"))
     });
     api.registerTool({
       name: "solana_startup_gate",
@@ -2176,6 +2310,7 @@ var solanaTraderPlugin = {
         force: Type.Optional(Type.Boolean({ description: "If true, always run the startup checks now even if a recent run exists." }))
       }),
       execute: wrapExecute(
+        "solana_startup_gate",
         async (_id, params) => runStartupGate({
           autoFixGateway: params.autoFixGateway !== void 0 ? Boolean(params.autoFixGateway) : true,
           force: Boolean(params.force)
@@ -2186,7 +2321,7 @@ var solanaTraderPlugin = {
       name: "solana_traderclaw_welcome",
       description: "Returns the canonical TraderClaw welcome message for the user after startup checks succeed (including when the only issue is zero balance \u2014 funding is separate). Includes API key when stored in plugin config. Use when the user ran the manual startup checklist instead of solana_startup_gate, or whenever welcomeMessage was not already appended from solana_startup_gate.",
       parameters: Type.Object({}),
-      execute: wrapExecute(async () => {
+      execute: wrapExecute("solana_traderclaw_welcome", async () => {
         const k = config.apiKey && String(config.apiKey).trim() || null;
         return { welcomeMessage: buildTraderClawWelcomeMessage(k) };
       })
@@ -2199,6 +2334,7 @@ var solanaTraderPlugin = {
         source: Type.Optional(Type.String({ description: "Probe source label for diagnostics." }))
       }),
       execute: wrapExecute(
+        "solana_gateway_forward_probe",
         async (_id, params) => runForwardProbe({
           agentId: params.agentId ? String(params.agentId) : void 0,
           source: params.source ? String(params.source) : "plugin_probe_tool"
@@ -2209,7 +2345,7 @@ var solanaTraderPlugin = {
       name: "solana_runtime_status",
       description: "Return plugin runtime diagnostics including startup-gate cache, alpha stream status, and latest forwarding probe result.",
       parameters: Type.Object({}),
-      execute: wrapExecute(async () => ({
+      execute: wrapExecute("solana_runtime_status", async () => ({
         startupGate: startupGateState,
         alphaStream: {
           subscribed: alphaStreamManager.isSubscribed(),
@@ -2227,7 +2363,7 @@ var solanaTraderPlugin = {
         state: Type.Unknown({ description: "JSON object to deep-merge into existing state. New keys are added, existing keys are updated, omitted keys are preserved." }),
         overwrite: Type.Optional(Type.Boolean({ description: "If true, replace entire state instead of merging. Default false." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_state_save", async (_id, params) => {
         const targetAgentId = sanitizeAgentId(String(params.agentId));
         const filePath = path.join(stateDir, `${targetAgentId}.json`);
         const shouldOverwrite = Boolean(params.overwrite);
@@ -2256,7 +2392,7 @@ var solanaTraderPlugin = {
       parameters: Type.Object({
         agentId: Type.String({ description: "Agent ID whose state to read." })
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_state_read", async (_id, params) => {
         const targetAgentId = sanitizeAgentId(String(params.agentId));
         const filePath = path.join(stateDir, `${targetAgentId}.json`);
         const data = readJsonFile(filePath);
@@ -2274,7 +2410,7 @@ var solanaTraderPlugin = {
         scores: Type.Optional(Type.Unknown({ description: "Relevant scores object (confidence, analyst scores, etc.)." })),
         outcome: Type.Optional(Type.String({ description: "Outcome if known: 'pending', 'win', 'loss', 'neutral'." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_decision_log", async (_id, params) => {
         const targetAgentId = sanitizeAgentId(String(params.agentId));
         const logPath = path.join(logsDir, targetAgentId, "decisions.jsonl");
         const entry = {
@@ -2299,7 +2435,7 @@ var solanaTraderPlugin = {
         priority: Type.String({ description: "Priority: 'low', 'medium', 'high', 'critical'." }),
         payload: Type.Unknown({ description: "Structured payload relevant to the bulletin type." })
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_team_bulletin_post", async (_id, params) => {
         const fromAgent = sanitizeAgentId(String(params.fromAgent));
         const bulletinPath = path.join(sharedLogsDir, "team-bulletin.jsonl");
         const now = /* @__PURE__ */ new Date();
@@ -2328,7 +2464,7 @@ var solanaTraderPlugin = {
         type: Type.Optional(Type.String({ description: "Filter by bulletin type." })),
         limit: Type.Optional(Type.Number({ description: "Max entries to return (default 50)." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_team_bulletin_read", async (_id, params) => {
         const bulletinPath = path.join(sharedLogsDir, "team-bulletin.jsonl");
         let entries = readJsonlFile(bulletinPath);
         if (params.since) {
@@ -2347,7 +2483,7 @@ var solanaTraderPlugin = {
       parameters: Type.Object({
         snapshot: Type.Unknown({ description: "Context snapshot object with positions, capital, regime, strategyVersion, activeSubscriptions, recentDecisions summary." })
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_context_snapshot_write", async (_id, params) => {
         const filePath = path.join(stateDir, "context-snapshot.json");
         const payload = { snapshot: params.snapshot, writtenBy: agentId, ts: (/* @__PURE__ */ new Date()).toISOString() };
         writeJsonFile(filePath, payload);
@@ -2358,7 +2494,7 @@ var solanaTraderPlugin = {
       name: "solana_context_snapshot_read",
       description: "Read the latest portfolio context snapshot written by the CTO. Provides a consistent world-view: open positions, capital, regime, strategy version. Also auto-injected at bootstrap.",
       parameters: Type.Object({}),
-      execute: wrapExecute(async () => {
+      execute: wrapExecute("solana_context_snapshot_read", async () => {
         const filePath = path.join(stateDir, "context-snapshot.json");
         const data = readJsonFile(filePath);
         return data || { snapshot: null, ts: null };
@@ -2381,7 +2517,7 @@ var solanaTraderPlugin = {
         }, { description: "Custom weights. Default: onchain=0.45, signal=0.35, social=0.05, smart=0.15." })),
         convergenceSources: Type.Optional(Type.Number({ description: "Number of independent discovery sources that flagged same token. 2=+0.15, 3=+0.20, 4+=+0.25." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_compute_confidence", async (_id, params) => {
         const onchain = Number(params.onchainScore) || 0;
         const signal = Number(params.signalScore) || 0;
         const social = Number(params.socialScore) || 0;
@@ -2422,7 +2558,7 @@ var solanaTraderPlugin = {
         signalAgeMinutes: Type.Number({ description: "Age of the signal in minutes since original call." }),
         signalType: Type.Optional(Type.String({ description: "Signal type: 'ca_drop' (default), 'exit', 'sentiment', 'confirmation'." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_compute_freshness_decay", async (_id, params) => {
         const age = Number(params.signalAgeMinutes) || 0;
         const signalType = String(params.signalType || "ca_drop");
         let decay = 1;
@@ -2484,7 +2620,7 @@ var solanaTraderPlugin = {
         openPositionCount: Type.Optional(Type.Number({ description: "Number of open positions." })),
         tokenConcentrationPct: Type.Optional(Type.Number({ description: "Token concentration percentage (0-100)." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_compute_position_limits", async (_id, params) => {
         const mode = String(params.mode).toUpperCase();
         const conf = Number(params.confidence) || 0;
         const capital = Number(params.capitalSol) || 0;
@@ -2552,7 +2688,7 @@ var solanaTraderPlugin = {
         freshWalletSurge: Type.Optional(Type.Boolean({ description: "Whether deployer shows fresh-wallet surge pattern." })),
         devSoldEarlyCount: Type.Optional(Type.Number({ description: "How many tokens the dev sold within 24h of launch." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_compute_deployer_risk", async (_id, params) => {
         const prev = Number(params.previousTokens) || 0;
         const rugged = Number(params.rugHistory) || 0;
         const avgLife = Number(params.avgTokenLifespanHours) || 0;
@@ -2601,7 +2737,7 @@ var solanaTraderPlugin = {
         freshWalletSurge: Type.Optional(Type.Boolean({ description: "Whether deployer shows fresh-wallet surge pattern." })),
         devSoldEarlyCount: Type.Optional(Type.Number({ description: "How many tokens the dev sold within 24h of launch." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_classify_deployer_risk", async (_id, params) => {
         const prev = Number(params.previousTokens) || 0;
         const rugged = Number(params.rugHistory) || 0;
         const avgLife = Number(params.avgTokenLifespanHours) || 0;
@@ -2661,7 +2797,7 @@ var solanaTraderPlugin = {
         tradesLimit: Type.Optional(Type.Number({ description: "Max closed trades to fetch. Default 100." })),
         tradesPage: Type.Optional(Type.Number({ description: "Page number for trade pagination (1-based). Default 1." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_history_export", async (_id, params) => {
         const targetAgentId = sanitizeAgentId(params.agentId ? String(params.agentId) : agentId);
         const sinceTs = params.since ? new Date(String(params.since)).getTime() : 0;
         const beforeTs = params.before ? new Date(String(params.before)).getTime() : Infinity;
@@ -2747,7 +2883,7 @@ var solanaTraderPlugin = {
         patternId: Type.Optional(Type.String({ description: "Pattern identifier (required for read/write)." })),
         pattern: Type.Optional(Type.Unknown({ description: "Pattern object to store (required for write). Should include: name, description, conditions, expectedOutcome, confidence, sampleSize, discoveredAt." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_pattern_store", async (_id, params) => {
         const action = String(params.action);
         const patternsPath = path.join(stateDir, "patterns.json");
         const patterns = readJsonFile(patternsPath) || {};
@@ -2776,7 +2912,7 @@ var solanaTraderPlugin = {
         summary: Type.String({ description: "Session summary or event description to log. Keep concise (1-5 lines)." }),
         tags: Type.Optional(Type.String({ description: "Comma-separated tags for categorization (e.g., 'trade,regime_shift,session_end')." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_daily_log", async (_id, params) => {
         ensureDir(memoryDir);
         const now = /* @__PURE__ */ new Date();
         const logPath = getDailyLogPath(now);
@@ -2817,7 +2953,7 @@ ${String(params.summary)}
         signalStage: Type.String({ description: "Signal stage: early, confirmation, milestone, risk, exit." }),
         features: Type.Object({}, { additionalProperties: true, description: "Feature map for model scoring (e.g., { volume_momentum: 0.8, buy_pressure: 0.6 })." })
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_candidate_write", async (_id, params) => {
         return intelligenceLab.writeCandidate({
           id: String(params.id),
           tokenAddress: String(params.tokenAddress),
@@ -2842,7 +2978,7 @@ ${String(params.summary)}
         source: Type.Optional(Type.String({ description: "Filter by discovery source." })),
         limit: Type.Optional(Type.Number({ description: "Max candidates to return (default 50)." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_candidate_get", async (_id, params) => {
         if (params.id) {
           const candidate = intelligenceLab.getCandidate(String(params.id));
           return candidate || { id: params.id, found: false };
@@ -2864,7 +3000,7 @@ ${String(params.summary)}
         holdingHours: Type.Optional(Type.Number({ description: "How long the position was held in hours." })),
         notes: Type.Optional(Type.String({ description: "Notes about the outcome." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_candidate_label_outcome", async (_id, params) => {
         const result = intelligenceLab.labelOutcome(
           String(params.id),
           params.outcome,
@@ -2882,7 +3018,7 @@ ${String(params.summary)}
         id: Type.String({ description: "Candidate ID." }),
         currentFeatures: Type.Object({}, { additionalProperties: true, description: "Current feature values to compare against stored features." })
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_candidate_delta", async (_id, params) => {
         return intelligenceLab.candidateDelta(
           String(params.id),
           params.currentFeatures || {}
@@ -2899,7 +3035,7 @@ ${String(params.summary)}
           confidence: Type.Number({ description: "Confidence in the claim (0-1)." })
         }), { description: "List of claims to check for contradictions." })
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_contradiction_check", async (_id, params) => {
         return intelligenceLab.contradictionCheck(
           params.claims
         );
@@ -2912,7 +3048,7 @@ ${String(params.summary)}
         text: Type.String({ description: "Raw untrusted text to scrub." }),
         maxLength: Type.Optional(Type.Number({ description: "Max length before truncation (default 4000)." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_scrub_untrusted_text", async (_id, params) => {
         return scrubUntrustedText(String(params.text), params.maxLength ? Number(params.maxLength) : void 0);
       })
     });
@@ -2928,7 +3064,7 @@ ${String(params.summary)}
         avgPnlPct: Type.Number({ description: "Average PnL percentage from this source." }),
         totalSignals: Type.Number({ description: "Total signals received from this source." })
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_source_trust_refresh", async (_id, params) => {
         return intelligenceLab.refreshSourceTrust({
           name: String(params.name),
           type: String(params.type),
@@ -2946,7 +3082,7 @@ ${String(params.summary)}
       parameters: Type.Object({
         name: Type.Optional(Type.String({ description: "Source name to read. Omit for all sources." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_source_trust_get", async (_id, params) => {
         return intelligenceLab.getSourceTrust(params.name ? String(params.name) : void 0);
       })
     });
@@ -2960,7 +3096,7 @@ ${String(params.summary)}
         survivors: Type.Number({ description: "Number of tokens still alive." }),
         avgSurvivalHours: Type.Number({ description: "Average survival time of deployed tokens in hours." })
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_deployer_trust_refresh", async (_id, params) => {
         return intelligenceLab.refreshDeployerTrust({
           address: String(params.address),
           totalTokens: Number(params.totalTokens),
@@ -2976,7 +3112,7 @@ ${String(params.summary)}
       parameters: Type.Object({
         address: Type.Optional(Type.String({ description: "Deployer address to read. Omit for all deployers." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_deployer_trust_get", async (_id, params) => {
         return intelligenceLab.getDeployerTrust(params.address ? String(params.address) : void 0);
       })
     });
@@ -2990,7 +3126,7 @@ ${String(params.summary)}
         type: Type.Optional(Type.Union([Type.Literal("champion"), Type.Literal("challenger")], { description: "Model type (required for register)." })),
         weights: Type.Optional(Type.Object({}, { additionalProperties: true, description: "Feature weights map (required for register)." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_model_registry", async (_id, params) => {
         const action = String(params.action || "list");
         if (action === "list") {
           return intelligenceLab.getModels();
@@ -3013,7 +3149,7 @@ ${String(params.summary)}
         modelId: Type.String({ description: "Model ID to use for scoring." }),
         features: Type.Object({}, { additionalProperties: true, description: "Feature values to score." })
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_model_score_candidate", async (_id, params) => {
         return intelligenceLab.scoreCandidate(
           String(params.modelId),
           params.features || {}
@@ -3026,7 +3162,7 @@ ${String(params.summary)}
       parameters: Type.Object({
         challengerId: Type.String({ description: "ID of the challenger model to promote." })
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_model_promote", async (_id, params) => {
         return intelligenceLab.promoteModel(String(params.challengerId));
       })
     });
@@ -3036,7 +3172,7 @@ ${String(params.summary)}
       parameters: Type.Object({
         modelId: Type.String({ description: "Model ID to evaluate." })
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_replay_run", async (_id, params) => {
         return intelligenceLab.runReplay(String(params.modelId));
       })
     });
@@ -3044,7 +3180,7 @@ ${String(params.summary)}
       name: "solana_replay_report",
       description: "Read the last replay evaluation result. Returns accuracy, candidate count, and per-candidate predictions.",
       parameters: Type.Object({}),
-      execute: wrapExecute(async () => {
+      execute: wrapExecute("solana_replay_report", async () => {
         return intelligenceLab.getLastReplay() || { error: "No replay results available. Run solana_replay_run first." };
       })
     });
@@ -3054,7 +3190,7 @@ ${String(params.summary)}
       parameters: Type.Object({
         modelId: Type.String({ description: "Model ID to evaluate." })
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_evaluation_report", async (_id, params) => {
         return intelligenceLab.generateEvaluation(String(params.modelId));
       })
     });
@@ -3064,7 +3200,7 @@ ${String(params.summary)}
       parameters: Type.Object({
         format: Type.Optional(Type.Union([Type.Literal("json"), Type.Literal("csv")], { description: "Export format: json or csv. Default: json." }))
       }),
-      execute: wrapExecute(async (_id, params) => {
+      execute: wrapExecute("solana_dataset_export", async (_id, params) => {
         const format = params.format || "json";
         const data = intelligenceLab.exportDataset(format);
         return { format, data, exportedAt: (/* @__PURE__ */ new Date()).toISOString() };
@@ -3278,18 +3414,18 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
     });
     registerXTools(api, Type, config.xConfig, config.agentId || "cto", "[solana-trader]");
     registerWebFetchTool(api, Type, "[solana-trader]");
-    const xToolCount = config.xConfig?.ok ? 5 : 0;
+    const xToolCount = config.xConfig?.ok ? 3 : 0;
     const webFetchCount = 1;
     const intelligenceToolCount = 17;
-    const baseToolCount = 75;
+    const baseToolCount = 76;
     const totalRegistered = baseToolCount + intelligenceToolCount + webFetchCount;
     const totalToolCount = totalRegistered + xToolCount;
     api.logger.info(
-      `[solana-trader] V1-Upgraded: Registered ${totalToolCount} tools (${baseToolCount} base + ${intelligenceToolCount} intelligence + ${webFetchCount} web_fetch = ${totalRegistered} Solana + ${xToolCount} X/Twitter) for walletId ${walletId} (session auth mode)`
+      `[solana-trader] V1-Upgraded-Public: Registered ${totalToolCount} tools (${baseToolCount} base + ${intelligenceToolCount} intelligence + ${webFetchCount} web_fetch = ${totalRegistered} Solana + ${xToolCount} X/Twitter read-only) for walletId ${walletId} (session auth mode)`
     );
   }
 };
-var openclaw_plugin_v1_upgraded_default = solanaTraderPlugin;
+var index_default = solanaTraderPlugin;
 export {
-  openclaw_plugin_v1_upgraded_default as default
+  index_default as default
 };

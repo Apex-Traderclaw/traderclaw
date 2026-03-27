@@ -4,10 +4,20 @@ import { orchestratorRequest } from "./src/http-client.js";
 import { SessionManager } from "./src/session-manager.js";
 import { AlphaBuffer } from "./src/alpha-buffer.js";
 import { AlphaStreamManager } from "./src/alpha-ws.js";
-import { envelopedExecute, normalizeToolSuccess, normalizeToolError, renderToolEnvelope } from "./src/tool-envelope.js";
-import { resolveWorkspaceRoot, resolveMemoryDir, resolveDailyLogDir, pruneDailyLogs as pruneOldDailyLogs, generateStateMd, generateDecisionDigest, generateBulletinDigest, generateEntitlementsDigest } from "./src/runtime-layout.js";
+import { normalizeToolSuccess, normalizeToolError, renderToolEnvelope } from "./src/tool-envelope.js";
+import {
+  resolveWorkspaceRoot,
+  resolveMemoryDir,
+  resolveDailyLogDir,
+  pruneDailyLogs as pruneOldDailyLogs,
+  generateStateMd,
+  generateDecisionDigest,
+  generateBulletinDigest,
+  generateEntitlementsDigest,
+} from "./src/runtime-layout.js";
 import { IntelligenceLab } from "./src/intelligence-lab.js";
 import { scrubUntrustedText } from "./src/prompt-scrub.js";
+import { readRecoverySecretFromDisk, writeRecoverySecretToOpenclawAtomic } from "./src/recovery-secret-config.js";
 import * as fs from "fs";
 import * as path from "path";
 import { homedir } from "os";
@@ -37,6 +47,8 @@ interface PluginConfig {
   externalUserId?: string;
   refreshToken?: string;
   walletPublicKey?: string;
+  /** Consumable one-time recovery secret (rotated server-side on each use). */
+  recoverySecret?: string;
   apiTimeout?: number;
   agentId?: string;
   gatewayBaseUrl?: string;
@@ -67,8 +79,10 @@ function parseConfig(raw: unknown): PluginConfig {
   const dataDir = typeof obj.dataDir === "string" ? obj.dataDir : undefined;
   const workspaceDir = typeof obj.workspaceDir === "string" ? obj.workspaceDir : undefined;
   const bootstrapDecisionCount = typeof obj.bootstrapDecisionCount === "number" ? obj.bootstrapDecisionCount : 10;
-  const bootstrapBulletinWindowHours = typeof obj.bootstrapBulletinWindowHours === "number" ? obj.bootstrapBulletinWindowHours : 24;
+  const bootstrapBulletinWindowHours =
+    typeof obj.bootstrapBulletinWindowHours === "number" ? obj.bootstrapBulletinWindowHours : 24;
   const dailyLogRetentionDays = typeof obj.dailyLogRetentionDays === "number" ? obj.dailyLogRetentionDays : 30;
+  const recoverySecret = typeof obj.recoverySecret === "string" ? obj.recoverySecret : undefined;
   const xConfig = parseXConfig(obj) as XConfig;
   return {
     orchestratorUrl,
@@ -77,6 +91,7 @@ function parseConfig(raw: unknown): PluginConfig {
     externalUserId,
     refreshToken,
     walletPublicKey,
+    recoverySecret,
     apiTimeout,
     agentId,
     gatewayBaseUrl,
@@ -186,22 +201,104 @@ const solanaTraderPlugin = {
       return;
     }
 
+    const dataDir = config.dataDir || path.join(process.cwd(), ".traderclaw-v1-data");
+    const sessionTokensPath = path.join(dataDir, "session-tokens.json");
+
+    interface SessionSidecar {
+      refreshToken?: string;
+      accessToken?: string;
+      accessTokenExpiresAt?: number;
+      walletPublicKey?: string;
+    }
+
+    const readSessionSidecar = (): SessionSidecar | null => {
+      try {
+        if (!fs.existsSync(sessionTokensPath)) return null;
+        const raw = JSON.parse(fs.readFileSync(sessionTokensPath, "utf-8"));
+        if (!raw || typeof raw !== "object") return null;
+        return raw as SessionSidecar;
+      } catch {
+        return null;
+      }
+    };
+
+    const writeSessionSidecarAtomic = (payload: SessionSidecar) => {
+      if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+      const tmp = `${sessionTokensPath}.${process.pid}.${Date.now()}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(payload, null, 2) + "\n", "utf-8");
+      fs.renameSync(tmp, sessionTokensPath);
+    };
+
+    const sidecar = readSessionSidecar();
+    const effectiveRefreshToken =
+      typeof sidecar?.refreshToken === "string" && sidecar.refreshToken.length > 0
+        ? sidecar.refreshToken
+        : config.refreshToken;
+    const effectiveWalletPublicKey =
+      typeof sidecar?.walletPublicKey === "string" && sidecar.walletPublicKey.length > 0
+        ? sidecar.walletPublicKey
+        : config.walletPublicKey;
+
+    let initialAccessToken: string | undefined;
+    let initialAccessTokenExpiresAt: number | undefined;
+    if (
+      typeof sidecar?.accessToken === "string" &&
+      sidecar.accessToken.length > 0 &&
+      typeof sidecar?.accessTokenExpiresAt === "number" &&
+      Date.now() < sidecar.accessTokenExpiresAt - 5000
+    ) {
+      initialAccessToken = sidecar.accessToken;
+      initialAccessTokenExpiresAt = sidecar.accessTokenExpiresAt;
+    }
+
+    api.logger.info(
+      `[solana-trader] Session: sidecar=${sidecar ? "yes" : "no"}, refreshToken=${effectiveRefreshToken ? "present (" + effectiveRefreshToken.slice(0, 8) + "...)" : "MISSING"}, ` +
+        `apiKey=${apiKey ? "present" : "MISSING"}, walletPublicKey=${effectiveWalletPublicKey ? "present" : "MISSING"}`,
+    );
+
     const sessionManager = new SessionManager({
       baseUrl: orchestratorUrl,
       apiKey: apiKey || "",
-      refreshToken: config.refreshToken,
-      walletPublicKey: config.walletPublicKey,
+      refreshToken: effectiveRefreshToken,
+      walletPublicKey: effectiveWalletPublicKey,
       walletPrivateKeyProvider: () => {
         const runtimeKey = process.env.TRADERCLAW_WALLET_PRIVATE_KEY || "";
         return runtimeKey.trim() || undefined;
       },
+      recoverySecretProvider: async () => {
+        const fromDisk = readRecoverySecretFromDisk();
+        if (fromDisk) return fromDisk;
+        const s = config.recoverySecret;
+        return typeof s === "string" && s.trim().length > 0 ? s.trim() : undefined;
+      },
+      onRecoverySecretRotated: (newSecret) => {
+        try {
+          writeRecoverySecretToOpenclawAtomic(newSecret);
+          api.logger.info("[solana-trader] Persisted rotated recovery secret to openclaw.json");
+        } catch (err: unknown) {
+          api.logger.warn(
+            `[solana-trader] Failed to write rotated recovery secret: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
       clientLabel: "openclaw-plugin-runtime",
       timeout: apiTimeout,
+      initialAccessToken,
+      initialAccessTokenExpiresAt,
       onTokensRotated: (tokens) => {
-        api.logger.info(
-          `[solana-trader] Session tokens rotated. New refreshToken: ${tokens.refreshToken.slice(0, 8)}... ` +
-          `Update config with: traderclaw config set refreshToken ${tokens.refreshToken}`
-        );
+        try {
+          writeSessionSidecarAtomic({
+            refreshToken: tokens.refreshToken,
+            accessToken: tokens.accessToken,
+            accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+            walletPublicKey: tokens.walletPublicKey,
+          });
+          api.logger.info(`[solana-trader] Persisted session tokens to ${sessionTokensPath}`);
+        } catch (err: unknown) {
+          api.logger.warn(
+            `[solana-trader] Failed to persist session sidecar: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       },
       logger: {
         info: (msg) => api.logger.info(`[solana-trader] ${msg}`),
@@ -282,7 +379,6 @@ const solanaTraderPlugin = {
       };
 
     const workspaceRoot = resolveWorkspaceRoot(config.workspaceDir);
-    const dataDir = config.dataDir || path.join(process.cwd(), ".traderclaw-v1-data");
     const stateDir = path.join(dataDir, "state");
     const logsDir = path.join(dataDir, "logs");
     const sharedLogsDir = path.join(logsDir, "shared");
@@ -574,14 +670,35 @@ const solanaTraderPlugin = {
 
     api.registerTool({
       name: "solana_trade_precheck",
-      description: "Pre-trade risk check — validates a proposed trade against risk rules, kill switch, entitlement limits, and on-chain conditions. Returns approved/denied with reasons and capped size. Always call this before executing a trade. Buy: sizeSol required, do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored.",
+      description:
+        "Pre-trade risk check — validates a proposed trade against risk rules, kill switch, entitlement limits, and on-chain conditions. Returns approved/denied with reasons and capped size. Always call this before executing a trade. " +
+        "Buy: sizeSol required; do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens are ignored. " +
+        "Optional exit fields (trailingStopPct, trailingStop) are accepted to mirror execute payloads; sizing logic ignores them.",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         side: Type.Union([Type.Literal("buy"), Type.Literal("sell")], { description: "Trade direction" }),
-        sizeSol: Type.Optional(Type.Number({ description: "Position size in SOL — required for buy, do not send for sell" })),
-        sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1–100 (100 = full exit) — sell only. Preferred over sizeTokens if both sent." })),
-        sizeTokens: Type.Optional(Type.Number({ description: "Number of tokens to sell — sell only. Ignored if sellPct is also provided." })),
-        slippageBps: Type.Number({ description: "Slippage tolerance in basis points (REQUIRED, e.g., 300 = 3%)" }),
+        sizeSol: Type.Optional(Type.Number({ description: "Position size in SOL — required for buy, omit for sell" })),
+        sellPct: Type.Optional(Type.Number({ description: "Sell percentage 1–100 (100 = full exit) — sell only; preferred over sizeTokens if both sent" })),
+        sizeTokens: Type.Optional(Type.Number({ description: "Token amount to sell — sell only; ignored if sellPct is also provided" })),
+        slippageBps: Type.Optional(Type.Number({ description: "Slippage tolerance in basis points (e.g., 300 = 3%)" })),
+        trailingStopPct: Type.Optional(Type.Number({ description: "Optional — same as execute; ignored for policy sizing" })),
+        trailingStop: Type.Optional(
+          Type.Object({
+            levels: Type.Array(
+              Type.Object({
+                percentage: Type.Number({ description: "Trailing drawdown % from the armed high once the level is active" }),
+                amount: Type.Optional(Type.Number({ description: "% of position to sell at this level (1–100). Server default 100." })),
+                triggerAboveATH: Type.Optional(
+                  Type.Number({
+                    description:
+                      "Optional. % above session ATH before this level arms. If omitted, API defaults to 100 (2× ATH).",
+                  }),
+                ),
+              }),
+              { minItems: 1, maxItems: 5, description: "Multi-level trailing (optional on precheck)" },
+            ),
+          }),
+        ),
       }),
       execute: wrapExecute("solana_trade_precheck", async (_id, params) => {
         const body: Record<string, unknown> = {
@@ -589,6 +706,13 @@ const solanaTraderPlugin = {
           side: params.side,
           slippageBps: params.slippageBps,
         };
+        if (params.trailingStopPct !== undefined) {
+          body.trailingStopPct = params.trailingStopPct;
+        }
+        const ts = params.trailingStop as { levels?: unknown[] } | undefined;
+        if (ts?.levels && Array.isArray(ts.levels) && ts.levels.length > 0) {
+          body.trailingStop = ts;
+        }
         if (params.side === "buy") {
           body.sizeSol = params.sizeSol;
         } else {
@@ -606,8 +730,9 @@ const solanaTraderPlugin = {
       name: "solana_trade_execute",
       description:
         "Execute a trade on Solana via the SpyFly bot. Enforces risk rules before proxying to on-chain execution. Returns trade ID, position ID, and transaction signature. " +
-        "IMPORTANT: tpLevels alone (e.g. [100, 200]) means EACH level sells 100% of the position at that gain — use tpExits for partials (e.g. +100% sell 30%, +200% sell 100%). " +
-        "Buy: sizeSol required, do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored.",
+        "IMPORTANT: tpLevels alone (e.g. [10, 15]) means EACH level sells 100% of the position at that gain — use tpExits for partials (e.g. +10% sell 50%, +15% sell 100%). " +
+        "Trailing: use `trailingStopPct` for a single simple trailing %, or `trailingStop.levels` (1–5) for multi-level trailing with optional `triggerAboveATH` per level (% above session ATH before that level arms; if omitted, server defaults to 100 i.e. 2× ATH). When both are sent, `trailingStop` wins. " +
+        "Buy: sizeSol required; do not send sizeTokens or sellPct. Sell: send exactly one of sizeTokens or sellPct (not sizeSol). If both sellPct and sizeTokens are sent, sellPct is preferred and sizeTokens is ignored.",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         side: Type.Union([Type.Literal("buy"), Type.Literal("sell")], { description: "Trade direction" }),
@@ -648,17 +773,38 @@ const solanaTraderPlugin = {
             { description: "Multi-level stop-loss with partial exits (optional). Otherwise use slPct for a single full exit." },
           ),
         ),
-        trailingStopPct: Type.Optional(Type.Number({ description: "Trailing stop percentage (simple/legacy — single value)" })),
+        trailingStopPct: Type.Optional(
+          Type.Number({
+            description: "Single trailing-stop % (legacy). Ignored if `trailingStop` is provided.",
+          }),
+        ),
         trailingStop: Type.Optional(
           Type.Object({
             levels: Type.Array(
               Type.Object({
-                percentage: Type.Number({ description: "Trailing stop distance as %" }),
-                amount: Type.Optional(Type.Number({ description: "% of position to sell when this trailing stop level triggers (1-100, default: 100 = full exit)" })),
-                triggerAboveATH: Type.Optional(Type.Number({ description: "Activate this level only after price exceeds N% of ATH since entry. Default: 100 (i.e. 2× ATH)" })),
+                percentage: Type.Number({
+                  description:
+                    "Once armed, sell when price drops this % from the high (trailing drawdown).",
+                }),
+                amount: Type.Optional(
+                  Type.Number({
+                    description: "% of position to sell when this level fires (1–100). Server default 100.",
+                  }),
+                ),
+                triggerAboveATH: Type.Optional(
+                  Type.Number({
+                    description:
+                      "Optional. Session price must reach this % above session ATH before this level arms (e.g. 50 → 1.5× ATH). If omitted, API defaults to 100 (2× ATH).",
+                  }),
+                ),
               }),
+              {
+                minItems: 1,
+                maxItems: 5,
+                description: "Ordered trailing-stop levels (up to 5).",
+              },
             ),
-          }, { description: "Structured trailing stop with tiered levels. Takes precedence over trailingStopPct if both sent." }),
+          }),
         ),
         managementMode: Type.Optional(
           Type.Union([Type.Literal("LOCAL_MANAGED"), Type.Literal("SERVER_MANAGED")], {
@@ -678,10 +824,14 @@ const solanaTraderPlugin = {
           symbol: params.symbol,
           slippageBps: params.slippageBps,
           slPct: params.slPct,
-          trailingStopPct: params.trailingStopPct,
-          trailingStop: params.trailingStop,
           managementMode: params.managementMode,
         };
+        const tsExecute = params.trailingStop as { levels?: unknown[] } | undefined;
+        if (tsExecute?.levels && Array.isArray(tsExecute.levels) && tsExecute.levels.length > 0) {
+          body.trailingStop = tsExecute;
+        } else if (params.trailingStopPct !== undefined) {
+          body.trailingStopPct = params.trailingStopPct;
+        }
         if (params.side === "buy") {
           body.sizeSol = params.sizeSol;
         } else {
@@ -911,7 +1061,8 @@ const solanaTraderPlugin = {
 
     api.registerTool({
       name: "solana_capital_status",
-      description: "Get your current capital status — SOL balance, open position count, unrealized PnL, daily notional used, daily loss, and effective limits (adjusted by entitlements).",
+      description:
+        "Get your current capital status — SOL balance, open position count, unrealized/realized PnL, daily notional used, daily loss, and effective limits. **PnL:** `totalUnrealizedPnl` / `totalRealizedPnl` are USD (DB); use `totalUnrealizedPnlSol` / `totalRealizedPnlSol` / `totalPnlSol` for SOL (derived via `solPriceUsd`, same as positions API).",
       parameters: Type.Object({}),
       execute: wrapExecute("solana_capital_status", async () =>
         get(`/api/capital/status?walletId=${walletId}`),
@@ -920,7 +1071,8 @@ const solanaTraderPlugin = {
 
     api.registerTool({
       name: "solana_positions",
-      description: "List your current trading positions with unrealized PnL, entry price, current price, stop-loss/take-profit settings, and management mode. Call at the START of every trading cycle for interrupt check. Also use to detect dead money (flat positions).",
+      description:
+        "List trading positions with mark-to-market. **PnL:** `realizedPnl` / `unrealizedPnl` are USD as stored; prefer `realizedPnlSol` / `unrealizedPnlSol` when reasoning in SOL. `unrealizedReturnPct` is ROI on cost basis (for sweep-dead-tokens logic). See response `pnlNote`.",
       parameters: Type.Object({
         status: Type.Optional(Type.String({ description: "Filter by status: 'open', 'closed', or omit for all" })),
       }),
@@ -929,6 +1081,54 @@ const solanaTraderPlugin = {
         if (params.status) reqPath += `&status=${params.status}`;
         return get(reqPath);
       }),
+    });
+
+    api.registerTool({
+      name: "solana_wallet_token_balance",
+      description:
+        "Read on-chain SPL token balance (UI amount) for your trading wallet and a token mint. Same balance path as server exit monitoring (`balanceOf`).",
+      parameters: Type.Object({
+        tokenAddress: Type.String({ description: "SPL token mint address" }),
+      }),
+      execute: wrapExecute("solana_wallet_token_balance", async (_id, params) =>
+        post("/api/wallet/token-balance", {
+          walletId,
+          tokenAddress: params.tokenAddress,
+        }),
+      ),
+    });
+
+    api.registerTool({
+      name: "solana_all_tokens_balance",
+      description:
+        "Aggregate on-chain snapshot: native SOL balance plus SPL **uiAmount** for every mint tied to **open** positions, with optional mark-to-market **valueSol** per token and **tokensValueSolTotal** (same pricing path as position refresh). Use for portfolio-level balance checks without querying each mint separately.",
+      parameters: Type.Object({}),
+      execute: wrapExecute("solana_all_tokens_balance", async () =>
+        post("/api/wallet/positions-balances", {
+          walletId,
+        }),
+      ),
+    });
+
+    api.registerTool({
+      name: "solana_sweep_dead_tokens",
+      description:
+        "Sell 100% of each OPEN position whose unrealizedReturnPct is ≤ -maxLossPct (default 80), using the same mark-to-market as positions. Use dryRun:true first to list candidates. Executes sequential full exits (sellPct 100). Requires trade:execute scope.",
+      parameters: Type.Object({
+        maxLossPct: Type.Optional(
+          Type.Number({ description: "Threshold: sweep when unrealizedReturnPct <= -maxLossPct (default 80)" }),
+        ),
+        slippageBps: Type.Optional(Type.Number({ description: "Per-exit slippage in bps (default 300)" })),
+        dryRun: Type.Optional(Type.Boolean({ description: "If true, only return candidate tokens without selling" })),
+      }),
+      execute: wrapExecute("solana_sweep_dead_tokens", async (_id, params) =>
+        post("/api/wallet/sweep-dead-tokens", {
+          walletId,
+          maxLossPct: params.maxLossPct,
+          slippageBps: params.slippageBps,
+          dryRun: params.dryRun,
+        }),
+      ),
     });
 
     api.registerTool({

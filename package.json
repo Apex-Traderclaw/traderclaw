@@ -1,18 +1,19 @@
 {
-  "name": "traderclaw-team-v1-upgraded-public",
-  "version": "1.1.0",
-  "description": "TraderClaw V1-Upgraded Public Edition — Solana trading agent with X/Twitter social intel (read-only), standardized tool envelopes, intelligence lab, prompt scrubbing, and split skill architecture",
+  "name": "solana-traderclaw",
+  "version": "1.0.41",
+  "description": "TraderClaw V1-Upgraded — Solana trading for OpenClaw with intelligence lab, tool envelopes, prompt scrubbing, read-only X social intel, and split skill docs",
   "type": "module",
   "main": "./dist/index.js",
   "exports": {
     ".": "./dist/index.js"
   },
   "bin": {
-    "traderclaw": "./bin/openclaw-trader.mjs"
+    "traderclaw": "bin/traderclaw.cjs"
   },
   "files": [
     "dist/",
     "bin/*.mjs",
+    "bin/*.cjs",
     "skills/",
     "config/",
     "lib/",
@@ -33,8 +34,6 @@
     "plugin",
     "x",
     "twitter",
-    "journal",
-    "team",
     "intelligence",
     "upgraded"
   ],

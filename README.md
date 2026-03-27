@@ -1,4 +1,4 @@
-# traderclaw-team-v1-upgraded-public
+# solana-traderclaw (V1-Upgraded)
 
 Public edition of the upgraded TraderClaw V1 plugin for autonomous Solana memecoin trading. Identical to the team edition with one difference: X/Twitter tools are read-only (social intel only, no posting). 94 Solana tools + 3 X/Twitter read tools = 97 total. Full trading lifecycle. Connects OpenClaw to a trading orchestrator that handles market data, risk enforcement, and trade execution. Includes a full memory layer with local persistence, episodic logging, deterministic compute tools, intelligence lab, standardized tool envelopes, prompt scrubbing, and OpenClaw-native memory integration.
 
@@ -35,13 +35,13 @@ The plugin gives OpenClaw tools to interact with the Solana trading orchestrator
 ### 1. Install the plugin
 
 ```bash
-npm install -g traderclaw-team-v1-upgraded
+npm install -g solana-traderclaw
 ```
 
 Or install directly into OpenClaw:
 
 ```bash
-openclaw plugins install traderclaw-team-v1-upgraded
+openclaw plugins install solana-traderclaw
 ```
 
 ### 2. Run setup
