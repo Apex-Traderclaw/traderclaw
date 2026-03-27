@@ -2070,6 +2070,7 @@ All authenticated endpoints use `Authorization: Bearer <accessToken>`.
 | `GET` | `/api/capital/status` | `?walletId=<uuid>` | Wallet capital and daily limits. **PnL:** `totalUnrealizedPnl` / `totalRealizedPnl` are **USD** (stored); `totalUnrealizedPnlSol` / `totalRealizedPnlSol` / `totalPnlSol` are **SOL** derived with `solPriceUsd` (agent-safe). |
 | `GET` | `/api/wallet/positions` | `?walletId=<uuid>` | Positions. **`realizedPnl` / `unrealizedPnl` = USD** in DB; use **`realizedPnlSol` / `unrealizedPnlSol`** for SOL. `unrealizedReturnPct` = ROI vs cost (for sweep). |
 | `POST` | `/api/wallet/token-balance` | `walletId`, `tokenAddress` | On-chain SPL **uiAmount** for the wallet (same as server `balanceOf`) |
+| `POST` | `/api/wallet/positions-balances` | `walletId` | Native **solBalance**, **solPriceUsd**, and per-mint rows for **open** positions: **uiAmount**, optional **markPriceSolPerToken** / **valueSol**, **tokensValueSolTotal** |
 | `POST` | `/api/wallet/sweep-dead-tokens` | `walletId` | Optional: `maxLossPct` (default **80**), `slippageBps`, `dryRun`. Sells **100%** of each **open** position with `unrealizedReturnPct` ≤ **-maxLossPct**. **trade:execute** scope. |
 | `GET` | `/api/funding/instructions` | `?walletId=<uuid>` | Deposit instructions |
 | `GET` | `/api/killswitch/status` | `?walletId=<uuid>` | Kill switch state |
@@ -2710,6 +2711,7 @@ Each user configures their own X/Twitter API developer account tokens in the plu
 | Monitor | `solana_capital_status` | Portfolio status (same USD vs SOL split as API) |
 | Risk | `solana_sweep_dead_tokens` | Full-exit open positions below **-maxLossPct** ROI (default 80%); use `dryRun` first |
 | Wallet | `solana_wallet_token_balance` | On-chain SPL balance for a mint |
+| Wallet | `solana_all_tokens_balance` | SOL + all open-position token balances and optional mark-to-market in SOL |
 | Review | `solana_trade_review` | Post-trade review |
 | Memory | `solana_memory_write` | Write journal entry (deployer profiles, filter evolution, convergence) |
 | Memory | `solana_memory_search` | Search memories (check deployer history before profiling) |

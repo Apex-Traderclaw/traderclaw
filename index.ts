@@ -988,6 +988,18 @@ const solanaTraderPlugin = {
     });
 
     api.registerTool({
+      name: "solana_all_tokens_balance",
+      description:
+        "Aggregate on-chain snapshot: native SOL balance plus SPL **uiAmount** for every mint tied to **open** positions, with optional mark-to-market **valueSol** per token and **tokensValueSolTotal** (same pricing path as position refresh). Use for portfolio-level balance checks without querying each mint separately.",
+      parameters: Type.Object({}),
+      execute: wrapExecute(async () =>
+        post("/api/wallet/positions-balances", {
+          walletId,
+        }),
+      ),
+    });
+
+    api.registerTool({
       name: "solana_sweep_dead_tokens",
       description:
         "Sell 100% of each OPEN position whose unrealizedReturnPct is ≤ -maxLossPct (default 80), using the same mark-to-market as positions. Use dryRun:true first to list candidates. Executes sequential full exits (sellPct 100). Requires trade:execute scope.",
