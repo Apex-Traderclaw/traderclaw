@@ -1,6 +1,6 @@
 {
   "name": "solana-traderclaw",
-  "version": "1.0.38",
+  "version": "1.0.39",
   "description": "TraderClaw V1 — autonomous Solana memecoin trading for OpenClaw (team edition: X/Twitter journal and engagement tools)",
   "type": "module",
   "main": "./dist/index.js",
