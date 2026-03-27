@@ -49,6 +49,10 @@ export interface SessionManagerConfig {
   refreshToken?: string;
   walletPublicKey?: string;
   walletPrivateKeyProvider?: () => string | undefined | Promise<string | undefined>;
+  /** Called before consumable recovery; re-read from disk each time for hot reload. */
+  recoverySecretProvider?: () => string | undefined | Promise<string | undefined>;
+  /** After successful /api/session/recover-secret, persist rotated secret (e.g. openclaw.json). */
+  onRecoverySecretRotated?: (newSecret: string) => void;
   clientLabel?: string;
   timeout?: number;
   /** If still valid, avoids an immediate /api/session/refresh on cold start. */
@@ -194,6 +198,8 @@ export class SessionManager {
   private refreshTokenValue: string | null = null;
   private walletPublicKey: string | null = null;
   private walletPrivateKeyProvider?: () => string | undefined | Promise<string | undefined>;
+  private recoverySecretProvider?: () => string | undefined | Promise<string | undefined>;
+  private onRecoverySecretRotated?: (newSecret: string) => void;
   private clientLabel: string;
   private timeout: number;
   private accessTokenExpiresAt: number = 0;
@@ -215,6 +221,8 @@ export class SessionManager {
     this.refreshTokenValue = config.refreshToken || null;
     this.walletPublicKey = config.walletPublicKey || null;
     this.walletPrivateKeyProvider = config.walletPrivateKeyProvider;
+    this.recoverySecretProvider = config.recoverySecretProvider;
+    this.onRecoverySecretRotated = config.onRecoverySecretRotated;
     this.clientLabel = config.clientLabel || "openclaw-plugin-runtime";
     this.timeout = config.timeout || 15000;
     this.onTokensRotated = config.onTokensRotated;
@@ -300,6 +308,46 @@ export class SessionManager {
     return tokens;
   }
 
+  /**
+   * One-time consumable secret recovery (orchestrator rotates secret on success).
+   * Response may include `recoverySecret` for the next failure path.
+   */
+  async recoverSessionWithConsumableSecret(recoverySecret: string): Promise<SessionTokens & { recoverySecret?: string }> {
+    const trimmed = recoverySecret.trim();
+    if (!trimmed) {
+      throw new Error("Recovery secret is empty.");
+    }
+
+    const res = await rawFetch(
+      `${this.baseUrl}/api/session/recover-secret`,
+      "POST",
+      {
+        apiKey: this.apiKey,
+        recoverySecret: trimmed,
+        clientLabel: this.clientLabel,
+      },
+      undefined,
+      this.timeout,
+    );
+
+    if (!res.ok) {
+      throw new Error(`Session recover-secret failed (HTTP ${res.status}): ${JSON.stringify(res.data)}`);
+    }
+
+    const data = res.data as SessionTokens & { recoverySecret?: string };
+    this.applyTokens(data);
+    if (data.recoverySecret && this.onRecoverySecretRotated) {
+      try {
+        this.onRecoverySecretRotated(data.recoverySecret);
+      } catch (err: unknown) {
+        this.log.warn(
+          `[session] Failed to persist rotated recovery secret: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return data;
+  }
+
   async refresh(): Promise<SessionTokens> {
     if (!this.refreshTokenValue) {
       throw new Error("No refresh token available. Must authenticate via challenge flow.");
@@ -371,6 +419,20 @@ export class SessionManager {
         "No apiKey configured. On this machine run: traderclaw setup --signup (or traderclaw signup) for a new account, " +
           "or add an API key via traderclaw setup. The agent cannot create accounts or change credentials.",
       );
+    }
+
+    const recoverySecret = (await this.recoverySecretProvider?.())?.trim();
+    if (recoverySecret) {
+      try {
+        this.log.info("[session] Attempting consumable recovery secret...");
+        await this.recoverSessionWithConsumableSecret(recoverySecret);
+        this.log.info(`[session] Session recovered via consumable secret. Tier: ${this.tier}`);
+        return;
+      } catch (err: unknown) {
+        this.log.warn(
+          `[session] Consumable recovery failed: ${err instanceof Error ? err.message : String(err)}. Falling back to challenge flow...`,
+        );
+      }
     }
 
     this.log.info("[session] Starting challenge flow...");
