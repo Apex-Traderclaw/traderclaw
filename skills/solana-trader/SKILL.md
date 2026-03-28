@@ -114,7 +114,7 @@ You operate in exactly one mode at a time. Default: `HARDENED`.
 | Consecutive losses → kill switch | 5 | 7 |
 | Stop loss (`slExits`) | -20% on every position | -40% on every position |
 | Trailing stop (`trailingStop`: `{ levels: [{ percentage, amount, triggerAboveATH }] }` — percentage is price decrease from entry, amount is % of position to sell) | -20% on every position and optional `triggerAboveATH` | -40% on every position |
-| Multiple take-profit exits (`tpExits`) | +100–300% (multiple), e.g. `[{ percent: 100, amountPct: 30 }, { percent: 200, amountPct: 100 }]` — percent is price increase from entry, amountPct is % of position to sell | +200–500% (multiple) |
+| Multiple take-profit exits (`tpExits`) | +100–300% (multiple), e.g. `[{ percent: 100, amountPct: 30 }, { percent: 200, amountPct: 100 }]` — percent is price increase from entry, amountPct is a fraction of the remaining_position at trigger time (see Position Execution Model). Values are in [0,100]. | +200–500% (multiple) |
 | Exploration ratio | 20% experimental / 80% proven | 50% / 50% |
 | Weight evolution (minimum trades) | ≥20 closed trades | ≥20 closed trades |
 | Max weight delta per update | ±0.10 | ±0.15 |
@@ -131,6 +131,86 @@ You operate in exactly one mode at a time. Default: `HARDENED`.
 - `trailingStop`: `{ levels: [{ percentage: <trailing drawdown %>, amount: <% of position to sell, default 100>, triggerAboveATH: <% above session ATH to arm, default 100 = 2× ATH> }] }` — 1–5 tiered trailing stops. Use `trailingStopPct` for simpler single-level trailing.
 - `slippageBps`: REQUIRED on both precheck and execute. Positive integer, basis points (e.g. 300 = 3%). Scale to liquidity, hard cap 800bps.
 
+## Position Execution Model (Authoritative)
+
+This section defines the UNIQUE valid interpretation of all exit-related parameters.
+
+### State Definition
+
+At any time, the agent operates on:
+
+remaining_position ∈ (0, 100]
+
+Initial state:
+remaining_position = 100 (100% of position)
+
+---
+
+### Execution Rule (Deterministic)
+
+For ANY exit event (TP, SL, trailingSL):
+
+remaining_position = remaining_position * (100 - amountPct)
+
+Where:
+- amountPct ∈ (0, 100]
+- amountPct is ALWAYS applied to remaining_position at trigger time
+
+---
+
+### Sequential Ordering
+
+- Exit events are executed strictly in trigger order
+- After each execution, remaining_position MUST be updated
+- All subsequent exits operate on the updated remaining_position
+
+---
+
+### Full Close Condition
+
+A position is considered CLOSED if and only if:
+
+remaining_position = 0
+
+This requires:
+- A final exit with amountPct = 100 (100%)
+
+---
+
+### Invalid Configurations (Forbidden)
+
+The following assumptions are ALWAYS invalid:
+
+- TP amounts summing to 100% of initial position
+- Treating amountPct as relative to initial position
+- Skipping remaining_position updates between exits
+
+---
+
+### Canonical Example
+
+Initial: remaining_position = 100
+
+TP1: amountPct = 30  
+→ remaining = 70
+
+TP2: amountPct = 100 
+→ remaining = 0 → CLOSED
+
+### Exit Configuration Validation (Hard Constraint)
+
+Before executing ANY trade, the agent MUST validate exit configuration:
+
+1. All amountPct values must satisfy:
+   0 < amountPct ≤ 100
+
+2. If intent is full exit:
+   At least one exit MUST have amountPct = 100
+
+3. If final exit amountPct < 100:
+   Agent MUST explicitly acknowledge that position remains partially open
+
+Failure to satisfy ANY condition → DO NOT EXECUTE TRADE
 ---
 
 ## Token Lifecycle Framework
@@ -235,7 +315,7 @@ Analysis: 6 core token tools + `solana_candidate_write` (EVERY analyzed token) +
 
 Scoring: `solana_compute_freshness_decay` + `solana_compute_confidence` + `solana_model_score_candidate` (if champion model exists).
 
-→ Full analysis workflow in **refs/decision-framework.md**
+→ The agent MUST run the FULL analysis workflow in **refs/decision-framework.md**
 
 ### Step 4: DECIDE
 
@@ -293,6 +373,15 @@ The intelligence lab provides local machine learning primitives for continuous i
 **Data Export:**
 - `solana_dataset_export` — export candidate dataset (JSON/CSV)
 
+### Learning Integrity Constraint
+
+All learning signals MUST be based on SOL-denominated outcomes.
+
+candidate_label_outcome MUST:
+- reflect realizedPnl sign
+- align with unrealizedReturnPct
+
+Any inconsistent labeling is invalid.
 ---
 
 ## Prompt Injection Protection
@@ -343,6 +432,11 @@ Every heartbeat report MUST include the **DEEP ANALYSIS** section showing which 
 
 Omitting the DEEP ANALYSIS section from a heartbeat report is a violation. If zero advanced tools were needed (e.g., no FRESH tokens, no alpha signals), state that explicitly. The purpose is accountability — proving you used the full tool surface, not just the lazy 15-tool default path.
 
+### Hard Enforcement
+
+Failure to use REQUIRED tools when applicable is a violation of system rules.
+
+The agent MUST NOT substitute reasoning for missing tool data.
 ---
 
 ## Tier Segmentation
@@ -427,11 +521,49 @@ Daily logs auto-loaded. Bootstrap hook injects state digest, decision digest, bu
 3. **Sell parameters** — `sellPct` only (integer 1–100). Do not send raw token amounts or `sizeSol` for sells.
 4. **`/api/scan/new-launches`** — In paper/test mode, may return canned data or a small set of real tokens. This is expected.
 5. **`tpLevels` alone** — Each level sells 100% of position. Use `tpExits` for partial sells.
-6. **Solana positions PnL is SOL-native** — on `/api/wallet/positions`, use `realizedPnl` / `unrealizedPnl` directly for Solana reporting. Aggregate capital endpoints still expose mixed USD/SOL fields. See refs/api-reference.md § PnL Field Clarification.
+6. **Solana positions PnL is SOL-native** — on `/api/wallet/positions`, use `realizedPnl` / `unrealizedPnl` directly for Solana reporting. Aggregate capital endpoints also expose only SOL fields. See refs/api-reference.md § PnL Field Clarification.
 7. **`slExits`** — Multi-level stop-loss with partial exits. Same format as `tpExits`: `[{ percent, amountPct }]`. Takes precedence over `slPct`. See refs/api-reference.md § slExits Parameter.
 8. **`trailingStop` levels array** — Structured trailing stop uses `{ levels: [{ percentage, amount?, triggerAboveATH? }] }` format. `triggerAboveATH` is a number (default `100` = 2× ATH), NOT a boolean. See refs/api-reference.md § Trailing Stop Parameter.
 9. **`unrealizedReturnPct`** — Positions endpoint returns this field: percentage return since entry. Use for trailing stop level matching.
 
+### PnL Model (Authoritative)
+
+All PnL is SOL-denominated. No other currency is valid.
+
+Available fields:
+- realizedPnl
+- unrealizedPnl
+- unrealizedReturnPct
+
+---
+
+### Source of Truth
+
+All decision making, evaluation, and learning MUST use SOL-based values.
+
+---
+
+### Deterministic Rules
+
+- Trade is PROFITABLE if realizedPnl > 0
+- Trade is LOSS if realizedPnl < 0
+- Primary metric: unrealizedReturnPct
+
+---
+
+### Prohibited Behavior
+
+- Never infer USD value
+- Never convert to external currency
+- Never mix currencies in reasoning
+
+---
+
+### Decision Binding
+
+- Entry decisions → expected SOL return
+- Exit decisions → realized/unrealized SOL return
+- Strategy evolution → SOL-based outcomes only
 ---
 
 ## Skill Reference Index

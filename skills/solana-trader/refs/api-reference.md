@@ -153,7 +153,6 @@ The positions and trades endpoints do **not** use the same PnL contract:
 | `/api/wallet/positions` → `realizedPnl` | **SOL** | Solana realized profit/loss for position monitoring |
 | `/api/wallet/positions` → `unrealizedPnl` | **SOL** | Solana unrealized profit/loss for position monitoring |
 | `/api/trades` → `pnlSol` | **SOL** | Trade-level realized profit/loss |
-| `/api/capital/status` → `totalUnrealizedPnl` / `totalRealizedPnl` | **USD** | Wallet-level aggregate totals |
-| `/api/capital/status` → `totalUnrealizedPnlSol` / `totalRealizedPnlSol` / `totalPnlSol` | **SOL** | Wallet-level SOL view |
+| `/api/capital/status` → `totalUnrealizedPnl` / `totalRealizedPnl` | **SOL** | Wallet-level aggregate capital overview |
 
 **CRITICAL:** For Solana position monitoring, read `realizedPnl` / `unrealizedPnl` directly from `/api/wallet/positions`. Do **not** expect `realizedPnlSol` / `unrealizedPnlSol` on that endpoint.

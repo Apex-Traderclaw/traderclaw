@@ -43,6 +43,19 @@ Check mention velocity, influencer clustering, sentiment tone. Cross-check any X
 - **EMERGING (1-24h):** Top-10 concentration declining? Volume >20% of peak hour? Standard sizing.
 - **ESTABLISHED (>24h):** Full sizing. Edge = flow analysis + narrative timing.
 
+### Enforcement Rule
+
+If a REQUIRED tool is not called:
+→ The decision is INVALID
+
+---
+
+### Failure Handling
+
+If tool fails:
+- Treat as increased risk
+- Reduce position size OR skip trade
+
 ## Step 3: SCORE & RANK
 
 **Use `solana_compute_confidence` — NEVER do manual math.** The tool returns deterministic results.
@@ -103,6 +116,16 @@ Check mention velocity, influencer clustering, sentiment tone. Cross-check any X
 - FRESH: Cap at exploratory range regardless of confidence
 - EMERGING: Standard sizing
 - ESTABLISHED: Full range available
+
+### Deterministic Decision Constraints
+
+All decisions MUST:
+
+1. Use SOL-denominated performance only
+2. Use validated exit configuration (see Exit Configuration Validation)
+3. Conform to Position Execution Model
+
+If any constraint is violated → ABORT decision
 
 ### Size Reduction Triggers (stack multiplicatively)
 
