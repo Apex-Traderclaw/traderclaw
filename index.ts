@@ -1051,7 +1051,7 @@ const solanaTraderPlugin = {
     api.registerTool({
       name: "solana_capital_status",
       description:
-        "Get your current capital status — SOL balance, open position count, unrealized/realized PnL, daily notional used, daily loss, and effective limits. **PnL:** `totalUnrealizedPnl` / `totalRealizedPnl` are USD (DB); use `totalUnrealizedPnlSol` / `totalRealizedPnlSol` / `totalPnlSol` for SOL (derived via `solPriceUsd`, same as positions API).",
+        "Get your current capital status — SOL balance, open position count, unrealized/realized PnL, daily notional used, daily loss, and effective limits. **PnL:** `totalUnrealizedPnl` / `totalRealizedPnl` are USD (DB); use `totalUnrealizedPnlSol` / `totalRealizedPnlSol` / `totalPnlSol` for SOL (derived via `solPriceUsd`).",
       parameters: Type.Object({}),
       execute: wrapExecute("solana_capital_status", async () =>
         get(`/api/capital/status?walletId=${walletId}`),
@@ -1061,7 +1061,7 @@ const solanaTraderPlugin = {
     api.registerTool({
       name: "solana_positions",
       description:
-        "List trading positions with mark-to-market. **PnL:** `realizedPnl` / `unrealizedPnl` are USD as stored; prefer `realizedPnlSol` / `unrealizedPnlSol` when reasoning in SOL. `unrealizedReturnPct` is ROI on cost basis (for sweep-dead-tokens logic). See response `pnlNote`.",
+        "List trading positions with mark-to-market. **PnL:** for Solana wallets, `realizedPnl` / `unrealizedPnl` are returned in SOL-native units. `unrealizedReturnPct` is ROI on cost basis (for sweep-dead-tokens logic).",
       parameters: Type.Object({
         status: Type.Optional(Type.String({ description: "Filter by status: 'open', 'closed', or omit for all" })),
       }),
