@@ -44,6 +44,11 @@ Or install directly into OpenClaw:
 openclaw plugins install solana-traderclaw
 ```
 
+Install name and config id are intentionally different:
+- npm package / install command: `solana-traderclaw`
+- OpenClaw plugin id in `openclaw.json`: `solana-trader`
+- OpenClaw allowlist entry: `plugins.allow: ["solana-trader"]`
+
 ### 2. Run setup
 
 ```bash
@@ -143,7 +148,7 @@ traderclaw config set <key> <v> # Update a value
 traderclaw config reset         # Remove all plugin config
 ```
 
-Available config keys: `orchestratorUrl`, `walletId`, `apiKey`, `apiTimeout`, `refreshToken`, `walletPublicKey`, `walletPrivateKey`, `gatewayBaseUrl`, `gatewayToken`, `agentId`
+Available config keys: `orchestratorUrl`, `walletId`, `apiKey`, `apiTimeout`, `refreshToken`, `recoverySecret`, `walletPublicKey`, `walletPrivateKey`, `gatewayBaseUrl`, `gatewayToken`, `agentId`
 
 ### `traderclaw --help`
 
@@ -160,6 +165,7 @@ If you prefer to configure manually instead of using the CLI, add to `~/.opencla
 ```json5
 {
   plugins: {
+    allow: ["solana-trader"],
     entries: {
       "solana-trader": {
         enabled: true,

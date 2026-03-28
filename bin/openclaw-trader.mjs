@@ -13,6 +13,7 @@ const PACKAGE_JSON = JSON.parse(readFileSync(new URL("../package.json", import.m
 const VERSION = PACKAGE_JSON.version;
 const NPM_PACKAGE_NAME = typeof PACKAGE_JSON.name === "string" ? PACKAGE_JSON.name : "solana-traderclaw";
 const PLUGIN_ID = "solana-trader";
+const LEGACY_PLUGIN_IDS = ["traderclaw-v1", "solana-traderclaw-v1", "solana-traderclaw"];
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 const WALLET_PRIVATE_KEY_ENV = "TRADERCLAW_WALLET_PRIVATE_KEY";
@@ -166,11 +167,69 @@ function readConfig() {
 }
 
 function writeConfig(config) {
+  normalizePluginConfigShape(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
+function isRecord(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizePluginConfigShape(config) {
+  if (!isRecord(config)) return config;
+  if (!isRecord(config.plugins)) config.plugins = {};
+  const plugins = config.plugins;
+  if (!isRecord(plugins.entries)) plugins.entries = {};
+  const entries = plugins.entries;
+
+  let enabledSeen = false;
+  let enabledValue = false;
+  let mergedConfig = {};
+  let found = false;
+
+  for (const sourceId of [...LEGACY_PLUGIN_IDS, PLUGIN_ID]) {
+    const entry = entries[sourceId];
+    if (!isRecord(entry)) continue;
+    found = true;
+    if (typeof entry.enabled === "boolean") {
+      enabledSeen = true;
+      enabledValue = enabledValue || entry.enabled;
+    }
+    if (isRecord(entry.config)) {
+      mergedConfig = { ...mergedConfig, ...entry.config };
+    }
+  }
+
+  if (found) {
+    const canonical = isRecord(entries[PLUGIN_ID]) ? entries[PLUGIN_ID] : {};
+    entries[PLUGIN_ID] = {
+      ...canonical,
+      enabled: typeof canonical.enabled === "boolean" ? canonical.enabled : (enabledSeen ? enabledValue : true),
+      config: mergedConfig,
+    };
+  }
+
+  for (const legacyId of LEGACY_PLUGIN_IDS) {
+    delete entries[legacyId];
+  }
+
+  if (Array.isArray(plugins.allow)) {
+    const seen = new Set();
+    plugins.allow = plugins.allow.filter((id) => {
+      if (typeof id !== "string") return false;
+      const trimmed = id.trim();
+      if (!trimmed || LEGACY_PLUGIN_IDS.includes(trimmed) || seen.has(trimmed)) return false;
+      seen.add(trimmed);
+      return true;
+    });
+  }
+
+  return config;
+}
+
 function getPluginConfig(config) {
+  normalizePluginConfigShape(config);
   const plugins = config.plugins;
   if (!plugins) return null;
   const entries = plugins.entries;
@@ -181,6 +240,7 @@ function getPluginConfig(config) {
 }
 
 function setPluginConfig(config, pluginConfig) {
+  normalizePluginConfigShape(config);
   if (!config.plugins) config.plugins = {};
   if (!config.plugins.entries) config.plugins.entries = {};
   config.plugins.entries[PLUGIN_ID] = {

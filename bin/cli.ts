@@ -7,6 +7,7 @@ import { homedir } from "os";
 
 const VERSION = "1.0.0";
 const PLUGIN_ID = "solana-trader";
+const LEGACY_PLUGIN_IDS = ["traderclaw-v1", "solana-traderclaw-v1", "solana-traderclaw"];
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 
@@ -105,18 +106,76 @@ async function httpRequest(url: string, opts: { method?: string; body?: unknown;
 function readConfig(): Record<string, unknown> {
   try {
     const raw = readFileSync(CONFIG_FILE, "utf-8");
-    return JSON.parse(raw);
+    return normalizePluginConfigShape(JSON.parse(raw));
   } catch {
     return {};
   }
 }
 
 function writeConfig(config: Record<string, unknown>) {
+  normalizePluginConfigShape(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizePluginConfigShape(config: Record<string, unknown>): Record<string, unknown> {
+  if (!isRecord(config)) return config;
+  if (!isRecord(config.plugins)) config.plugins = {};
+  const plugins = config.plugins as Record<string, unknown>;
+  if (!isRecord(plugins.entries)) plugins.entries = {};
+  const entries = plugins.entries as Record<string, unknown>;
+
+  let enabledSeen = false;
+  let enabledValue = false;
+  let mergedConfig: Record<string, unknown> = {};
+  let found = false;
+
+  for (const sourceId of [...LEGACY_PLUGIN_IDS, PLUGIN_ID]) {
+    const entry = entries[sourceId];
+    if (!isRecord(entry)) continue;
+    found = true;
+    if (typeof entry.enabled === "boolean") {
+      enabledSeen = true;
+      enabledValue = enabledValue || entry.enabled;
+    }
+    if (isRecord(entry.config)) {
+      mergedConfig = { ...mergedConfig, ...(entry.config as Record<string, unknown>) };
+    }
+  }
+
+  if (found) {
+    const canonical = isRecord(entries[PLUGIN_ID]) ? entries[PLUGIN_ID] as Record<string, unknown> : {};
+    entries[PLUGIN_ID] = {
+      ...canonical,
+      enabled: typeof canonical.enabled === "boolean" ? canonical.enabled : (enabledSeen ? enabledValue : true),
+      config: mergedConfig,
+    };
+  }
+
+  for (const legacyId of LEGACY_PLUGIN_IDS) {
+    delete entries[legacyId];
+  }
+
+  if (Array.isArray(plugins.allow)) {
+    const seen = new Set<string>();
+    plugins.allow = plugins.allow.filter((id): id is string => {
+      if (typeof id !== "string") return false;
+      const trimmed = id.trim();
+      if (!trimmed || LEGACY_PLUGIN_IDS.includes(trimmed) || seen.has(trimmed)) return false;
+      seen.add(trimmed);
+      return true;
+    });
+  }
+
+  return config;
+}
+
 function getPluginConfig(config: Record<string, unknown>): Record<string, unknown> | null {
+  normalizePluginConfigShape(config);
   const plugins = config.plugins as Record<string, unknown> | undefined;
   if (!plugins) return null;
   const entries = plugins.entries as Record<string, unknown> | undefined;
@@ -127,6 +186,7 @@ function getPluginConfig(config: Record<string, unknown>): Record<string, unknow
 }
 
 function setPluginConfig(config: Record<string, unknown>, pluginConfig: Record<string, unknown>) {
+  normalizePluginConfigShape(config);
   if (!config.plugins) config.plugins = {};
   const plugins = config.plugins as Record<string, unknown>;
   if (!plugins.entries) plugins.entries = {};

@@ -55,8 +55,105 @@ function getNpmGlobalInstallCwd() {
   }
 }
 
-/** Older `plugins.entries` keys / npm-era ids to merge orchestrator URL for. */
-const LEGACY_TRADER_PLUGIN_IDS = ["traderclaw-v1", "solana-traderclaw-v1", "solana-trader"];
+/** Older `plugins.entries` keys / npm-era ids for the v1 plugin. */
+const LEGACY_TRADER_PLUGIN_IDS = ["traderclaw-v1", "solana-traderclaw-v1", "solana-traderclaw"];
+
+function isRecord(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function getLegacyTraderPluginIds(pluginId) {
+  return pluginId === "solana-trader" ? LEGACY_TRADER_PLUGIN_IDS : [];
+}
+
+function normalizeTraderPluginEntries(config, pluginId) {
+  if (!isRecord(config)) return false;
+  if (!isRecord(config.plugins)) config.plugins = {};
+  if (!isRecord(config.plugins.entries)) config.plugins.entries = {};
+
+  const entries = config.plugins.entries;
+  const legacyIds = getLegacyTraderPluginIds(pluginId);
+  if (legacyIds.length === 0) return false;
+
+  let touched = false;
+  let hasSource = false;
+  let enabledSeen = false;
+  let enabledValue = false;
+  let mergedConfig = {};
+
+  for (const sourceId of [...legacyIds, pluginId]) {
+    const entry = entries[sourceId];
+    if (!isRecord(entry)) continue;
+    hasSource = true;
+    if (typeof entry.enabled === "boolean") {
+      enabledSeen = true;
+      enabledValue = enabledValue || entry.enabled;
+    }
+    if (isRecord(entry.config)) {
+      mergedConfig = { ...mergedConfig, ...entry.config };
+    }
+  }
+
+  if (!hasSource) return false;
+
+  const canonicalEntry = isRecord(entries[pluginId]) ? entries[pluginId] : {};
+  const nextEntry = {
+    ...canonicalEntry,
+    enabled: typeof canonicalEntry.enabled === "boolean" ? canonicalEntry.enabled : (enabledSeen ? enabledValue : true),
+    config: mergedConfig,
+  };
+
+  if (entries[pluginId] !== nextEntry) {
+    entries[pluginId] = nextEntry;
+    touched = true;
+  }
+
+  for (const legacyId of legacyIds) {
+    if (Object.prototype.hasOwnProperty.call(entries, legacyId)) {
+      delete entries[legacyId];
+      touched = true;
+    }
+  }
+
+  return touched;
+}
+
+function normalizeTraderAllowlist(config, pluginId) {
+  if (!isRecord(config?.plugins)) return false;
+  const legacyIds = new Set(getLegacyTraderPluginIds(pluginId));
+  if (legacyIds.size === 0 || !Array.isArray(config.plugins.allow)) return false;
+
+  const nextAllow = [];
+  const seen = new Set();
+  let touched = false;
+
+  for (const id of config.plugins.allow) {
+    if (typeof id !== "string") {
+      touched = true;
+      continue;
+    }
+    const trimmed = id.trim();
+    if (!trimmed) {
+      touched = true;
+      continue;
+    }
+    if (legacyIds.has(trimmed)) {
+      touched = true;
+      continue;
+    }
+    if (seen.has(trimmed)) {
+      touched = true;
+      continue;
+    }
+    seen.add(trimmed);
+    nextAllow.push(trimmed);
+  }
+
+  if (touched) {
+    config.plugins.allow = nextAllow;
+  }
+  return touched;
+}
 
 function stripAnsi(text) {
   if (typeof text !== "string") return text;
@@ -433,6 +530,9 @@ function seedPluginConfig(modeConfig, orchestratorUrl, configPath = CONFIG_FILE)
   if (!config.plugins || typeof config.plugins !== "object") config.plugins = {};
   if (!config.plugins.entries || typeof config.plugins.entries !== "object") config.plugins.entries = {};
 
+  normalizeTraderPluginEntries(config, modeConfig.pluginId);
+  normalizeTraderAllowlist(config, modeConfig.pluginId);
+
   const entries = config.plugins.entries;
 
   const mergeOrchestratorForId = (pluginId) => {
@@ -453,9 +553,6 @@ function seedPluginConfig(modeConfig, orchestratorUrl, configPath = CONFIG_FILE)
   };
 
   mergeOrchestratorForId(modeConfig.pluginId);
-  for (const legacyId of LEGACY_TRADER_PLUGIN_IDS) {
-    if (entries[legacyId]) mergeOrchestratorForId(legacyId);
-  }
 
   // Do not set plugins.allow here: OpenClaw validates allow[] against the plugin registry, and
   // the id is not registered until after `openclaw plugins install`. Pre-seeding allow caused:
@@ -596,6 +693,8 @@ function mergePluginsAllowlist(modeConfig, configPath = CONFIG_FILE) {
     return;
   }
   if (!config.plugins || typeof config.plugins !== "object") config.plugins = {};
+  normalizeTraderPluginEntries(config, modeConfig.pluginId);
+  normalizeTraderAllowlist(config, modeConfig.pluginId);
   const allowSet = new Set(
     Array.isArray(config.plugins.allow) ? config.plugins.allow.filter((id) => typeof id === "string" && id.trim()) : [],
   );
@@ -972,6 +1071,8 @@ function seedXConfig(modeConfig, configPath = CONFIG_FILE, wizardOpts = {}) {
 
   if (!config.plugins || typeof config.plugins !== "object") config.plugins = {};
   if (!config.plugins.entries || typeof config.plugins.entries !== "object") config.plugins.entries = {};
+  normalizeTraderPluginEntries(config, modeConfig.pluginId);
+  normalizeTraderAllowlist(config, modeConfig.pluginId);
 
   const entry = config.plugins.entries[modeConfig.pluginId];
   if (!entry || typeof entry !== "object") return { skipped: true, reason: "plugin entry not found" };
@@ -1047,6 +1148,8 @@ function persistXProfileIdentities(configPath, modeConfig, identities) {
   } catch {
     return { written: 0 };
   }
+  normalizeTraderPluginEntries(config, modeConfig.pluginId);
+  normalizeTraderAllowlist(config, modeConfig.pluginId);
   const entry = config?.plugins?.entries?.[modeConfig.pluginId];
   if (!entry?.config?.x?.profiles || typeof entry.config.x.profiles !== "object") return { written: 0 };
 

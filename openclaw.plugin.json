@@ -28,6 +28,10 @@
         "type": "string",
         "description": "Refresh token from last session (auto-populated after authentication)"
       },
+      "recoverySecret": {
+        "type": "string",
+        "description": "Consumable recovery secret used to restore a session after refresh-token failure"
+      },
       "walletPublicKey": {
         "type": "string",
         "description": "Solana wallet public key (auto-populated after session establishment)"
@@ -125,6 +129,11 @@
     },
     "refreshToken": {
       "label": "Refresh Token",
+      "sensitive": true,
+      "advanced": true
+    },
+    "recoverySecret": {
+      "label": "Recovery Secret",
       "sensitive": true,
       "advanced": true
     },

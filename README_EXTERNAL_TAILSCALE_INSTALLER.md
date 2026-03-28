@@ -231,11 +231,11 @@ curl -H "Authorization: Bearer <gatewayToken>" <gatewayBaseUrl>/health
 
 If the log shows `at Object.writeConfigFile (.../auth-profiles-...js)` during `openclaw plugins install`, that is OpenClaw **validating** `~/.openclaw/openclaw.json` before write — not a generic disk error.
 
-**Required `orchestratorUrl`:** The plugin manifest marks `orchestratorUrl` as required. `openclaw plugins install` calls `writeConfigFile` **during** that command, so `plugins.entries.<id>.config.orchestratorUrl` must be present **before** install completes. The wizard seeds the plugin id (`solana-trader`) and merges orchestrator URL for legacy entry keys still on disk from older releases (`traderclaw-v1`, `solana-traderclaw-v1`, `solana-trader`).
+**Required `orchestratorUrl`:** The plugin manifest marks `orchestratorUrl` as required. `openclaw plugins install` calls `writeConfigFile` **during** that command, so `plugins.entries.<id>.config.orchestratorUrl` must be present **before** install completes. The wizard seeds the plugin id (`solana-trader`), migrates stale entry keys from older releases (`traderclaw-v1`, `solana-traderclaw-v1`, `solana-traderclaw`), and keeps the canonical OpenClaw config entry at `plugins.entries.solana-trader`.
 
 **`agents.defaults.heartbeat`:** OpenClaw’s schema requires `agents.defaults.heartbeat` (can be `{}`) whenever `agents.defaults` exists. The wizard sets this in the LLM step.
 
-**`plugins.allow`:** OpenClaw validates every id in `plugins.allow` against the plugin registry, so the installer **must not** set it before `openclaw plugins install`. After `plugins enable`, the wizard merges `plugins.allow` to include the current plugin id (optional; avoids the “empty allowlist” warning once the plugin is registered).
+**`plugins.allow`:** OpenClaw validates every id in `plugins.allow` against the plugin registry, so the installer **must not** set it before `openclaw plugins install`. After `plugins enable`, the wizard removes stale TraderClaw ids from `plugins.allow` and adds the canonical plugin id (`solana-trader`) so users do not keep the `plugin not found: solana-traderclaw` warning around.
 
 **Wizard logs:** ANSI color codes from the `openclaw` CLI are stripped before logs are shown in the browser UI.
 

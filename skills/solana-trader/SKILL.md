@@ -35,7 +35,7 @@ https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-aut
 - **Wallet proof** is NOT account signup. It is a cryptographic step proving wallet control.
 - **`traderclaw login`** reuses the saved refresh token when valid.
 - **OpenClaw gateway ≠ your SSH shell.** Exporting env vars in SSH does NOT inject them into the gateway service process.
-- **Plugin id vs npm name:** `solana-traderclaw-v1` npm package with `solana-trader` plugin id is expected.
+- **Plugin id vs npm name:** `solana-traderclaw` is the npm package name, while `solana-trader` is the OpenClaw plugin id used in `plugins.entries` and `plugins.allow`.
 
 ---
 
