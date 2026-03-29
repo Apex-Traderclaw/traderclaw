@@ -2162,7 +2162,11 @@ function wizardHtml(defaults) {
           }
           setSelectOptions(llmProviderEl, providers, "${defaults.llmProvider}");
           refreshModelOptions("${defaults.llmModel}");
-          setLlmCatalogReady(true, "LLM providers loaded. Select provider and paste credential to continue. Model selection is optional.");
+          const isFallback = llmCatalog.source === "fallback";
+          const catalogMsg = isFallback
+            ? "Showing safe defaults only (could not load full OpenClaw catalog" + (llmCatalog.warning ? ": " + llmCatalog.warning : "") + "). These providers still work — pick one and paste your credential."
+            : "LLM providers loaded. Select provider and paste credential to continue. Model selection is optional.";
+          setLlmCatalogReady(true, catalogMsg, isFallback);
         } catch (err) {
           setLlmCatalogReady(false, "Failed to load LLM providers. Check OpenClaw and reload this page.", true);
           manualEl.textContent = "Failed to load LLM provider catalog: " + (err && err.message ? err.message : String(err));
