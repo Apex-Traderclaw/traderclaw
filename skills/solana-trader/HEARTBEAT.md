@@ -205,9 +205,7 @@ HARDENED range: +100–300%. DEGEN range: +200–500%. `percent` = price increas
 - `amount` — % of position to sell at this level (1–100; server default `100`).
 - `triggerAboveATH` — **optional.** Price must reach this % above the session ATH before this level arms. Default `100` (2× ATH). Use smaller value (e.g. `25`) to arm earlier. Use `trailingStopPct` for simpler single-level trailing without this gate.
 
-**`slExits` for graduated stop-losses** — e.g., `[{ percent: 20, amountPct: 100 }]` (HARDENED) or `[{ percent: 40, amountPct: 100 }]` (DEGEN). Use instead of flat `slPct`. `percent` = price decrease from entry, `amountPct` = % of position to sell.
-
-**`slLevels` for simple multi-level stop-losses** — e.g., `slLevels: [20, 30]`. Each level triggers 100% exit at that drawdown %. Use `slExits` instead when you need partial exits at different levels.
+**`slExits` for graduated stop-losses** — e.g., `[{ percent: 20, amountPct: 100 }]` (HARDENED) or `[{ percent: 40, amountPct: 100 }]` (DEGEN). Use `percent` = price decrease from entry, `amountPct` = % of remaining position to sell.
 
 **Slippage:** >$500K pool = 100-200bps, $100-500K = 200-400bps, $50-100K = 300-500bps, <$50K = 400-800bps (cap). Exit = 1.5× entry.
 
@@ -251,8 +249,7 @@ solana_trade_execute({
 - ✅ `slippageBps` is REQUIRED — always send it (scale to liquidity, hard cap 800bps)
 - ✅ tpExits: HARDENED +100–300%, DEGEN +200–500%
 - ❌ NEVER use tpLevels alone (defaults to 100% exit per level)
-- ✅ Always send BOTH tpExits AND slPct/slExits/slLevels
-- ✅ Calculate amountPct to sum ≤ 100%
+- ✅ Always send BOTH tpExits AND slExits
 
 Then call `solana_trade_execute`.
 
@@ -266,7 +263,7 @@ Start real-time price monitoring for the position. This gives you live price dat
 
 🟢 ENTRY: SYMBOL (full_contract_address)
 • Size: X.XX SOL
-• Price: $X.XXXXXX
+• Price: X.XXXXXX SOL
 • Confidence: X.XX
 • Source: [signal source]
 • Thesis: [1 line]
@@ -365,7 +362,7 @@ TRADES THIS CYCLE:
 [List each trade announcement from Steps 5/7, or "None"]
 
 OPEN POSITIONS:
-- SYMBOL (full_CA): entry $X.XX → now $X.XX | Return: +/-X.X% (from unrealizedReturnPct) | PnL: +/-X.XXX SOL | SL: X% away | TP1: X% away
+- SYMBOL (full_CA): entry X.XX SOL → now X.XX SOL | Return: +/-X.X% (from unrealizedReturnPct) | PnL: +/-X.XXX SOL | SL: X% away | TP1: X% away
 [or "No open positions"]
 
 SKIPPED:

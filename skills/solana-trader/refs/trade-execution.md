@@ -75,10 +75,48 @@ Call `solana_trade_execute` with:
 - **For buy:** `sizeSol` (amount in SOL) — required
 - **For sell:** `sellPct` (integer 1–100 where 100 = full exit) — required. Raw token amounts are not accepted on this endpoint. Do NOT send `sizeSol` for sells.
 - `slippageBps` (REQUIRED — scaled to liquidity, hard cap 800bps)
-- `slPct`, `slLevels` (simple multi-level, each triggers 100% exit), or `slExits` (graduated partial stop-losses — see refs/api-reference.md § slExits Parameter)
-- `tpLevels` or `tpExits` (partial take-profits)
+- `slExits` (graduated partial stop-losses — see refs/api-reference.md § slExits Parameter)
+- `tpExits` (partial take-profits)
 - `trailingStopPct` (simple) or `trailingStop` object with `levels` array (structured — see refs/api-reference.md § Trailing Stop Parameter)
 - `managementMode`
+
+### BUY PAYLOAD:
+{
+    "walletId":"3ccb6f61-0256-466e-a01e-e9560d25bdbe",
+    "tokenAddress":"So11111111111111111111111111111111111111112",
+    "side":"buy",
+    "sizeSol":0.05,
+    "slippageBps":1000,
+    "symbol":"WSOL",
+    "tpExits":[
+      {"percent":100,"amountPct":40},
+      {"percent":200,"amountPct":55},
+      {"percent":300,"amountPct":100}
+    ],
+    "slPct":30,
+    "slExits":[
+      {"percent":30,"amountPct":50},
+      {"percent":50,"amountPct":100}
+    ],
+    "trailingStopPct":5,
+    "trailingStop":{
+      "levels":[
+        {"percentage":15,"amount":20,"triggerAboveATH":100},
+        {"percentage":30,"amount":100,"triggerAboveATH":120}
+      ]
+    }
+  }
+
+### SELL PAYLOAD
+
+{
+    "walletId":"3ccb6f61-0256-466e-a01e-e9560d25bdbe",
+    "tokenAddress":"So11111111111111111111111111111111111111112",
+    "side":"sell",
+    "sellPct":100,
+    "slippageBps":2000,
+    "symbol":"WSOL",
+  }
 
 Record the returned `tradeId` and `positionId` for monitoring and review.
 
@@ -88,7 +126,7 @@ Record the returned `tradeId` and `positionId` for monitoring and review.
 ```
 🟢 ENTRY: SYMBOL (full_contract_address)
 • Size: X.XX SOL
-• Price: $X.XXXXXX
+• Price: X.XXXXXX SOL
 • Confidence: X.XX
 • Source: [signal source]
 • Thesis: [1 line]

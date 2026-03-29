@@ -46,7 +46,7 @@ All authenticated endpoints use `Authorization: Bearer <accessToken>`.
 | `POST` | `/api/strategy/update` | `walletId`, `featureWeights` | Update weights. Optional: `strategyVersion`, `mode` |
 | `POST` | `/api/thesis/build` | `walletId`, `tokenAddress` | Build full thesis package |
 | `POST` | `/api/trade/precheck` | `walletId`, `tokenAddress`, `side`, `slippageBps` (REQUIRED) | Risk/policy check. Buy: `sizeSol` required, do NOT send `sellPct`. Sell: `sellPct` only (1–100) (NOT `sizeSol` or raw token amounts). |
-| `POST` | `/api/trade/execute` | `walletId`, `tokenAddress`, `side`, `slippageBps` (REQUIRED), `symbol` | Execute trade. Optional: `tpLevels[]`, `tpExits[]`, `slPct`, `slLevels[]`, `slExits[]`, `trailingStopPct` (simple) or `trailingStop` object. Header: `x-idempotency-key` |
+| `POST` | `/api/trade/execute` | `walletId`, `tokenAddress`, `side`, `slippageBps` (REQUIRED), `symbol` | Execute trade. Optional: `tpLevels[]`, `tpExits[]`, `slExits[]`, `trailingStopPct` (simple) or `trailingStop` object. Header: `x-idempotency-key` |
 | `POST` | `/api/trade/review` | `walletId`, `outcome`, `notes` | Post-trade review. Optional: `tradeId`, `tokenAddress`, `pnlSol`, `tags[]`, `strategyVersion`. Status `201` |
 | `POST` | `/api/memory/write` | `walletId`, `notes` | Journal entry. Optional: `tokenAddress`, `outcome`, `tags[]`, `strategyVersion`. Status `201` |
 | `POST` | `/api/memory/search` | `walletId`, `query` | Search memory entries |
@@ -87,8 +87,7 @@ All authenticated endpoints use `Authorization: Bearer <accessToken>`.
 - **Sells** use `sellPct` only (integer 1–100, share of the open position). Do not send `sizeTokens` or `sizeSol` for sells.
 - **`tpLevels` alone** — each level sells 100% of position. Use `tpExits` for partial sells.
 - **`trailingStop` object** — structured alternative to `trailingStopPct` with `levels` array. If both are sent, the object takes precedence. `triggerAboveATH` is a number (default `100` = 2× ATH), NOT a boolean.
-- **`slLevels`** — array of stop-loss % levels (simple, each triggers 100% exit). Use `slExits` for partial sells.
-- **`slExits`** — multi-level stop-loss with partial exits. Takes precedence over `slPct` if both sent. See § slExits Parameter.
+- **`slExits`** — multi-level stop-loss with partial exits.
 - **`slippageBps`** — **REQUIRED** on both precheck and execute. Positive integer, basis points (e.g. 300 = 3%).
 
 ## Trailing Stop Parameter

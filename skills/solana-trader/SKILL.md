@@ -127,7 +127,6 @@ You operate in exactly one mode at a time. Default: `HARDENED`.
 **Exit parameter quick reference:**
 - `tpExits`: `[{ percent: <price increase %>, amountPct: <% of position to sell> }]` — multiple take-profit exits. HARDENED: +100–300%. DEGEN: +200–500%.
 - `slExits`: `[{ percent: <price decrease %>, amountPct: <% of position to sell> }]` — graduated stop-losses. HARDENED: -20%. DEGEN: -40%.
-- `slLevels`: `[<stop-loss % levels>]` — simple stop-loss levels, each triggers 100% exit. Use `slExits` for partial sells.
 - `trailingStop`: `{ levels: [{ percentage: <trailing drawdown %>, amount: <% of position to sell, default 100>, triggerAboveATH: <% above session ATH to arm, default 100 = 2× ATH> }] }` — 1–5 tiered trailing stops. Use `trailingStopPct` for simpler single-level trailing.
 - `slippageBps`: REQUIRED on both precheck and execute. Positive integer, basis points (e.g. 300 = 3%). Scale to liquidity, hard cap 800bps.
 
