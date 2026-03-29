@@ -116,11 +116,70 @@ function openaiPreferenceScore(modelId) {
   return score;
 }
 
+function xaiPreferenceScore(modelId) {
+  const local = stripPrefix("xai", modelId);
+  const grokMatch = local.match(/^grok-(\d+)(?:\.(\d+))?/);
+  if (!grokMatch) return 100_000_000 + tieBreakerSnapshot(modelId);
+  const major = Number.parseInt(grokMatch[1], 10);
+  const minor = grokMatch[2] ? Number.parseInt(grokMatch[2], 10) : 0;
+  let score = (major * 100 + minor) * 1_000_000_000;
+  if (local.includes("non-reasoning")) score -= 100_000;
+  else if (local.includes("reasoning")) score += 200_000;
+  if (local.includes("fast")) score -= 50_000;
+  if (local.includes("beta")) score -= 500_000;
+  if (local.includes("code")) score += 100_000;
+  score += tieBreakerSnapshot(modelId);
+  return score;
+}
+
+function deepseekPreferenceScore(modelId) {
+  const local = stripPrefix("deepseek", modelId);
+  if (local.includes("reasoner")) return 600_000_000;
+  if (local.includes("chat")) return 500_000_000;
+  return 100_000_000 + tieBreakerSnapshot(modelId);
+}
+
+function googlePreferenceScore(modelId) {
+  const local = stripPrefix("google", modelId).replace(/^google-vertex\//, "");
+  const gemini = local.match(/gemini-(\d+)(?:\.(\d+))?/);
+  if (!gemini) return 100_000_000 + tieBreakerSnapshot(modelId);
+  const major = Number.parseInt(gemini[1], 10);
+  const minor = gemini[2] ? Number.parseInt(gemini[2], 10) : 0;
+  let score = (major * 100 + minor) * 1_000_000_000;
+  if (local.includes("pro")) score += 200_000_000;
+  else if (local.includes("ultra")) score += 300_000_000;
+  else if (local.includes("flash")) score += 100_000_000;
+  else if (local.includes("nano")) score += 50_000_000;
+  if (local.includes("preview") || local.includes("experimental")) score -= 50_000_000;
+  if (local.includes("thinking")) score += 10_000_000;
+  if (local.includes("latest")) score += 5_000_000;
+  score += tieBreakerSnapshot(modelId);
+  return score;
+}
+
+function extractParamCountBonus(local) {
+  const m = local.match(/(\d+)b(?:\b|-)/i);
+  if (!m) return 0;
+  const b = Number.parseInt(m[1], 10);
+  return Math.min(b, 2000) * 100;
+}
+
 function genericPreferenceScore(provider, modelId) {
   const local = stripPrefix(provider, modelId);
   let score = tieBreakerSnapshot(modelId);
   if (local.includes("latest")) score += 500_000_000;
+  if (local.includes("pro") || local.includes("large")) score += 100_000_000;
   if (local.includes("preview") || local.includes("deprecated")) score -= 200_000_000;
+  if (local.includes("beta")) score -= 50_000_000;
+  const verMatch = local.match(/(?:^|[a-z-])(\d+)(?:\.(\d+))?/);
+  if (verMatch) {
+    const maj = Number.parseInt(verMatch[1], 10);
+    const min = verMatch[2] ? Number.parseInt(verMatch[2], 10) : 0;
+    if (maj <= 99) {
+      score += (maj * 100 + min) * 1_000_000;
+    }
+  }
+  score += extractParamCountBonus(local);
   return score;
 }
 
@@ -139,6 +198,12 @@ export function modelPreferenceScore(provider, modelId) {
     score += anthropicPreferenceScore(id);
   } else if (provider === "openai" || provider === "openai-codex") {
     score += openaiPreferenceScore(id);
+  } else if (provider === "google" || provider === "google-vertex") {
+    score += googlePreferenceScore(id);
+  } else if (provider === "xai") {
+    score += xaiPreferenceScore(id);
+  } else if (provider === "deepseek") {
+    score += deepseekPreferenceScore(id);
   } else {
     score += genericPreferenceScore(provider, id);
   }
