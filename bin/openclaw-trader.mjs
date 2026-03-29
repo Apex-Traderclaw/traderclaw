@@ -71,6 +71,15 @@ function commandExists(cmd) {
   }
 }
 
+function stripAnsi(text) {
+  if (typeof text !== "string") return text;
+  return text
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b[^[\]]/g, "")
+    .replace(/\x1b/g, "");
+}
+
 function getCommandOutput(cmd) {
   try {
     return execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], shell: true, maxBuffer: 50 * 1024 * 1024 }).trim();
@@ -1786,7 +1795,7 @@ function loadWizardLlmCatalog() {
       maxBuffer: 50 * 1024 * 1024,
       timeout: 30_000,
     });
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(stripAnsi(raw));
     const models = Array.isArray(parsed?.models) ? parsed.models : [];
     const providerMap = new Map();
     for (const entry of models) {

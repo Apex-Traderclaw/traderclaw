@@ -157,7 +157,12 @@ function normalizeTraderAllowlist(config, pluginId) {
 
 function stripAnsi(text) {
   if (typeof text !== "string") return text;
-  return text.replace(/\x1b\[[0-9;]*m/g, "");
+  // Cover all ANSI/VT escape sequences: CSI, OSC, simple escapes, and lone ESC chars.
+  return text
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")   // CSI sequences (colours, cursor, etc.)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "") // OSC sequences
+    .replace(/\x1b[^[\]]/g, "")               // other 2-char escape sequences
+    .replace(/\x1b/g, "");                    // bare ESC survivors
 }
 
 /**
@@ -1184,7 +1189,7 @@ function listProviderModels(provider) {
   const raw = getCommandOutput(cmd);
   if (!raw) return [];
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(stripAnsi(raw));
     const models = Array.isArray(parsed?.models) ? parsed.models : [];
     return models
       .map((entry) => (entry && typeof entry.key === "string" ? entry.key : ""))
