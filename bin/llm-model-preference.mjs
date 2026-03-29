@@ -2,13 +2,32 @@
  * Ranks OpenClaw model keys so defaults pick current, working IDs — not alphabetically-first
  * or legacy IDs that "win" only because of a large YYYYMMDD suffix in the name.
  *
- * References (verify periodically): Anthropic models overview, OpenAI models docs.
+ * References (verify periodically): Anthropic models overview, OpenAI models docs, xAI docs.
+ * Last verified: 2026-03-29.
  */
 
-/** IDs that often appear in catalogs but fail or misbehave for chat/agent use */
+/** IDs that appear in catalogs but are retired, deprecated, or misbehave for chat/agent use */
 export const KNOWN_PROBLEMATIC_MODEL_IDS = new Set([
   "anthropic/claude-3-5-haiku-20241022",
   "anthropic/claude-3-haiku-20240307",
+  "anthropic/claude-3-opus-20240229",
+  "anthropic/claude-3-sonnet-20240229",
+  "anthropic/claude-3-5-sonnet-20240620",
+  "openai/gpt-4o",
+  "openai/gpt-4o-mini",
+  "openai/gpt-4-turbo",
+  "openai/gpt-4",
+  "openai/gpt-3.5-turbo",
+  "openai/gpt-5",
+  "openai/gpt-5.1",
+  "openai/gpt-5.1-codex",
+  "openai/gpt-5.1-codex-max",
+  "openai/gpt-5.1-codex-mini",
+  "openai/gpt-5.1-instant",
+  "openai-codex/gpt-5.1",
+  "openai-codex/gpt-5.1-codex",
+  "openai-codex/gpt-5.1-codex-max",
+  "openai-codex/gpt-5.1-codex-mini",
 ]);
 
 const VARIANT_WEIGHT = { sonnet: 80_000, opus: 60_000, haiku: 40_000 };
