@@ -201,7 +201,7 @@ function commandExists(cmd) {
 
 function getCommandOutput(cmd) {
   try {
-    return execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], shell: true }).trim();
+    return execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], shell: true, maxBuffer: 50 * 1024 * 1024 }).trim();
   } catch {
     return null;
   }

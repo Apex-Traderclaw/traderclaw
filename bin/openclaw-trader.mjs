@@ -73,7 +73,7 @@ function commandExists(cmd) {
 
 function getCommandOutput(cmd) {
   try {
-    return execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], shell: true }).trim();
+    return execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], shell: true, maxBuffer: 50 * 1024 * 1024 }).trim();
   } catch {
     return null;
   }
@@ -1748,6 +1748,8 @@ function loadWizardLlmCatalog() {
     const raw = execSync("openclaw models list --all --json", {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 50 * 1024 * 1024,
+      timeout: 30_000,
     });
     const parsed = JSON.parse(raw);
     const models = Array.isArray(parsed?.models) ? parsed.models : [];
