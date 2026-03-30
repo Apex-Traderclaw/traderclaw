@@ -274,7 +274,9 @@ Weights must sum to ~1.0. Evolve based on trade outcomes via `strategy_evolution
        ↓
 11. Step 8: MEMORY — state_save, daily_log, decision_log, team_bulletin_post, context_snapshot_write
        ↓
-12. Step 9: REPORT — includes DEEP ANALYSIS section (Bitquery/intelligence lab/trust checks used)
+12. Step 9: X POST — x_post_tweet
+       ↓
+13. Step 10: REPORT — includes DEEP ANALYSIS section (Bitquery/intelligence lab/trust checks used)
        ↓
 13. SLEEP
 ```
@@ -577,6 +579,8 @@ All decision making, evaluation, and learning MUST use SOL-based values.
 | `refs/position-management.md` | Step 7 MONITOR, house money, social exhaustion |
 | `refs/review-learning.md` | Steps 8, 8.5 — review, structured learning log |
 | `refs/strategy-evolution.md` | Step 9 EVOLVE, ADL, VFM, named patterns |
+| `refs/x-credentials.md` | X/Twitter API credentials and configuration |
+| `refs/x-journal.md` | X/Twitter posting guidelines and templates |
 | `refs/cron-jobs.md` | All cron job definitions and workflows |
 | `refs/api-reference.md` | API contract, endpoints, auth flow, error codes |
 | `refs/memory-tags.md` | Complete memory tag vocabulary |
