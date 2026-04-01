@@ -17,7 +17,7 @@ import {
 } from "./chunk-T4YWGIIR.js";
 import {
   IntelligenceLab
-} from "./chunk-IYD3TCSE.js";
+} from "./chunk-C24QA3MQ.js";
 import {
   scrubUntrustedText
 } from "./chunk-AI6MTHUN.js";
@@ -32,7 +32,7 @@ import {
   generateStateMd,
   resolveMemoryDir,
   resolveWorkspaceRoot
-} from "./chunk-CMZLPU3Z.js";
+} from "./chunk-JO3BXAUQ.js";
 
 // index.ts
 import { Type } from "@sinclair/typebox";
@@ -125,9 +125,10 @@ async function xApiFetch(method, endpoint, credentials, { body = null, queryPara
       };
     }
     if (response.status === 403) {
+      const isWrite = method === "POST" || method === "PUT" || method === "DELETE";
       return {
         ok: false,
-        error: "Forbidden (403). This read endpoint requires a paid X API tier (pay-as-you-go or Basic).",
+        error: isWrite ? "Forbidden (403). X rejected this write request. Check that App permissions are set to Read+Write in the X developer portal and regenerate your access tokens after any permission change." : "Forbidden (403). This read endpoint requires a paid X API tier (pay-as-you-go or Basic). This does NOT affect posting \u2014 x_post_tweet and x_reply_tweet still work on Free tier.",
         status: 403,
         data: responseData
       };
@@ -145,6 +146,62 @@ async function xApiFetch(method, endpoint, credentials, { body = null, queryPara
     data: responseData,
     rateLimitRemaining: rateLimitRemaining ? parseInt(rateLimitRemaining) : void 0
   };
+}
+function validateTweetText(text) {
+  if (!text || typeof text !== "string") {
+    return { valid: false, error: "Tweet text is required and must be a non-empty string." };
+  }
+  const trimmed = text.trim();
+  if (trimmed.length === 0) {
+    return { valid: false, error: "Tweet text cannot be empty." };
+  }
+  if (trimmed.length > MAX_TWEET_LENGTH) {
+    return { valid: false, error: `Tweet exceeds ${MAX_TWEET_LENGTH} characters (got ${trimmed.length}). Shorten the text.` };
+  }
+  return { valid: true, text: trimmed };
+}
+async function postTweet(credentials, text) {
+  const validation = validateTweetText(text);
+  if (!validation.valid) return { ok: false, error: validation.error };
+  const result = await xApiFetch("POST", "/tweets", credentials, {
+    body: { text: validation.text }
+  });
+  if (result.ok && result.data?.data?.id) {
+    const tweetId = result.data.data.id;
+    const username = credentials.username || "unknown";
+    return {
+      ok: true,
+      tweetId,
+      tweetUrl: `https://x.com/${username}/status/${tweetId}`,
+      text: validation.text
+    };
+  }
+  return result;
+}
+async function replyToTweet(credentials, tweetId, text) {
+  const validation = validateTweetText(text);
+  if (!validation.valid) return { ok: false, error: validation.error };
+  if (!tweetId || typeof tweetId !== "string") {
+    return { ok: false, error: "tweetId is required to reply." };
+  }
+  const result = await xApiFetch("POST", "/tweets", credentials, {
+    body: {
+      text: validation.text,
+      reply: { in_reply_to_tweet_id: tweetId }
+    }
+  });
+  if (result.ok && result.data?.data?.id) {
+    const replyId = result.data.data.id;
+    const username = credentials.username || "unknown";
+    return {
+      ok: true,
+      replyId,
+      replyUrl: `https://x.com/${username}/status/${replyId}`,
+      inReplyTo: tweetId,
+      text: validation.text
+    };
+  }
+  return result;
 }
 async function readMentions(credentials, { maxResults = 10, sinceId = null, paginationToken = null } = {}) {
   if (!credentials.userId) {
@@ -252,15 +309,14 @@ async function getThread(credentials, tweetId, { maxResults = 20 } = {}) {
 // lib/x-tools.mjs
 function parseXConfig(obj) {
   const xRaw = obj?.x && typeof obj.x === "object" && !Array.isArray(obj.x) ? obj.x : {};
-  const consumerKey = typeof xRaw.consumerKey === "string" ? xRaw.consumerKey : process.env.X_CONSUMER_KEY || "";
-  const consumerSecret = typeof xRaw.consumerSecret === "string" ? xRaw.consumerSecret : process.env.X_CONSUMER_SECRET || "";
+  const consumerKey = typeof xRaw.consumerKey === "string" ? xRaw.consumerKey : "";
+  const consumerSecret = typeof xRaw.consumerSecret === "string" ? xRaw.consumerSecret : "";
   const profiles = {};
   if (xRaw.profiles && typeof xRaw.profiles === "object" && !Array.isArray(xRaw.profiles)) {
     for (const [key, val] of Object.entries(xRaw.profiles)) {
       if (val && typeof val === "object" && !Array.isArray(val)) {
-        const envPrefix2 = `X_ACCESS_TOKEN_${key.toUpperCase().replace(/-/g, "_")}`;
-        const accessToken = typeof val.accessToken === "string" ? val.accessToken : process.env[envPrefix2] || "";
-        const accessTokenSecret = typeof val.accessTokenSecret === "string" ? val.accessTokenSecret : process.env[`${envPrefix2}_SECRET`] || "";
+        const accessToken = typeof val.accessToken === "string" ? val.accessToken : "";
+        const accessTokenSecret = typeof val.accessTokenSecret === "string" ? val.accessTokenSecret : "";
         if (accessToken && accessTokenSecret) {
           profiles[key] = {
             accessToken,
@@ -272,13 +328,6 @@ function parseXConfig(obj) {
       }
     }
   }
-  const defaultAgentId = typeof obj?.agentId === "string" ? obj.agentId : "cto";
-  const envPrefix = `X_ACCESS_TOKEN_${defaultAgentId.toUpperCase().replace(/-/g, "_")}`;
-  const envAccessToken = process.env[envPrefix] || "";
-  const envAccessTokenSecret = process.env[`${envPrefix}_SECRET`] || "";
-  if (!profiles[defaultAgentId] && envAccessToken && envAccessTokenSecret) {
-    profiles[defaultAgentId] = { accessToken: envAccessToken, accessTokenSecret: envAccessTokenSecret };
-  }
   if (consumerKey && consumerSecret) {
     return { ok: true, consumerKey, consumerSecret, profiles };
   }
@@ -287,7 +336,7 @@ function parseXConfig(obj) {
 function resolveAgentCredentials(xConfig, callerAgentId, requestedAgentId, fallbackAgentId) {
   const agentId = callerAgentId || requestedAgentId || fallbackAgentId || "cto";
   if (!xConfig || !xConfig.ok) {
-    return { ok: false, error: "X/Twitter configuration missing. Set 'x.consumerKey', 'x.consumerSecret', and 'x.profiles.<agentId>' in plugin config, or use X_CONSUMER_KEY / X_CONSUMER_SECRET env vars." };
+    return { ok: false, error: "X/Twitter configuration missing. Set 'x.consumerKey', 'x.consumerSecret', and 'x.profiles.<agentId>' in plugin config." };
   }
   const profile = xConfig.profiles[agentId];
   if (!profile) {
@@ -308,6 +357,7 @@ function resolveAgentCredentials(xConfig, callerAgentId, requestedAgentId, fallb
 }
 function registerXTools(api, Type2, xConfig, fallbackAgentId, logPrefix, options) {
   const checkPermission = options?.checkPermission || null;
+  const enableWriteTools = options?.enableWriteTools ?? false;
   const json = (data) => ({
     content: [{ type: "text", text: JSON.stringify(data, null, 2) }]
   });
@@ -326,6 +376,37 @@ function registerXTools(api, Type2, xConfig, fallbackAgentId, logPrefix, options
       return json({ error: err instanceof Error ? err.message : String(err) });
     }
   };
+  if (enableWriteTools) {
+    api.registerTool({
+      name: "x_post_tweet",
+      description: "Post a tweet to X/Twitter from the calling agent's configured profile. Max 280 characters.",
+      parameters: Type2.Object({
+        text: Type2.String({ description: "Tweet text (max 280 characters)" }),
+        agentId: Type2.Optional(Type2.String({ description: "Override agent ID (default: caller's agent identity)" }))
+      }),
+      execute: wrapExecute("x_post_tweet", async (_id, params) => {
+        const callerAgentId = params._agentId;
+        const creds = resolveAgentCredentials(xConfig, callerAgentId, params.agentId, fallbackAgentId);
+        if (!creds.ok) return { error: creds.error };
+        return postTweet(creds.credentials, params.text);
+      })
+    });
+    api.registerTool({
+      name: "x_reply_tweet",
+      description: "Reply to a specific tweet on X/Twitter. Max 280 characters.",
+      parameters: Type2.Object({
+        tweetId: Type2.String({ description: "The tweet ID to reply to" }),
+        text: Type2.String({ description: "Reply text (max 280 characters)" }),
+        agentId: Type2.Optional(Type2.String({ description: "Override agent ID (default: caller's agent identity)" }))
+      }),
+      execute: wrapExecute("x_reply_tweet", async (_id, params) => {
+        const callerAgentId = params._agentId;
+        const creds = resolveAgentCredentials(xConfig, callerAgentId, params.agentId, fallbackAgentId);
+        if (!creds.ok) return { error: creds.error };
+        return replyToTweet(creds.credentials, params.tweetId, params.text);
+      })
+    });
+  }
   api.registerTool({
     name: "x_read_mentions",
     description: "Read recent mentions of the agent's X profile. Requires pay-as-you-go or Basic tier X API access.",
@@ -384,7 +465,9 @@ function registerXTools(api, Type2, xConfig, fallbackAgentId, logPrefix, options
       });
     })
   });
-  api.logger.info(`${logPrefix} Registered 3 X/Twitter read-only tools (social intel). Profiles: ${xConfig.ok ? Object.keys(xConfig.profiles).join(", ") || "none" : "unconfigured"}`);
+  const toolCount = enableWriteTools ? 5 : 3;
+  const writeNote = enableWriteTools ? "" : " (write tools disabled \u2014 set beta.xPosting: true in plugin config to enable x_post_tweet and x_reply_tweet)";
+  api.logger.info(`${logPrefix} Registered ${toolCount} X/Twitter tools${writeNote}. Profiles: ${xConfig.ok ? Object.keys(xConfig.profiles).join(", ") || "none" : "unconfigured"}`);
 }
 
 // lib/web-fetch.mjs
@@ -687,6 +770,7 @@ function parseConfig(raw) {
   const externalUserId = typeof obj.externalUserId === "string" ? obj.externalUserId : void 0;
   const refreshToken = typeof obj.refreshToken === "string" ? obj.refreshToken : void 0;
   const walletPublicKey = typeof obj.walletPublicKey === "string" ? obj.walletPublicKey : void 0;
+  const walletPrivateKey = typeof obj.walletPrivateKey === "string" ? obj.walletPrivateKey : void 0;
   const apiTimeout = typeof obj.apiTimeout === "number" ? obj.apiTimeout : 12e4;
   const agentId = typeof obj.agentId === "string" ? obj.agentId : void 0;
   const gatewayBaseUrl = typeof obj.gatewayBaseUrl === "string" ? obj.gatewayBaseUrl : void 0;
@@ -698,6 +782,8 @@ function parseConfig(raw) {
   const dailyLogRetentionDays = typeof obj.dailyLogRetentionDays === "number" ? obj.dailyLogRetentionDays : 30;
   const recoverySecret = typeof obj.recoverySecret === "string" ? obj.recoverySecret : void 0;
   const xConfig = parseXConfig(obj);
+  const betaRaw = obj.beta && typeof obj.beta === "object" && !Array.isArray(obj.beta) ? obj.beta : {};
+  const beta = { xPosting: betaRaw.xPosting === true };
   return {
     orchestratorUrl,
     walletId,
@@ -705,6 +791,7 @@ function parseConfig(raw) {
     externalUserId,
     refreshToken,
     walletPublicKey,
+    walletPrivateKey,
     recoverySecret,
     apiTimeout,
     agentId,
@@ -715,7 +802,8 @@ function parseConfig(raw) {
     bootstrapDecisionCount,
     bootstrapBulletinWindowHours,
     dailyLogRetentionDays,
-    xConfig
+    xConfig,
+    beta
   };
 }
 function buildTraderClawWelcomeMessage(apiKeyForDisplay) {
@@ -846,8 +934,8 @@ var solanaTraderPlugin = {
       refreshToken: effectiveRefreshToken,
       walletPublicKey: effectiveWalletPublicKey,
       walletPrivateKeyProvider: () => {
-        const runtimeKey = process.env.TRADERCLAW_WALLET_PRIVATE_KEY || "";
-        return runtimeKey.trim() || void 0;
+        const k = config.walletPrivateKey;
+        return typeof k === "string" && k.trim() ? k.trim() : void 0;
       },
       recoverySecretProvider: async () => {
         const fromDisk = readRecoverySecretFromDisk();
@@ -1971,12 +2059,18 @@ var solanaTraderPlugin = {
     });
     api.registerTool({
       name: "solana_gateway_credentials_set",
-      description: "Register or update your OpenClaw Gateway credentials with the orchestrator. This enables event-to-agent forwarding \u2014 when subscriptions include agentId, the orchestrator delivers each stream event to your Gateway via /v1/responses. Call this once during initial setup (Step 0). The gatewayBaseUrl is your self-hosted OpenClaw Gateway's public URL. The gatewayToken is the Bearer token for authenticating forwarded events.",
+      description: "Register or update your OpenClaw Gateway credentials with the orchestrator. This enables event-to-agent forwarding \u2014 when subscriptions include agentId, the orchestrator delivers each stream event to your Gateway via /v1/responses. Call this once during initial setup (Step 0). The gatewayBaseUrl is your self-hosted OpenClaw Gateway's public URL. The gatewayToken is the Bearer token for authenticating forwarded events. Optional forwardTelegramChatId stores your Telegram chat id on this credential row so agent replies are announced to that chat (same row as api_key + agentId). Omit forwardTelegramChatId to leave the stored value unchanged; pass null to clear.",
       parameters: Type.Object({
         gatewayBaseUrl: Type.String({ description: "Your OpenClaw Gateway's public HTTPS URL (e.g., 'https://gateway.example.com')" }),
         gatewayToken: Type.String({ description: "Bearer token for authenticating forwarded events to your Gateway" }),
         agentId: Type.Optional(Type.String({ description: "Agent ID to associate credentials with (default: 'main'). Omit to store as the default fallback." })),
-        active: Type.Optional(Type.Boolean({ description: "Whether forwarding is active (default: true)" }))
+        active: Type.Optional(Type.Boolean({ description: "Whether forwarding is active (default: true)" })),
+        forwardTelegramChatId: Type.Optional(
+          Type.Union([
+            Type.String({ description: "Telegram chat id (digits, optional leading -) for routing agent responses" }),
+            Type.Null({ description: "Clear stored Telegram chat id" })
+          ])
+        )
       }),
       execute: wrapExecute("solana_gateway_credentials_set", async (_id, params) => {
         const body = {
@@ -1985,12 +2079,13 @@ var solanaTraderPlugin = {
         };
         if (params.agentId) body.agentId = params.agentId;
         if (params.active !== void 0) body.active = params.active;
+        if (params.forwardTelegramChatId !== void 0) body.forwardTelegramChatId = params.forwardTelegramChatId;
         return put("/api/agents/gateway-credentials", body);
       })
     });
     api.registerTool({
       name: "solana_gateway_credentials_get",
-      description: "Get the currently registered Gateway credentials for event-to-agent forwarding. Returns the gatewayBaseUrl, agentId, active status, and masked token. Use to verify Gateway setup is correct.",
+      description: "Get the currently registered Gateway credentials for event-to-agent forwarding. Returns the gatewayBaseUrl, agentId, active status, forwardTelegramChatId (when set), and metadata. Use to verify Gateway setup is correct.",
       parameters: Type.Object({}),
       execute: wrapExecute(
         "solana_gateway_credentials_get",
@@ -3400,9 +3495,10 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
         }
       }
     });
-    registerXTools(api, Type, config.xConfig, config.agentId || "cto", "[solana-trader]");
+    registerXTools(api, Type, config.xConfig, config.agentId || "cto", "[solana-trader]", { enableWriteTools: config.beta?.xPosting ?? false });
     registerWebFetchTool(api, Type, "[solana-trader]");
-    const xToolCount = config.xConfig?.ok ? 3 : 0;
+    const xWriteEnabled = config.beta?.xPosting ?? false;
+    const xToolCount = config.xConfig?.ok ? xWriteEnabled ? 5 : 3 : 0;
     const webFetchCount = 1;
     const intelligenceToolCount = 17;
     const baseToolCount = 76;

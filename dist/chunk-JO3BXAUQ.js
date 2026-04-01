@@ -1,18 +1,10 @@
-import {
-  __require
-} from "./chunk-3RG5ZIWI.js";
-
 // src/runtime-layout.ts
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, statSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, statSync, existsSync, renameSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 function resolveWorkspaceRoot(configOverride) {
   if (configOverride && configOverride.trim()) {
     return configOverride.trim().replace(/^~/, homedir());
-  }
-  const envDir = process.env.OPENCLAW_WORKSPACE_DIR;
-  if (envDir && envDir.trim()) {
-    return envDir.trim().replace(/^~/, homedir());
   }
   return join(homedir(), ".openclaw", "workspace");
 }
@@ -41,9 +33,8 @@ function atomicWriteFile(filePath, content) {
   const tmpPath = filePath + ".tmp." + Date.now();
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(tmpPath, content, "utf-8");
-  const { renameSync: renameSyncFs } = __require("fs");
   try {
-    renameSyncFs(tmpPath, filePath);
+    renameSync(tmpPath, filePath);
   } catch {
     try {
       unlinkSync(tmpPath);
