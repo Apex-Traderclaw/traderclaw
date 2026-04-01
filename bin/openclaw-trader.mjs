@@ -8,8 +8,10 @@ import { randomUUID, createPrivateKey, sign as cryptoSign } from "crypto";
 import { execSync } from "child_process";
 import { createServer } from "http";
 import { sortModelsByPreference } from "./llm-model-preference.mjs";
+import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
 
-const PACKAGE_JSON = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
+const PLUGIN_ROOT = resolvePluginPackageRoot(import.meta.url);
+const PACKAGE_JSON = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf-8"));
 const VERSION = PACKAGE_JSON.version;
 const NPM_PACKAGE_NAME = typeof PACKAGE_JSON.name === "string" ? PACKAGE_JSON.name : "solana-traderclaw";
 const PLUGIN_ID = "solana-trader";

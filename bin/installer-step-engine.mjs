@@ -3,15 +3,15 @@ import { randomBytes } from "crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { dirname, join } from "path";
-import { fileURLToPath } from "url";
+import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
 import { choosePreferredProviderModel } from "./llm-model-preference.mjs";
 import { getLinuxGatewayPersistenceSnapshot } from "./gateway-persistence-linux.mjs";
 
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 
-/** Directory containing this package when running from a git checkout or global npm install. */
-const PLUGIN_PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+/** Directory containing solana-traderclaw (openclaw.plugin.json) — works for plugin layout or traderclaw-cli + dependency. */
+const PLUGIN_PACKAGE_ROOT = resolvePluginPackageRoot(import.meta.url);
 
 function readPluginPackageVersion() {
   const pkgJsonPath = join(PLUGIN_PACKAGE_ROOT, "package.json");
