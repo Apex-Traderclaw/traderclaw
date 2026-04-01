@@ -138,3 +138,31 @@ At start of every cron job, check whether sufficient new data exists since last 
 5. Refresh source/deployer trust scores: `solana_source_trust_refresh`, `solana_deployer_trust_refresh`
 
 **Tools:** `solana_candidate_get`, `solana_evaluation_report`, `solana_replay_run`, `solana_replay_report`, `solana_model_promote`, `solana_source_trust_refresh`, `solana_deployer_trust_refresh`, `solana_memory_write`
+
+---
+
+## Job: `memory_trim`
+
+**Schedule:** Daily at 03:00 UTC (`0 3 * * *`)
+
+**Purpose:** Smart memory compaction — trims local memory footprint to the last 2 days while preserving all critical data (positions, rules, identity, strategy weights, permanent learnings).
+
+**What gets trimmed:**
+1. Daily logs (`memory/YYYY-MM-DD.md`) older than 2 days
+2. Stale durable state keys — empty objects/arrays, null values, keys with timestamps older than 2 days. Protected keys (tier, walletId, mode, strategyVersion, featureWeights, permanentLearnings, namedPatterns, discoveryFilters, watchlist, consecutiveLosses, totalTrades, winCount, lossCount, peakCapital, etc.) are NEVER removed
+3. Watchlist entries — stale timestamped entries removed, then capped to most recent 10
+4. Decision log entries older than 2 days (trade_entry/trade_exit/position_update/killswitch entries retained for 7 days)
+5. Team bulletin entries older than 2 days (minimum 20 entries always kept)
+6. Stale context snapshots — only the newest snapshot file is kept, older ones are deleted
+
+**Reports:** Summary includes `bytesFreed` and `bytesFreedMB` for all operations
+
+**What is NEVER touched:** Identity state keys, skill files, server-side memory, permanentLearnings array, active position data
+
+**Workflow:**
+1. Call `solana_memory_trim` with `dryRun: true` to preview
+2. Review summary — verify no critical data flagged
+3. Call `solana_memory_trim` with `retentionDays: 2` to execute
+4. Log results via `solana_memory_write` with tag `memory_trim`
+
+**Tools:** `solana_memory_trim`, `solana_memory_write`

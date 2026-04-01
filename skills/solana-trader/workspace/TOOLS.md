@@ -13,7 +13,7 @@ Things like:
 - Rate limit observations
 - Anything environment-specific
 
-## Tool Inventory (97 tools — 94 Solana + 3 X read-only)
+## Tool Inventory (98 tools — 95 Solana + 3 X read-only)
 
 Every tool has a mandatory trigger — when the trigger condition is met, you MUST call the tool. "Cron-only" tools are called during cron jobs, not the heartbeat fast loop.
 
@@ -114,12 +114,13 @@ Every tool has a mandatory trigger — when the trigger condition is met, you MU
 | `solana_bitquery_subscriptions` | List active subscriptions | Step 1: check for buffered events; `subscription_cleanup` cron |
 | `solana_bitquery_subscription_reopen` | Renew expiring subscription | `subscription_cleanup` cron for subscriptions nearing 24h expiry |
 
-### Memory & State (12)
+### Memory & State (13)
 | Tool | Purpose | When to Call |
 |---|---|---|
 | `solana_state_save` | Persist durable state + MEMORY.md | Step 8 every heartbeat if state changed |
 | `solana_state_read` | Read durable state | When MEMORY.md is missing or stale |
 | `solana_daily_log` | Append to daily log | Step 8 every heartbeat — mandatory |
+| `solana_memory_trim` | Smart memory compaction (daily logs, stale state, old decisions/bulletin, stale snapshots). Reports bytesFreed | `memory_trim` cron daily at 03:00 UTC |
 | `solana_decision_log` | Log trade decisions | Step 5 before every trade; Step 8 for significant non-trade decisions |
 | `solana_team_bulletin_post` | Post to team bulletin | Step 8 every heartbeat with tag `position_update` — mandatory |
 | `solana_team_bulletin_read` | Read team bulletin | Memory context load; when checking multi-agent coordination |

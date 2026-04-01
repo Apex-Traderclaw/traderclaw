@@ -135,6 +135,17 @@
         delivery: { mode: "none" },
         message: "CRON_JOB: source_trust_refresh\n\nStep 1: Call solana_source_trust_refresh to recalculate trust scores for all tracked alpha sources based on recent trade outcomes.\n\nStep 2: Call solana_deployer_trust_refresh to recalculate deployer trust scores based on recent token performance.\n\nStep 3: Call solana_source_trust_get to read updated scores. Flag any sources that dropped below 30 trust score.\n\nStep 4: Call solana_deployer_trust_get to read deployer scores. Flag any deployers with 3+ failed tokens.\n\nStep 5: Log trust score updates via solana_memory_write with tag 'trust_refresh'. Include: sources updated, deployers updated, flagged sources/deployers.\n\nDo not execute trades. Do not ask questions.",
         enabled: true
+      },
+
+      // ── Memory Maintenance ──────────────────────────────────────────
+      {
+        id: "memory-trim",
+        schedule: "0 3 * * *",
+        agentId: "main",
+        sessionTarget: "isolated",
+        delivery: { mode: "none" },
+        message: "CRON_JOB: memory_trim\n\nStep 1: Call solana_memory_trim with dryRun true first to preview what will be trimmed.\n\nStep 2: Review the dry run summary. Verify no critical data is flagged for removal.\n\nStep 3: Call solana_memory_trim with retentionDays 2 to execute the trim.\n\nStep 4: Log the trim summary via solana_memory_write with tag 'memory_trim'. Include: daily logs deleted, state keys pruned, watchlist entries trimmed, decision entries trimmed, bulletin entries trimmed.\n\nDo not execute trades. Do not ask questions.",
+        enabled: true
       }
     ]
   },

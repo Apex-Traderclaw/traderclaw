@@ -108,7 +108,7 @@ You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it
 - Never run a silent cycle. Crypto is 24/7. Every cycle reports.
 
 ### Memory maintenance:
-`solana_state_save` handles STATE.md updates automatically at session end. Daily logs are written via `solana_daily_log`. Deep memory curation happens via cron jobs periodically.
+`solana_state_save` handles STATE.md updates automatically at session end. Daily logs are written via `solana_daily_log`. Deep memory curation happens via cron jobs periodically. `solana_memory_trim` runs daily at 03:00 UTC via `memory_trim` cron — compacts state, prunes old daily logs, trims stale decision/bulletin entries while preserving all critical data (positions, rules, identity, strategy weights, permanent learnings).
 
 ## Isolated Sessions
 

@@ -2468,6 +2468,211 @@ const solanaTraderPlugin = {
       }),
     });
 
+    api.registerTool({
+      name: "solana_memory_trim",
+      description: "Smart memory compaction — trims local memory footprint while preserving critical data. Reports bytesFreed/bytesFreedMB. Cleans: daily logs older than retention window, stale state keys, old decision log entries (preserving trade entries/exits for 7 days), old bulletin entries, and stale context snapshots (keeps only newest). NEVER touches: identity/config state keys (tier, walletId, mode, strategyVersion, featureWeights, permanentLearnings, namedPatterns, discoveryFilters, watchlist, consecutiveLosses, totalTrades, winCount, lossCount, peakCapital), skill files, or server-side memory. Designed to run as a daily cron job.",
+      parameters: Type.Object({
+        retentionDays: Type.Optional(Type.Number({ description: "Number of days of data to retain. Default 2." })),
+        dryRun: Type.Optional(Type.Boolean({ description: "If true, report what would be trimmed without actually deleting. Default false." })),
+      }),
+      execute: wrapExecute("solana_memory_trim", async (_id, params) => {
+        const rawDays = typeof params.retentionDays === "number" ? params.retentionDays : 2;
+        const retentionDays = Math.max(1, Math.floor(rawDays));
+        const dryRun = Boolean(params.dryRun);
+        const now = new Date();
+        const cutoffMs = now.getTime() - (retentionDays * 24 * 60 * 60 * 1000);
+        const tradeRetentionMs = now.getTime() - (7 * 24 * 60 * 60 * 1000);
+        const summary: Record<string, unknown> = { retentionDays, dryRun, trimmedAt: now.toISOString() };
+        let bytesFreed = 0;
+
+        let dailyLogsDeleted = 0;
+        try {
+          if (fs.existsSync(memoryDir)) {
+            const files = fs.readdirSync(memoryDir).filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f));
+            for (const file of files) {
+              const dateStr = file.replace(".md", "");
+              if (new Date(dateStr).getTime() < cutoffMs) {
+                const filePath = path.join(memoryDir, file);
+                try { bytesFreed += fs.statSync(filePath).size; } catch {}
+                if (!dryRun) { try { fs.unlinkSync(filePath); } catch {} }
+                dailyLogsDeleted++;
+              }
+            }
+          }
+        } catch {}
+        summary.dailyLogsDeleted = dailyLogsDeleted;
+
+        const protectedStateKeys = new Set([
+          "tier", "walletId", "mode", "strategyVersion", "regime",
+          "maxPositions", "maxPositionSizeSol", "defenseMode", "killSwitchActive",
+          "permanentLearnings", "regimeCanary", "featureWeights", "killSwitchReason",
+          "namedPatterns", "discoveryFilters", "watchlist", "consecutiveLosses",
+          "totalTrades", "winCount", "lossCount", "peakCapital",
+        ]);
+        let stateKeysPruned = 0;
+        let watchlistTrimmed = 0;
+        try {
+          const stateFiles = fs.existsSync(stateDir) ? fs.readdirSync(stateDir).filter((f) => f.endsWith(".json") && f !== "context-snapshot.json" && f !== "patterns.json") : [];
+          for (const sf of stateFiles) {
+            const statePath = path.join(stateDir, sf);
+            const raw = readJsonFile(statePath) as { agentId?: string; state?: Record<string, unknown>; updatedAt?: string } | null;
+            if (!raw || !raw.state || typeof raw.state !== "object") continue;
+            const state = raw.state as Record<string, unknown>;
+            const keysToRemove: string[] = [];
+            for (const key of Object.keys(state)) {
+              if (protectedStateKeys.has(key)) continue;
+              const val = state[key];
+              if (val === null || val === undefined) { keysToRemove.push(key); continue; }
+              if (typeof val === "object" && !Array.isArray(val) && Object.keys(val as object).length === 0) { keysToRemove.push(key); continue; }
+              if (Array.isArray(val) && val.length === 0) { keysToRemove.push(key); continue; }
+              if (typeof val === "object" && val !== null) {
+                const obj = val as Record<string, unknown>;
+                const tsFields = ["ts", "timestamp", "updatedAt", "detectedAt", "lastUpdated", "lastRun"];
+                let foundStaleTs = false;
+                for (const tf of tsFields) {
+                  if (typeof obj[tf] === "string") {
+                    try {
+                      if (new Date(obj[tf] as string).getTime() < cutoffMs) { foundStaleTs = true; }
+                    } catch {}
+                    break;
+                  }
+                }
+                if (foundStaleTs) { keysToRemove.push(key); continue; }
+              }
+              if (typeof val === "string") {
+                try {
+                  const parsed = new Date(val);
+                  if (!isNaN(parsed.getTime()) && /^\d{4}-\d{2}-\d{2}/.test(val) && parsed.getTime() < cutoffMs) {
+                    keysToRemove.push(key);
+                    continue;
+                  }
+                } catch {}
+              }
+            }
+            let fileWatchlistTrimmed = 0;
+            if (state.watchlist && Array.isArray(state.watchlist) && state.watchlist.length > 0) {
+              const wl = state.watchlist as unknown[];
+              const filtered = wl.filter((item) => {
+                if (typeof item === "object" && item !== null) {
+                  const obj = item as Record<string, unknown>;
+                  const ts = obj.addedAt || obj.ts || obj.timestamp;
+                  if (typeof ts === "string") {
+                    try { return new Date(ts).getTime() >= cutoffMs; } catch {}
+                  }
+                }
+                return true;
+              });
+              const capped = filtered.length > 10 ? filtered.slice(-10) : filtered;
+              if (capped.length < wl.length) {
+                fileWatchlistTrimmed = wl.length - capped.length;
+                if (!dryRun) state.watchlist = capped;
+              }
+            }
+            watchlistTrimmed += fileWatchlistTrimmed;
+            if (keysToRemove.length > 0 || fileWatchlistTrimmed > 0) {
+              stateKeysPruned += keysToRemove.length;
+              const sizeBefore = (() => { try { return fs.statSync(statePath).size; } catch { return 0; } })();
+              if (!dryRun) {
+                for (const k of keysToRemove) delete state[k];
+                raw.state = state;
+                raw.updatedAt = now.toISOString();
+                writeJsonFile(statePath, raw);
+                const aid = sf.replace(".json", "");
+                writeMemoryMd(aid, state);
+                const sizeAfter = (() => { try { return fs.statSync(statePath).size; } catch { return 0; } })();
+                bytesFreed += Math.max(0, sizeBefore - sizeAfter);
+              } else {
+                bytesFreed += sizeBefore;
+              }
+            }
+          }
+        } catch {}
+        summary.stateKeysPruned = stateKeysPruned;
+        summary.watchlistTrimmed = watchlistTrimmed;
+
+        const protectedDecisionTypes = new Set(["trade_entry", "trade_exit", "position_update", "killswitch"]);
+        let decisionEntriesTrimmed = 0;
+        try {
+          if (fs.existsSync(logsDir)) {
+            const agentDirs = fs.readdirSync(logsDir).filter((d) => {
+              try { return fs.statSync(path.join(logsDir, d)).isDirectory() && d !== "shared"; } catch { return false; }
+            });
+            for (const ad of agentDirs) {
+              const decLogPath = path.join(logsDir, ad, "decisions.jsonl");
+              if (!fs.existsSync(decLogPath)) continue;
+              const entries = readJsonlFile(decLogPath) as { ts: string; type?: string }[];
+              const kept = entries.filter((e) => {
+                const entryTs = new Date(e.ts).getTime();
+                if (protectedDecisionTypes.has(e.type || "")) return entryTs >= tradeRetentionMs;
+                return entryTs >= cutoffMs;
+              });
+              const removed = entries.length - kept.length;
+              if (removed > 0) {
+                decisionEntriesTrimmed += removed;
+                const sizeBefore = (() => { try { return fs.statSync(decLogPath).size; } catch { return 0; } })();
+                if (!dryRun) {
+                  fs.writeFileSync(decLogPath, kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length > 0 ? "\n" : ""), "utf-8");
+                  const sizeAfter = (() => { try { return fs.statSync(decLogPath).size; } catch { return 0; } })();
+                  bytesFreed += Math.max(0, sizeBefore - sizeAfter);
+                } else {
+                  bytesFreed += sizeBefore;
+                }
+              }
+            }
+          }
+        } catch {}
+        summary.decisionEntriesTrimmed = decisionEntriesTrimmed;
+
+        let bulletinEntriesTrimmed = 0;
+        try {
+          const bulletinPath = path.join(sharedLogsDir, "team-bulletin.jsonl");
+          if (fs.existsSync(bulletinPath)) {
+            const entries = readJsonlFile(bulletinPath) as { ts: string }[];
+            let kept = entries.filter((e) => new Date(e.ts).getTime() >= cutoffMs);
+            if (kept.length < 20 && entries.length >= 20) kept = entries.slice(-20);
+            else if (kept.length < 20) kept = entries;
+            const removed = entries.length - kept.length;
+            if (removed > 0) {
+              bulletinEntriesTrimmed = removed;
+              const sizeBefore = (() => { try { return fs.statSync(bulletinPath).size; } catch { return 0; } })();
+              if (!dryRun) {
+                fs.writeFileSync(bulletinPath, kept.map((e) => JSON.stringify(e)).join("\n") + (kept.length > 0 ? "\n" : ""), "utf-8");
+                const sizeAfter = (() => { try { return fs.statSync(bulletinPath).size; } catch { return 0; } })();
+                bytesFreed += Math.max(0, sizeBefore - sizeAfter);
+              } else {
+                bytesFreed += sizeBefore;
+              }
+            }
+          }
+        } catch {}
+        summary.bulletinEntriesTrimmed = bulletinEntriesTrimmed;
+
+        let snapshotsDeleted = 0;
+        try {
+          if (fs.existsSync(stateDir)) {
+            const snapshotFiles = fs.readdirSync(stateDir).filter((f) => f.startsWith("context-snapshot") && f.endsWith(".json"));
+            if (snapshotFiles.length > 1) {
+              const sorted = snapshotFiles.map((f) => ({
+                name: f,
+                mtime: (() => { try { return fs.statSync(path.join(stateDir, f)).mtimeMs; } catch { return 0; } })(),
+              })).sort((a, b) => b.mtime - a.mtime);
+              for (let i = 1; i < sorted.length; i++) {
+                const fp = path.join(stateDir, sorted[i].name);
+                try { bytesFreed += fs.statSync(fp).size; } catch {}
+                if (!dryRun) { try { fs.unlinkSync(fp); } catch {} }
+                snapshotsDeleted++;
+              }
+            }
+          }
+        } catch {}
+        summary.snapshotsDeleted = snapshotsDeleted;
+
+        summary.bytesFreed = bytesFreed;
+        summary.bytesFreedMB = Math.round(bytesFreed / 1024 / 1024 * 100) / 100;
+        return summary;
+      }),
+    });
+
     // =========================================================================
     // NEW: INTELLIGENCE LAB TOOLS (17 new tools)
     // =========================================================================
@@ -2982,7 +3187,7 @@ const solanaTraderPlugin = {
     const xToolCount = config.xConfig?.ok ? (xWriteEnabled ? 5 : 3) : 0;
     const webFetchCount = 1;
     const intelligenceToolCount = 17;
-    const baseToolCount = 76;
+    const baseToolCount = 77;
     const totalRegistered = baseToolCount + intelligenceToolCount + webFetchCount;
     const totalToolCount = totalRegistered + xToolCount;
     api.logger.info(
