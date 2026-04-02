@@ -378,6 +378,19 @@ const solanaTraderPlugin = {
       });
     };
 
+    const patch = async (apiPath: string, body: Record<string, unknown>) => {
+      const token = await sessionManager.getAccessToken();
+      return orchestratorRequest({
+        baseUrl: orchestratorUrl,
+        method: "PATCH",
+        path: apiPath,
+        body,
+        timeout: apiTimeout,
+        accessToken: token,
+        onUnauthorized,
+      });
+    };
+
     const del = async (apiPath: string) => {
       const token = await sessionManager.getAccessToken();
       return orchestratorRequest({
@@ -850,6 +863,12 @@ const solanaTraderPlugin = {
           }),
         ),
         idempotencyKey: Type.Optional(Type.String({ description: "Unique key to prevent duplicate executions (e.g., UUID). Server uses walletId + key for replay cache." })),
+        agentId: Type.Optional(
+          Type.String({
+            description:
+              "Optional agent id for gateway-forwarded notices (e.g. main). If omitted, the plugin config `agentId` is sent when set so default-risk messages reach the right agent.",
+          }),
+        ),
       }),
       execute: wrapExecute("solana_trade_execute", async (_id, params) => {
         const headers: Record<string, string> = {};
@@ -864,6 +883,13 @@ const solanaTraderPlugin = {
           slPct: params.slPct,
           managementMode: params.managementMode,
         };
+        const execAgentId =
+          typeof params.agentId === "string" && params.agentId.trim().length > 0
+            ? params.agentId.trim()
+            : config.agentId && String(config.agentId).trim().length > 0
+              ? String(config.agentId).trim()
+              : undefined;
+        if (execAgentId) body.agentId = execAgentId;
         const tsExecute = params.trailingStop as { levels?: unknown[] } | undefined;
         if (tsExecute?.levels && Array.isArray(tsExecute.levels) && tsExecute.levels.length > 0) {
           body.trailingStop = tsExecute;
@@ -1105,7 +1131,8 @@ const solanaTraderPlugin = {
     api.registerTool({
       name: "solana_positions",
       description:
-        "List trading positions with mark-to-market. **PnL:** for Solana wallets, `realizedPnl` / `unrealizedPnl` are returned in SOL-native units. `unrealizedReturnPct` is ROI on cost basis (for sweep-dead-tokens logic).",
+        "List trading positions with mark-to-market. **PnL:** for Solana wallets, `realizedPnl` / `unrealizedPnl` are returned in SOL-native units. `unrealizedReturnPct` is ROI on cost basis (for sweep-dead-tokens logic). " +
+        "**Exit plan (source of truth):** use each position's `tpLevelsDetailed`, `slLevels`, `trailingStopPct`, `trailingStopLevels`, and `deadlockState.exits` — never guess exits from mode tables or memory.",
       parameters: Type.Object({
         status: Type.Optional(Type.String({ description: "Filter by status: 'open', 'closed', or omit for all" })),
       }),
@@ -1113,6 +1140,103 @@ const solanaTraderPlugin = {
         let reqPath = `/api/wallet/positions?walletId=${walletId}`;
         if (params.status) reqPath += `&status=${params.status}`;
         return get(reqPath);
+      }),
+    });
+
+    api.registerTool({
+      name: "risk_management_get_default",
+      description:
+        "Read per-wallet default exit parameters used when a buy is executed **without** any TP/SL/trailing fields. Returns either the user's saved defaults or the platform system default (`source`: user | system).",
+      parameters: Type.Object({}),
+      execute: wrapExecute("risk_management_get_default", async () =>
+        get(`/api/wallet/risk-defaults?walletId=${walletId}`),
+      ),
+    });
+
+    api.registerTool({
+      name: "risk_management_set_default",
+      description:
+        "Save per-wallet default exit parameters (`tpExits`, `slExits`, `trailingStop.levels`) applied on buys that omit risk fields. Same shape as trade execute exit payloads.",
+      parameters: Type.Object({
+        tpExits: Type.Array(
+          Type.Object({
+            percent: Type.Number(),
+            amountPct: Type.Number(),
+          }),
+          { minItems: 1 },
+        ),
+        slExits: Type.Array(
+          Type.Object({
+            percent: Type.Number(),
+            amountPct: Type.Number(),
+          }),
+          { minItems: 1 },
+        ),
+        trailingStop: Type.Object({
+          levels: Type.Array(
+            Type.Object({
+              percentage: Type.Number(),
+              amount: Type.Optional(Type.Number()),
+              triggerAboveATH: Type.Optional(Type.Number()),
+            }),
+            { minItems: 1, maxItems: 5 },
+          ),
+        }),
+      }),
+      execute: wrapExecute("risk_management_set_default", async (_id, params) =>
+        put("/api/wallet/risk-defaults", {
+          walletId,
+          tpExits: params.tpExits,
+          slExits: params.slExits,
+          trailingStop: params.trailingStop,
+        }),
+      ),
+    });
+
+    api.registerTool({
+      name: "position_risk_management_update",
+      description:
+        "Update **percentages and amounts only** on an open position's live exit plan (CaptureSell + stored position metadata). Cannot add or remove levels — array lengths must match the existing subscription. Use after entry when refining TP/SL/trailing numerics.",
+      parameters: Type.Object({
+        tokenAddress: Type.String({ description: "SPL mint for the open position" }),
+        tpExits: Type.Optional(
+          Type.Array(
+            Type.Object({
+              percent: Type.Number(),
+              amountPct: Type.Number(),
+            }),
+          ),
+        ),
+        slExits: Type.Optional(
+          Type.Array(
+            Type.Object({
+              percent: Type.Number(),
+              amountPct: Type.Number(),
+            }),
+          ),
+        ),
+        trailingStop: Type.Optional(
+          Type.Object({
+            levels: Type.Array(
+              Type.Object({
+                percentage: Type.Number(),
+                amount: Type.Optional(Type.Number()),
+                triggerAboveATH: Type.Optional(Type.Number()),
+              }),
+              { minItems: 1, maxItems: 5 },
+            ),
+          }),
+        ),
+      }),
+      execute: wrapExecute("position_risk_management_update", async (_id, params) => {
+        const body: Record<string, unknown> = {
+          walletId,
+          tokenAddress: params.tokenAddress,
+        };
+        if (params.tpExits) body.tpExits = params.tpExits;
+        if (params.slExits) body.slExits = params.slExits;
+        if (params.trailingStop) body.trailingStop = params.trailingStop;
+        return patch("/api/position/risk-management", body);
       }),
     });
 
