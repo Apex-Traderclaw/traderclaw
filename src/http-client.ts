@@ -1,4 +1,4 @@
-export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export interface OrchestratorRequestOptions {
   baseUrl: string;
@@ -49,7 +49,7 @@ async function doRequest(
       signal: controller.signal,
     };
 
-    if ((opts.method === "POST" || opts.method === "PUT") && opts.body) {
+    if ((opts.method === "POST" || opts.method === "PUT" || opts.method === "PATCH") && opts.body) {
       fetchOpts.body = JSON.stringify(opts.body);
     }
 
