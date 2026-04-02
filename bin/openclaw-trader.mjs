@@ -2,7 +2,8 @@
 
 import { createInterface } from "readline";
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync, existsSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 import { homedir } from "os";
 import { randomUUID, createPrivateKey, sign as cryptoSign } from "crypto";
 import { execFile, execSync } from "child_process";
@@ -17,9 +18,27 @@ const execFileAsync = promisify(execFile);
 const OPENCLAW_MODELS_PER_PROVIDER_TIMEOUT_MS = 16_000;
 
 const PLUGIN_ROOT = resolvePluginPackageRoot(import.meta.url);
-const PACKAGE_JSON = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf-8"));
-const VERSION = PACKAGE_JSON.version;
-const NPM_PACKAGE_NAME = typeof PACKAGE_JSON.name === "string" ? PACKAGE_JSON.name : "solana-traderclaw";
+const PLUGIN_PACKAGE_JSON = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf-8"));
+const PLUGIN_VERSION =
+  typeof PLUGIN_PACKAGE_JSON.version === "string" ? PLUGIN_PACKAGE_JSON.version.trim() : "0.0.0";
+/** npm folder name for skills path (always the plugin package). */
+const NPM_PACKAGE_NAME =
+  typeof PLUGIN_PACKAGE_JSON.name === "string" ? PLUGIN_PACKAGE_JSON.name : "solana-traderclaw";
+
+/** When installed via `npm i -g traderclaw-cli`, bin/ lives under traderclaw-cli — show that version for --version. */
+let CLI_VERSION = null;
+try {
+  const cliPkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "package.json");
+  const cliPkg = JSON.parse(readFileSync(cliPkgPath, "utf-8"));
+  if (cliPkg.name === "traderclaw-cli" && typeof cliPkg.version === "string") {
+    CLI_VERSION = cliPkg.version.trim();
+  }
+} catch {
+  /* git checkout: only plugin package.json next to bin */
+}
+
+/** User-facing CLI version (wrapper package when present, else plugin). */
+const VERSION = CLI_VERSION || PLUGIN_VERSION;
 const PLUGIN_ID = "solana-trader";
 const LEGACY_PLUGIN_IDS = ["traderclaw-v1", "solana-traderclaw-v1", "solana-traderclaw"];
 const CONFIG_DIR = join(homedir(), ".openclaw");
@@ -3188,7 +3207,11 @@ async function main() {
   }
 
   if (command === "--version" || command === "-v") {
-    print(`traderclaw v${VERSION}`);
+    if (CLI_VERSION && PLUGIN_VERSION && CLI_VERSION !== PLUGIN_VERSION) {
+      print(`traderclaw v${CLI_VERSION} (plugin solana-traderclaw v${PLUGIN_VERSION})`);
+    } else {
+      print(`traderclaw v${VERSION}`);
+    }
     process.exit(0);
   }
 
