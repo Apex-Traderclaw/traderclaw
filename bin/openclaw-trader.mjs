@@ -2262,7 +2262,7 @@ function wizardHtml(defaults) {
           const updateHint = () => {
             const elapsedSeconds = Math.max(1, Math.floor((Date.now() - llmLoadStartedAt) / 1000));
             if (elapsedSeconds >= 8) {
-              llmLoadingHintTextEl.textContent = "Still loading provider catalog (" + elapsedSeconds + "s). First run can take up to ~20s.";
+              llmLoadingHintTextEl.textContent = "Still loading provider catalog (" + elapsedSeconds + "s). First run can take up to ~60s.";
               return;
             }
             llmLoadingHintTextEl.textContent = "Fetching provider list (" + elapsedSeconds + "s)...";
