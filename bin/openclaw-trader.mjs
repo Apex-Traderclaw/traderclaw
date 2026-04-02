@@ -3,7 +3,7 @@
 import { createInterface } from "readline";
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync, existsSync } from "fs";
 import { dirname, join } from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 import { homedir } from "os";
 import { randomUUID, createPrivateKey, sign as cryptoSign } from "crypto";
 import { execFile, execSync } from "child_process";
@@ -665,6 +665,7 @@ async function cmdSetup(args) {
   let writeGatewayEnvFlag = false;
   let noEnsureGatewayPersistent = false;
   let signupRecoverySecret = undefined;
+  let forwardTelegramRecipientArg = "";
 
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === "--api-key" || args[i] === "-k") && args[i + 1]) {
@@ -702,6 +703,14 @@ async function cmdSetup(args) {
     }
     if (args[i] === "--no-ensure-gateway-persistent") {
       noEnsureGatewayPersistent = true;
+    }
+    if (
+      (args[i] === "--telegram-recipient" ||
+        args[i] === "--forward-telegram-chat-id" ||
+        args[i] === "--telegram-chat-id") &&
+      args[i + 1]
+    ) {
+      forwardTelegramRecipientArg = args[++i];
     }
   }
   const runtimeWalletPrivateKey = getRuntimeWalletPrivateKey(walletPrivateKey);
@@ -970,6 +979,49 @@ async function cmdSetup(args) {
     }
   }
 
+  let forwardTelegramRecipient = forwardTelegramRecipientArg.trim();
+  print("\nTelegram delivery (optional)...\n");
+  printInfo("  Enter your Telegram @username or numeric chat id so agent replies can be routed to you.");
+  printInfo(
+    "  Usernames resolve when plugin config telegramBotToken is set, or TELEGRAM_BOT_TOKEN / OPENCLAW_TELEGRAM_BOT_TOKEN is set for this prompt.",
+  );
+  printInfo("  Private chats: message your bot once first.\n");
+  if (!forwardTelegramRecipient) {
+    forwardTelegramRecipient = await prompt("Telegram @username or chat id (optional, Enter to skip)", "");
+  }
+  forwardTelegramRecipient = forwardTelegramRecipient.trim();
+
+  if (forwardTelegramRecipient) {
+    const botToken = String(
+      prevPlugin?.telegramBotToken ||
+        process.env.TELEGRAM_BOT_TOKEN ||
+        process.env.OPENCLAW_TELEGRAM_BOT_TOKEN ||
+        "",
+    ).trim();
+    try {
+      const { looksLikeTelegramChatId, resolveTelegramRecipientToChatId } = await import(
+        pathToFileURL(join(PLUGIN_ROOT, "dist", "src", "telegram-resolve.js")).href,
+      );
+      if (looksLikeTelegramChatId(forwardTelegramRecipient)) {
+        pluginConfig.forwardTelegramRecipient = forwardTelegramRecipient;
+        printSuccess(`  Saved Telegram chat id`);
+      } else if (botToken) {
+        const id = await resolveTelegramRecipientToChatId({ botToken, raw: forwardTelegramRecipient });
+        pluginConfig.forwardTelegramRecipient = id;
+        printSuccess(`  Resolved @${forwardTelegramRecipient.replace(/^@/, "")} → chat id ${id}`);
+      } else {
+        pluginConfig.forwardTelegramRecipient = forwardTelegramRecipient;
+        printInfo(
+          "  Saved as-is; set plugin telegramBotToken or gateway TELEGRAM_BOT_TOKEN to resolve @username on first run.",
+        );
+      }
+    } catch (err) {
+      printWarn(`  Telegram resolve failed: ${err instanceof Error ? err.message : String(err)}`);
+      printInfo("  Saving your username anyway — fix token or use numeric chat id.");
+      pluginConfig.forwardTelegramRecipient = forwardTelegramRecipient;
+    }
+  }
+
   print("\nWriting configuration...\n");
 
   const existingConfig = readConfig();
@@ -1178,6 +1230,7 @@ async function cmdSetup(args) {
   Wallet PrivKey:${lastSeenWalletPrivateKey ? (createdNewWallet || showWalletPrivateKey ? " " + lastSeenWalletPrivateKey : " " + maskKey(lastSeenWalletPrivateKey)) : " not saved"}
   Gateway URL:   ${gatewayBaseUrl || "not set"}
   Gateway Token: ${gatewayToken ? maskKey(gatewayToken) : "not set"}
+  Telegram fwd:  ${pluginConfig.forwardTelegramRecipient || "(not set)"}
   API Key:       ${showApiKey ? apiKey : maskKey(apiKey)}
   Session:       Active (tier: ${sessionTokens.session?.tier || "?"})
   Config:        ${CONFIG_FILE}
@@ -3154,6 +3207,7 @@ Setup options:
   --wallet-private-key  Optional base58 private key for wallet proof flow (runtime only, never saved)
   --gateway-base-url, -g  Gateway public HTTPS URL for orchestrator callbacks
   --gateway-token, -t     Gateway bearer token (defaults to API key)
+  --telegram-recipient    Telegram @username or chat id (aliases: --forward-telegram-chat-id, --telegram-chat-id)
   --skip-gateway-registration  Skip gateway URL registration with orchestrator
   --show-api-key     Extra hint after signup (full key is always shown once; confirm with API_KEY_STORED)
   --show-wallet-private-key  Reveal full wallet private key in setup output
@@ -3186,6 +3240,7 @@ Examples:
   traderclaw setup --signup --user-id my_agent_001
   traderclaw setup --api-key oc_xxx --url https://api.traderclaw.ai
   traderclaw setup --gateway-base-url https://gateway.myhost.ts.net
+  traderclaw setup --telegram-recipient @myusername
   traderclaw login
   traderclaw login --force-reauth --wallet-private-key <base58_key>
   traderclaw logout
