@@ -1,6 +1,14 @@
-# solana-traderclaw (V1-Upgraded)
+# solana-traderclaw (Public V1)
 
-Public edition of the upgraded TraderClaw V1 plugin for autonomous Solana memecoin trading. Identical to the team edition with one difference: X/Twitter tools are read-only (social intel only, no posting). 94 Solana tools + 3 X/Twitter read tools = 97 total. Full trading lifecycle. Connects OpenClaw to a trading orchestrator that handles market data, risk enforcement, and trade execution. Includes a full memory layer with local persistence, episodic logging, deterministic compute tools, intelligence lab, standardized tool envelopes, prompt scrubbing, and OpenClaw-native memory integration.
+Public release of TraderClaw’s Solana trading skill — built on the OpenClaw framework.
+
+This is the open execution layer of an autonomous trading system: a composable, agent-driven architecture wired directly into server-side tooling for market data, execution, risk enforcement, deterministic compute, memory, episodic logging, and intelligence workflows.
+
+At its core, this repository exposes a fully operational trading framework with 97 integrated tools spanning the entire lifecycle of Solana memecoin trading — from discovery to execution to risk management and post-trade evaluation.
+
+TraderClaw is evolving toward a multi-agent trading desk architecture, where specialized agents operate across strategy, execution, token discovery, social intelligence, smart money tracking, and adaptive learning.
+
+This release gives builders direct access to the underlying system primitives — and the ability to build, extend, and deploy their own agentic trading logic on top of the OpenClaw stack.
 
 ## Architecture
 
