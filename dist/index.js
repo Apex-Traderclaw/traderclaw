@@ -26,8 +26,7 @@ import {
   scrubUntrustedText
 } from "./chunk-AI6MTHUN.js";
 import {
-  readRecoverySecretFromDisk,
-  writeRecoverySecretToOpenclawAtomic
+  readRecoverySecretFromDisk
 } from "./chunk-SBYHSJLU.js";
 import {
   generateBulletinDigest,
@@ -946,6 +945,9 @@ var solanaTraderPlugin = {
         return typeof k === "string" && k.trim() ? k.trim() : void 0;
       },
       recoverySecretProvider: async () => {
+        const sidecarData = readSessionSidecar();
+        const fromSidecar = sidecarData?.recoverySecret;
+        if (typeof fromSidecar === "string" && fromSidecar.trim().length > 0) return fromSidecar.trim();
         const fromDisk = readRecoverySecretFromDisk();
         if (fromDisk) return fromDisk;
         const s = config.recoverySecret;
@@ -953,8 +955,9 @@ var solanaTraderPlugin = {
       },
       onRecoverySecretRotated: (newSecret) => {
         try {
-          writeRecoverySecretToOpenclawAtomic(newSecret);
-          api.logger.info("[solana-trader] Persisted rotated recovery secret to openclaw.json");
+          const current = readSessionSidecar() ?? {};
+          writeSessionSidecarAtomic({ ...current, recoverySecret: newSecret });
+          api.logger.info("[solana-trader] Persisted rotated recovery secret to session-tokens.json");
         } catch (err) {
           api.logger.warn(
             `[solana-trader] Failed to write rotated recovery secret: ${err instanceof Error ? err.message : String(err)}`

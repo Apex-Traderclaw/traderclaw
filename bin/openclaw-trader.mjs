@@ -3227,7 +3227,14 @@ async function cmdTestSession(args) {
   try {
     if (currentRefreshToken && currentAccessToken) {
       mkdirSync(dataDir, { recursive: true });
+      let existingSidecar = {};
+      try {
+        if (existsSync(sessionTokensPath)) {
+          existingSidecar = JSON.parse(readFileSync(sessionTokensPath, "utf-8")) || {};
+        }
+      } catch { /* ignore */ }
       const payload = {
+        ...existingSidecar,
         refreshToken: currentRefreshToken,
         accessToken: currentAccessToken,
         accessTokenExpiresAt: Date.now() + 900_000,
