@@ -319,7 +319,9 @@ const solanaTraderPlugin = {
       initialAccessTokenExpiresAt,
       onTokensRotated: (tokens) => {
         try {
+          const current = readSessionSidecar() ?? {};
           writeSessionSidecarAtomic({
+            ...current,
             refreshToken: tokens.refreshToken,
             accessToken: tokens.accessToken,
             accessTokenExpiresAt: tokens.accessTokenExpiresAt,
