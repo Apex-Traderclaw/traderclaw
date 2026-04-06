@@ -14,18 +14,19 @@ import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
 
 const execFileAsync = promisify(execFile);
 
-/** Fast wizard catalog lookup: prefer one full list, then only probe key providers. */
-const OPENCLAW_MODELS_FLAT_TIMEOUT_MS = 7_500;
-const OPENCLAW_MODELS_PER_PROVIDER_TIMEOUT_MS = 4_500;
+/**
+ * Fast wizard catalog lookup: prefer one full list, then only probe key providers.
+ * Timeouts are intentionally short — on a fresh install the CLI can't reach providers
+ * (no credentials yet) so we want to fail fast and show the curated fallback list
+ * rather than making the user wait 10+ seconds.  Target total: ≤ 5 s.
+ */
+const OPENCLAW_MODELS_FLAT_TIMEOUT_MS = 3_000;
+const OPENCLAW_MODELS_PER_PROVIDER_TIMEOUT_MS = 2_500;
 const WIZARD_PRIORITY_PROVIDERS = [
   "anthropic",
   "openai",
-  "openrouter",
   "google",
-  "xai",
-  "deepseek",
-  "groq",
-  "mistral",
+  "openrouter",
 ];
 const WIZARD_PROVIDER_PRIORITY = [
   ...WIZARD_PRIORITY_PROVIDERS,
@@ -2598,7 +2599,7 @@ function wizardHtml(defaults) {
 
         const payload = {
           llmProvider: llmProviderEl.value.trim(),
-          llmModel: llmModelManualEl.checked ? llmModelEl.value.trim() : "",
+          llmModel: llmModelEl.value.trim(),
           llmCredential: llmCredentialEl.value.trim(),
           apiKey: document.getElementById("apiKey").value.trim(),
           telegramToken: document.getElementById("telegramToken").value.trim(),
