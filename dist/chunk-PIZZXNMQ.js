@@ -37,6 +37,12 @@ async function doRequest(opts, isRetry = false) {
     } catch {
       data = { raw: text };
     }
+    const dataObj = data && typeof data === "object" && !Array.isArray(data) ? data : null;
+    if (res.status === 403 && dataObj?.code === "ACCESS_LIMIT_REACHED") {
+      clearTimeout(timeoutId);
+      const msg = typeof dataObj.message === "string" && dataObj.message.trim() ? dataObj.message : "Access limit reached.";
+      throw new Error(msg);
+    }
     if ((res.status === 401 || res.status === 403) && !isRetry && opts.onUnauthorized) {
       clearTimeout(timeoutId);
       const newToken = await opts.onUnauthorized();

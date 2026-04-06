@@ -9,26 +9,23 @@ import { randomUUID, createPrivateKey, sign as cryptoSign } from "crypto";
 import { execFile, execSync } from "child_process";
 import { promisify } from "util";
 import { createServer } from "http";
-import { sortModelsByPreference, MAX_MODELS_PER_PROVIDER_SORT } from "./llm-model-preference.mjs";
 import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
 
 const execFileAsync = promisify(execFile);
 
-/** Fast wizard catalog lookup: prefer one full list, then only probe key providers. */
-const OPENCLAW_MODELS_FLAT_TIMEOUT_MS = 7_500;
-const OPENCLAW_MODELS_PER_PROVIDER_TIMEOUT_MS = 4_500;
-const WIZARD_PRIORITY_PROVIDERS = [
+/**
+ * Ordered list of providers for display in the wizard dropdown.
+ * The most commonly used providers appear first.
+ */
+const WIZARD_PROVIDER_PRIORITY = [
   "anthropic",
   "openai",
-  "openrouter",
   "google",
+  "openrouter",
   "xai",
   "deepseek",
   "groq",
   "mistral",
-];
-const WIZARD_PROVIDER_PRIORITY = [
-  ...WIZARD_PRIORITY_PROVIDERS,
   "perplexity",
   "together",
   "openai-codex",
@@ -42,14 +39,6 @@ const WIZARD_PROVIDER_PRIORITY = [
   "minimax",
 ];
 let wizardLlmCatalogPromise = null;
-
-function compareWizardProviderPriority(a, b) {
-  const ai = WIZARD_PROVIDER_PRIORITY.indexOf(a);
-  const bi = WIZARD_PROVIDER_PRIORITY.indexOf(b);
-  const aRank = ai >= 0 ? ai : Number.MAX_SAFE_INTEGER;
-  const bRank = bi >= 0 ? bi : Number.MAX_SAFE_INTEGER;
-  return aRank - bRank || a.localeCompare(b);
-}
 
 const PLUGIN_ROOT = resolvePluginPackageRoot(import.meta.url);
 const PLUGIN_PACKAGE_JSON = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf-8"));
@@ -520,15 +509,22 @@ function signChallengeLocally(challengeText, privateKeyBase58) {
   return b58Encode(new Uint8Array(sig));
 }
 
-async function doSignup(orchestratorUrl, externalUserId) {
+async function doSignup(orchestratorUrl, externalUserId, referralCode = "") {
   printInfo(`  Signing up as: ${externalUserId}`);
+  const body = { externalUserId };
+  const ref = String(referralCode || "").trim();
+  if (ref) body.referralCode = ref;
   const res = await httpRequest(`${orchestratorUrl}/api/auth/signup`, {
     method: "POST",
-    body: { externalUserId },
+    body,
   });
 
   if (!res.ok) {
-    throw new Error(`Signup failed (HTTP ${res.status}): ${JSON.stringify(res.data)}`);
+    const payload = res.data && typeof res.data === "object" ? res.data : {};
+    const apiMsg = typeof payload.message === "string" ? payload.message : JSON.stringify(res.data);
+    const err = new Error(`Signup failed (HTTP ${res.status}): ${apiMsg}`);
+    if (typeof payload.code === "string") err.code = payload.code;
+    throw err;
   }
 
   return res.data;
@@ -700,6 +696,8 @@ async function cmdSetup(args) {
   let noEnsureGatewayPersistent = false;
   let signupRecoverySecret = undefined;
   let forwardTelegramRecipientArg = "";
+  let referralCodeArg = "";
+  let referralInvalidRetries = 0;
 
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === "--api-key" || args[i] === "-k") && args[i + 1]) {
@@ -746,6 +744,9 @@ async function cmdSetup(args) {
     ) {
       forwardTelegramRecipientArg = args[++i];
     }
+    if ((args[i] === "--referral-code" || args[i] === "-r") && args[i + 1]) {
+      referralCodeArg = args[++i];
+    }
   }
   const runtimeWalletPrivateKey = getRuntimeWalletPrivateKey(walletPrivateKey);
 
@@ -763,6 +764,16 @@ async function cmdSetup(args) {
     }
   }
 
+  if (doSignupFlow && !referralCodeArg) {
+    printInfo(
+      "\n  Optional: enter a referral code for bonus access time (24h extra when valid). Press Enter to skip.\n",
+    );
+    printInfo(
+      "  Benefits: extra trial time now; referring others later earns +8h per user who completes at least one trade with the agent.\n",
+    );
+    referralCodeArg = await prompt("Referral code (optional)", "");
+  }
+
   if (doSignupFlow) {
     print("\n  Signing up for a new account...\n");
     if (!externalUserId) {
@@ -771,7 +782,7 @@ async function cmdSetup(args) {
 
     for (let signupAttempt = 0; ; signupAttempt++) {
       try {
-        const signupResult = await doSignup(orchestratorUrl, externalUserId);
+        const signupResult = await doSignup(orchestratorUrl, externalUserId, referralCodeArg);
         apiKey = signupResult.apiKey;
         if (signupResult.recoverySecret) {
           signupRecoverySecret = signupResult.recoverySecret;
@@ -783,6 +794,22 @@ async function cmdSetup(args) {
         break;
       } catch (err) {
         const msg = err.message || String(err);
+        const apiCode = err.code;
+        const referralRejected =
+          apiCode === "REFERRAL_CODE_INVALID" ||
+          msg.includes("REFERRAL_CODE_INVALID") ||
+          msg.includes("Unknown referral code");
+        if (referralRejected) {
+          referralInvalidRetries += 1;
+          if (referralInvalidRetries > 30) {
+            printError("Too many invalid referral attempts. Aborting.");
+            process.exit(1);
+          }
+          printWarn("  That referral code was not accepted (unknown or invalid).");
+          printInfo("  Leave it blank or enter a different code, then try again.");
+          referralCodeArg = await prompt("Referral code (optional, leave empty to skip)", "");
+          continue;
+        }
         if (msg.includes("SIGNUP_ALREADY_COMPLETED") || msg.includes("409")) {
           printWarn(`  User "${externalUserId}" is already registered.`);
           if (signupAttempt >= 2) {
@@ -1878,35 +1905,29 @@ function parseJsonBody(req) {
   });
 }
 
+/**
+ * Returns the wizard LLM catalog immediately from the curated static list.
+ *
+ * WHY we no longer call `openclaw models list --all`:
+ * The OpenClaw CLI enumerates models by making live network calls to each
+ * provider's API (provider plugins inject catalogs via network).  The wizard
+ * runs BEFORE any API credentials have been configured, so every probe will
+ * always ETIMEDOUT — there is nothing to authenticate with yet.  Calling the
+ * CLI here is architecturally wrong for this stage of setup.
+ *
+ * The curated list below is the correct source for the wizard: it covers all
+ * supported providers with their recommended models and loads in < 1 ms.
+ * After installation the user can run `openclaw models list` to see the full
+ * live catalog for their configured providers.
+ */
 async function loadWizardLlmCatalogAsync() {
-  const supportedProviders = new Set([
-    "anthropic",
-    "openai",
-    "openai-codex",
-    "openrouter",
-    "groq",
-    "mistral",
-    "google",
-    "google-vertex",
-    "xai",
-    "deepseek",
-    "together",
-    "perplexity",
-    "amazon-bedrock",
-    "vercel-ai-gateway",
-    "minimax",
-    "moonshot",
-    "nvidia",
-    "qwen",
-    "cerebras",
-  ]);
-  const fallback = {
-    source: "fallback",
+  return {
+    source: "curated",
     providers: [
       {
         id: "anthropic",
         models: [
-          { id: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6 (recommended default)" },
+          { id: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6 (recommended)" },
           { id: "anthropic/claude-opus-4-6", name: "Claude Opus 4.6" },
           { id: "anthropic/claude-haiku-4-5", name: "Claude Haiku 4.5" },
         ],
@@ -1914,7 +1935,7 @@ async function loadWizardLlmCatalogAsync() {
       {
         id: "openai",
         models: [
-          { id: "openai/gpt-5.4", name: "GPT-5.4 (recommended default)" },
+          { id: "openai/gpt-5.4", name: "GPT-5.4 (recommended)" },
           { id: "openai/gpt-5.4-mini", name: "GPT-5.4 mini" },
           { id: "openai/gpt-5.4-nano", name: "GPT-5.4 nano" },
         ],
@@ -1924,28 +1945,47 @@ async function loadWizardLlmCatalogAsync() {
         models: [{ id: "openai-codex/gpt-5-codex", name: "GPT-5 Codex" }],
       },
       {
+        id: "google",
+        models: [
+          { id: "google/gemini-2.5-flash", name: "Gemini 2.5 Flash (recommended)" },
+          { id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro" },
+        ],
+      },
+      {
         id: "xai",
-        models: [{ id: "xai/grok-4", name: "Grok 4" }],
+        models: [
+          { id: "xai/grok-4", name: "Grok 4 (recommended)" },
+          { id: "xai/grok-3", name: "Grok 3" },
+        ],
       },
       {
         id: "deepseek",
-        models: [{ id: "deepseek/deepseek-chat", name: "DeepSeek Chat (V3.2)" }],
-      },
-      {
-        id: "google",
-        models: [{ id: "google/gemini-2.5-flash", name: "Gemini 2.5 Flash" }],
-      },
-      {
-        id: "groq",
-        models: [{ id: "groq/llama-4-scout-17b-16e-instruct", name: "Llama 4 Scout" }],
+        models: [
+          { id: "deepseek/deepseek-chat", name: "DeepSeek Chat V3 (recommended)" },
+          { id: "deepseek/deepseek-reasoner", name: "DeepSeek Reasoner R1" },
+        ],
       },
       {
         id: "openrouter",
-        models: [{ id: "openrouter/anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6 (via OpenRouter)" }],
+        models: [
+          { id: "openrouter/anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6 via OpenRouter (recommended)" },
+          { id: "openrouter/openai/gpt-5.4", name: "GPT-5.4 via OpenRouter" },
+          { id: "openrouter/google/gemini-2.5-flash", name: "Gemini 2.5 Flash via OpenRouter" },
+        ],
+      },
+      {
+        id: "groq",
+        models: [
+          { id: "groq/llama-4-scout-17b-16e-instruct", name: "Llama 4 Scout (recommended)" },
+          { id: "groq/llama-4-maverick-17b-128e-instruct", name: "Llama 4 Maverick" },
+        ],
       },
       {
         id: "mistral",
-        models: [{ id: "mistral/mistral-large-latest", name: "Mistral Large" }],
+        models: [
+          { id: "mistral/mistral-large-latest", name: "Mistral Large (recommended)" },
+          { id: "mistral/mistral-medium-latest", name: "Mistral Medium" },
+        ],
       },
       {
         id: "perplexity",
@@ -1963,174 +2003,13 @@ async function loadWizardLlmCatalogAsync() {
         id: "qwen",
         models: [{ id: "qwen/qwen3-235b-a22b", name: "Qwen3 235B A22B" }],
       },
+      {
+        id: "moonshot",
+        models: [{ id: "moonshot/kimi-k2", name: "Kimi K2" }],
+      },
     ],
+    generatedAt: new Date().toISOString(),
   };
-
-  if (!commandExists("openclaw")) {
-    return { ...fallback, warning: "openclaw_not_found" };
-  }
-
-  const providerIds = [...supportedProviders].sort(compareWizardProviderPriority);
-  const priorityProviderIds = providerIds.filter((id) => WIZARD_PRIORITY_PROVIDERS.includes(id));
-
-  async function fetchModelsForProvider(provider) {
-    try {
-      const { stdout } = await execFileAsync(
-        "openclaw",
-        ["models", "list", "--all", "--provider", provider, "--json"],
-        {
-          encoding: "utf-8",
-          maxBuffer: 25 * 1024 * 1024,
-          timeout: OPENCLAW_MODELS_PER_PROVIDER_TIMEOUT_MS,
-          env: NO_COLOR_ENV,
-        },
-      );
-      return { provider, stdout };
-    } catch (err) {
-      return { provider, error: err };
-    }
-  }
-
-  function seedFallbackProviderMap() {
-    return new Map(
-      fallback.providers.map((entry) => [
-        entry.id,
-        entry.models.map((model) => ({ ...model })),
-      ]),
-    );
-  }
-
-  function mergeCatalogModelsIntoMap(providerMap, models, expectedProvider = "") {
-    let added = 0;
-    for (const entry of models) {
-      if (!entry || typeof entry.key !== "string") continue;
-      const modelId = String(entry.key);
-      const slash = modelId.indexOf("/");
-      if (slash <= 0 || slash === modelId.length - 1) continue;
-      const provider = modelId.slice(0, slash);
-      if (!supportedProviders.has(provider)) continue;
-      if (expectedProvider && provider !== expectedProvider) continue;
-      const existing = providerMap.get(provider) || [];
-      existing.push({
-        id: modelId,
-        name: typeof entry.name === "string" && entry.name.trim() ? entry.name : modelId,
-      });
-      providerMap.set(provider, existing);
-      added += 1;
-    }
-    return added;
-  }
-
-  function buildProvidersFromMap(providerMap) {
-    return providerIds
-      .map((id) => {
-        const rawModels = providerMap.get(id) || [];
-        const sortedIds = sortModelsByPreference(
-          id,
-          rawModels.map((m) => m.id),
-        );
-        const byId = new Map(rawModels.map((m) => [m.id, m]));
-        const limitedIds = sortedIds.slice(0, MAX_MODELS_PER_PROVIDER_SORT);
-        const models = limitedIds.map((mid) => byId.get(mid)).filter(Boolean);
-        return { id, models };
-      })
-      .filter((entry) => supportedProviders.has(entry.id))
-      .filter((entry) => entry.models.length > 0);
-  }
-
-  /** When `openclaw models list --all --json` returns models; used if per-provider calls yield nothing. */
-  function mergeFlatCatalogIntoMap(providerMap) {
-    const raw = execSync("openclaw models list --all --json", {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      maxBuffer: 50 * 1024 * 1024,
-      timeout: OPENCLAW_MODELS_FLAT_TIMEOUT_MS,
-      env: NO_COLOR_ENV,
-    });
-    const parsed = extractJson(raw);
-    if (!parsed) return 0;
-    const models = Array.isArray(parsed?.models) ? parsed.models : [];
-    return mergeCatalogModelsIntoMap(providerMap, models);
-  }
-
-  try {
-    const t0 = Date.now();
-    const liveProviderMap = new Map();
-    let catalogStrategy = "flat_all";
-    let flatError = "";
-    let liveAdded = 0;
-    try {
-      liveAdded = mergeFlatCatalogIntoMap(liveProviderMap);
-    } catch (err) {
-      flatError = err instanceof Error ? err.message : String(err);
-    }
-
-    let batches = [];
-    if (liveAdded === 0) {
-      catalogStrategy = "priority_parallel";
-      batches = await Promise.all(priorityProviderIds.map((p) => fetchModelsForProvider(p)));
-      for (const batch of batches) {
-        if (batch.error || !batch.stdout) continue;
-        const parsed = extractJson(batch.stdout);
-        if (!parsed) continue;
-        const models = Array.isArray(parsed?.models) ? parsed.models : [];
-        liveAdded += mergeCatalogModelsIntoMap(liveProviderMap, models, batch.provider);
-      }
-    }
-
-    let providers = buildProvidersFromMap(liveProviderMap);
-    if (providers.length === 0) {
-      const failedParallel = batches.filter((b) => b.error).length;
-      const details = [];
-      if (flatError) details.push(`flat list failed: ${flatError.slice(0, 160)}`);
-      if (failedParallel > 0) {
-        details.push(
-          `${failedParallel}/${priorityProviderIds.length} priority provider lookups failed`,
-        );
-      }
-      return {
-        ...fallback,
-        warning: `openclaw_model_catalog_unavailable${details.length ? ` (${details.join("; ")})` : ""}`,
-      };
-    }
-
-    const mergedProviderMap = new Map(liveProviderMap);
-    for (const [provider, models] of seedFallbackProviderMap()) {
-      if (!mergedProviderMap.has(provider) || (mergedProviderMap.get(provider) || []).length === 0) {
-        mergedProviderMap.set(provider, models);
-      }
-    }
-    providers = buildProvidersFromMap(mergedProviderMap);
-
-    const elapsedMs = Date.now() - t0;
-    const source =
-      providers.length > buildProvidersFromMap(liveProviderMap).length ? "hybrid" : "openclaw";
-    const warning =
-      source === "hybrid" && flatError
-        ? `loaded priority providers; kept curated defaults for the rest (${flatError.slice(0, 160)})`
-        : source === "hybrid"
-          ? "loaded priority providers; kept curated defaults for the rest"
-          : "";
-    return {
-      source,
-      providers,
-      generatedAt: new Date().toISOString(),
-      catalogFetchMs: elapsedMs,
-      catalogStrategy,
-      ...(warning ? { warning } : {}),
-    };
-  } catch (err) {
-    const detail = err?.message || String(err);
-    const isBufferErr = detail.includes("maxBuffer") || detail.includes("ENOBUFS");
-    const hint = isBufferErr
-      ? " (stdout exceeded buffer — OpenClaw model catalog may have grown; this version raises the limit)"
-      : "";
-    console.error(`[traderclaw] loadWizardLlmCatalog failed${hint}: ${detail.slice(0, 500)}`);
-    return {
-      ...fallback,
-      warning: `openclaw_models_list_failed: ${detail}`,
-    };
-  }
 }
 
 function wizardHtml(defaults) {
@@ -2176,6 +2055,7 @@ function wizardHtml(defaults) {
       .spinner { width:14px; height:14px; border:2px solid #334a87; border-top-color:#8daeff; border-radius:50%; animation:spin 0.8s linear infinite; flex:0 0 auto; }
       .muted a { color:#9fd3ff; }
       .muted a:hover { color:#c5e5ff; }
+      .info-dot { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:50%; background:#22315a; color:#9cb0de; font-size:11px; font-weight:700; cursor:help; flex-shrink:0; }
       @keyframes spin { to { transform:rotate(360deg); } }
     </style>
   </head>
@@ -2252,6 +2132,13 @@ function wizardHtml(defaults) {
             <input id="apiKey" value="${defaults.apiKey}" placeholder="Leave blank if you are new — setup will create your account" />
             <p class="muted">Already have a TraderClaw account? Paste your API key here. New users: leave empty.</p>
           </div>
+        </div>
+        <div style="margin-top:12px;">
+          <label style="display:flex;align-items:center;gap:8px;">Referral code (optional)
+            <span class="info-dot" title="Included access: 24 hours for every new account. Add a valid referral code for an extra 24 hours. Refer others: when they complete at least one trade with the agent, you earn +8 hours per active referral. When your access window ends, you will need to stake or keep referring to continue.">i</span>
+          </label>
+          <input id="referralCode" type="text" maxlength="16" autocomplete="off" placeholder="e.g. ABCD1234" />
+          <p class="muted">If you have a friend’s code, enter it here. The setup command below will include it for <code>traderclaw setup</code>. If the server rejects the code, clear this field or fix it and copy the updated command — or run <code>traderclaw setup</code> again and enter a valid code or leave referral blank when prompted.</p>
         </div>
         <button id="start" disabled>Start Installation</button>
       </div>
@@ -2361,6 +2248,7 @@ function wizardHtml(defaults) {
       let llmLoadStartedAt = 0;
       let announcedTailscaleUrl = "";
       let announcedFunnelAdminUrl = "";
+      let lastReferralFailFingerprint = "";
       let pollTimer = null;
       let pollIntervalMs = 1200;
       let installLocked = false;
@@ -2420,11 +2308,11 @@ function wizardHtml(defaults) {
           startBtn.textContent = "Loading providers...";
           const updateHint = () => {
             const elapsedSeconds = Math.max(1, Math.floor((Date.now() - llmLoadStartedAt) / 1000));
-            if (elapsedSeconds >= 8) {
-              llmLoadingHintTextEl.textContent = "Still loading provider catalog (" + elapsedSeconds + "s). This should usually finish in under ~10s.";
+            if (elapsedSeconds >= 5) {
+              llmLoadingHintTextEl.textContent = "Still loading (" + elapsedSeconds + "s). Check network or reload.";
               return;
             }
-            llmLoadingHintTextEl.textContent = "Fetching provider list (" + elapsedSeconds + "s)...";
+            llmLoadingHintTextEl.textContent = "Loading provider list (" + elapsedSeconds + "s)...";
           };
           updateHint();
           stopLlmLoadTicker();
@@ -2475,7 +2363,7 @@ function wizardHtml(defaults) {
         setLlmCatalogLoading(true);
         setSelectOptions(llmProviderEl, [{ value: "", label: "Loading providers..." }], "");
         setSelectOptions(llmModelEl, [{ value: "", label: "Loading models..." }], "");
-        setLlmCatalogReady(false, "Loading LLM provider catalog... this can take a few seconds.");
+        setLlmCatalogReady(false, "Loading provider list...");
         try {
           const res = await fetch("/api/llm/options");
           const data = await res.json();
@@ -2484,21 +2372,15 @@ function wizardHtml(defaults) {
           if (providers.length === 0) {
             setSelectOptions(llmProviderEl, [{ value: "", label: "No providers available" }], "");
             refreshModelOptions("");
-            setLlmCatalogReady(false, "No LLM providers were found from OpenClaw. Please check OpenClaw model setup.", true);
+            setLlmCatalogReady(false, "No LLM providers found. Reload the page to try again.", true);
             return;
           }
           setSelectOptions(llmProviderEl, providers, "${defaults.llmProvider}");
           refreshModelOptions("${defaults.llmModel}");
-          const isFallback = llmCatalog.source === "fallback";
-          const isHybrid = llmCatalog.source === "hybrid";
-          const catalogMsg = isFallback
-            ? "Showing curated safe defaults only (could not load live OpenClaw catalog" + (llmCatalog.warning ? ": " + llmCatalog.warning : "") + "). Anthropic and OpenAI stay ready first, with several other providers still available."
-            : isHybrid
-              ? "Loaded priority providers first and filled the rest with curated defaults" + (llmCatalog.warning ? " (" + llmCatalog.warning + ")" : "") + "."
-              : "LLM providers loaded. Select provider and paste credential to continue. Model selection is optional.";
-          setLlmCatalogReady(true, catalogMsg, isFallback || isHybrid);
+          const catalogMsg = "Select your provider, paste your API key, and start installation. After setup, run \`openclaw models list\` to explore your live catalog.";
+          setLlmCatalogReady(true, catalogMsg, false);
         } catch (err) {
-          setLlmCatalogReady(false, "Failed to load LLM providers. Check OpenClaw and reload this page.", true);
+          setLlmCatalogReady(false, "Failed to load LLM providers. Reload the page and try again.", true);
           manualEl.textContent = "Failed to load LLM provider catalog: " + (err && err.message ? err.message : String(err));
         } finally {
           setLlmCatalogLoading(false);
@@ -2551,10 +2433,11 @@ function wizardHtml(defaults) {
 
         const payload = {
           llmProvider: llmProviderEl.value.trim(),
-          llmModel: llmModelManualEl.checked ? llmModelEl.value.trim() : "",
+          llmModel: llmModelEl.value.trim(),
           llmCredential: llmCredentialEl.value.trim(),
           apiKey: document.getElementById("apiKey").value.trim(),
           telegramToken: document.getElementById("telegramToken").value.trim(),
+          referralCode: document.getElementById("referralCode").value.trim(),
           xConsumerKey: xConsumerKeyEl.value.trim(),
           xConsumerSecret: xConsumerSecretEl.value.trim(),
           xAccessTokenMain: xAccessTokenMainEl.value.trim(),
@@ -2716,9 +2599,30 @@ function wizardHtml(defaults) {
         }
 
         const errors = data.errors || [];
-        manualEl.textContent = errors.length > 0
+        let manualText = errors.length > 0
           ? errors.map((e) => "Step " + (e.stepId || "unknown") + ":\\n" + (e.error || "")).join("\\n\\n")
           : "";
+        const combinedErr = errors.map((e) => e.error || "").join("\\n");
+        if (
+          data.status === "failed"
+          && /REFERRAL_CODE_INVALID|Unknown referral code/i.test(combinedErr)
+        ) {
+          manualText +=
+            (manualText ? "\\n\\n" : "") +
+            "Referral code was rejected. Clear or fix the referral field above, then click Start Installation again.";
+          const fp = combinedErr.slice(0, 240);
+          if (fp && fp !== lastReferralFailFingerprint) {
+            lastReferralFailFingerprint = fp;
+            try {
+              window.alert(
+                "Referral code was not accepted. Update or clear the referral field, then click Start Installation again.",
+              );
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+        manualEl.textContent = manualText;
         stepsEl.innerHTML = "";
         steps.forEach((row) => {
           const tr = document.createElement("tr");
@@ -2938,6 +2842,7 @@ async function cmdInstall(args) {
         enableTelegram: true,
         telegramToken: body.telegramToken || defaults.telegramToken,
         autoInstallDeps: true,
+        referralCode: typeof body.referralCode === "string" ? body.referralCode.trim() : "",
         xConsumerKey: body.xConsumerKey ?? defaults.xConsumerKey,
         xConsumerSecret: body.xConsumerSecret ?? defaults.xConsumerSecret,
         xAccessTokenMain: body.xAccessTokenMain ?? defaults.xAccessTokenMain,
@@ -2973,6 +2878,7 @@ async function cmdInstall(args) {
           enableTelegram: true,
           telegramToken: body.telegramToken || defaults.telegramToken,
           autoInstallDeps: true,
+          referralCode: wizardOpts.referralCode,
           xConsumerKey: wizardOpts.xConsumerKey,
           xConsumerSecret: wizardOpts.xConsumerSecret,
           xAccessTokenMain: wizardOpts.xAccessTokenMain,
@@ -3227,7 +3133,14 @@ async function cmdTestSession(args) {
   try {
     if (currentRefreshToken && currentAccessToken) {
       mkdirSync(dataDir, { recursive: true });
+      let existingSidecar = {};
+      try {
+        if (existsSync(sessionTokensPath)) {
+          existingSidecar = JSON.parse(readFileSync(sessionTokensPath, "utf-8")) || {};
+        }
+      } catch { /* ignore */ }
       const payload = {
+        ...existingSidecar,
         refreshToken: currentRefreshToken,
         accessToken: currentAccessToken,
         accessTokenExpiresAt: Date.now() + 900_000,
@@ -3304,6 +3217,7 @@ Setup options:
   --gateway-base-url, -g  Gateway public HTTPS URL for orchestrator callbacks
   --gateway-token, -t     Gateway bearer token (defaults to API key)
   --telegram-recipient    Telegram @username or chat id (aliases: --forward-telegram-chat-id, --telegram-chat-id)
+  --referral-code, -r   Optional referral code for new signups (extra trial time when valid)
   --skip-gateway-registration  Skip gateway URL registration with orchestrator
   --show-api-key     Extra hint after signup (full key is always shown once; confirm with API_KEY_STORED)
   --show-wallet-private-key  Reveal full wallet private key in setup output
@@ -3333,7 +3247,7 @@ Examples:
   traderclaw install --wizard
   traderclaw install --wizard --lane quick-local
   traderclaw gateway ensure-persistent
-  traderclaw setup --signup --user-id my_agent_001
+  traderclaw setup --signup --user-id my_agent_001 --referral-code ABCD1234
   traderclaw setup --api-key oc_xxx --url https://api.traderclaw.ai
   traderclaw setup --gateway-base-url https://gateway.myhost.ts.net
   traderclaw setup --telegram-recipient @myusername

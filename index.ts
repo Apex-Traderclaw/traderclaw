@@ -236,6 +236,7 @@ const solanaTraderPlugin = {
       accessToken?: string;
       accessTokenExpiresAt?: number;
       walletPublicKey?: string;
+      recoverySecret?: string;
     }
 
     const readSessionSidecar = (): SessionSidecar | null => {
@@ -293,6 +294,9 @@ const solanaTraderPlugin = {
         return typeof k === "string" && k.trim() ? k.trim() : undefined;
       },
       recoverySecretProvider: async () => {
+        const sidecarData = readSessionSidecar();
+        const fromSidecar = sidecarData?.recoverySecret;
+        if (typeof fromSidecar === "string" && fromSidecar.trim().length > 0) return fromSidecar.trim();
         const fromDisk = readRecoverySecretFromDisk();
         if (fromDisk) return fromDisk;
         const s = config.recoverySecret;
@@ -300,8 +304,9 @@ const solanaTraderPlugin = {
       },
       onRecoverySecretRotated: (newSecret) => {
         try {
-          writeRecoverySecretToOpenclawAtomic(newSecret);
-          api.logger.info("[solana-trader] Persisted rotated recovery secret to openclaw.json");
+          const current = readSessionSidecar() ?? {};
+          writeSessionSidecarAtomic({ ...current, recoverySecret: newSecret });
+          api.logger.info("[solana-trader] Persisted rotated recovery secret to session-tokens.json");
         } catch (err: unknown) {
           api.logger.warn(
             `[solana-trader] Failed to write rotated recovery secret: ${err instanceof Error ? err.message : String(err)}`,
@@ -314,7 +319,9 @@ const solanaTraderPlugin = {
       initialAccessTokenExpiresAt,
       onTokensRotated: (tokens) => {
         try {
+          const current = readSessionSidecar() ?? {};
           writeSessionSidecarAtomic({
+            ...current,
             refreshToken: tokens.refreshToken,
             accessToken: tokens.accessToken,
             accessTokenExpiresAt: tokens.accessTokenExpiresAt,

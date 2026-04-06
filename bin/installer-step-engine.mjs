@@ -199,6 +199,38 @@ const NO_COLOR_ENV = { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" };
  * every gateway restart and group messages are dropped. Wizard onboarding targets DMs first; set
  * explicit "open" unless the user already configured sender allowlists.
  */
+/**
+ * Write Telegram bot token directly to openclaw.json.
+ *
+ * `openclaw channels add --channel telegram` was removed — the Telegram plugin
+ * no longer exports register/activate, so the CLI rejects that call with
+ * "telegram missing register/activate export / Channel telegram does not support add."
+ *
+ * The current OpenClaw approach (docs.openclaw.ai/channels/telegram):
+ *   channels.telegram.botToken = "<token>"   → token source
+ *   channels.telegram.enabled  = true        → enable the channel
+ *   channels.telegram.dmPolicy = "pairing"   → safe default (user approves first DM)
+ */
+function writeTelegramChannelConfig(botToken, configPath = CONFIG_FILE) {
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    config = {};
+  }
+  if (!config.channels || typeof config.channels !== "object") config.channels = {};
+  if (!config.channels.telegram || typeof config.channels.telegram !== "object") config.channels.telegram = {};
+  config.channels.telegram.enabled = true;
+  config.channels.telegram.botToken = botToken;
+  // Only set dmPolicy if not already configured (preserve existing policy on re-installs).
+  if (!config.channels.telegram.dmPolicy) {
+    config.channels.telegram.dmPolicy = "pairing";
+  }
+  ensureAgentsDefaultsSchemaCompat(config);
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+}
+
 function ensureTelegramGroupPolicyOpenForWizard(configPath = CONFIG_FILE) {
   if (!existsSync(configPath)) return { changed: false };
   let config = {};
@@ -308,17 +340,25 @@ function privilegeRemediationMessage(cmd, args = [], customLines = []) {
 
 function gatewayTimeoutRemediation() {
   return [
-    "Gateway bootstrap timed out waiting for health checks.",
-    "Run these commands in terminal, then click Start Installation again:",
-    "1) openclaw gateway status --json || true",
-    "2) openclaw gateway probe || true",
+    "Gateway failed to start: service stayed stopped and health checks did not pass.",
+    "This usually means the gateway service is misconfigured, crashed at launch, or the system is out of resources.",
+    "",
+    "Run these commands in your VPS terminal to diagnose and recover:",
+    "1) openclaw gateway status --json || true       # check current state",
+    "2) journalctl --user -u openclaw-gateway -n 50 --no-pager || true  # check service logs",
     "3) openclaw gateway stop || true",
     "4) openclaw gateway install",
     "5) openclaw gateway restart",
-    "6) openclaw gateway status --json",
+    "6) openclaw gateway status --json              # should show running + rpc.ok=true",
     "7) tailscale funnel --bg 18789",
     "8) tailscale funnel status",
-    "If gateway still fails on a low-memory VM, add swap or use a larger staging size (>=2GB RAM recommended).",
+    "",
+    "If the gateway still fails:",
+    "- Check RAM: openclaw gateway requires >=512MB free (>=2GB total recommended)",
+    "- Check disk: df -h ~/.openclaw",
+    "- Try: openclaw config validate && openclaw gateway doctor || true",
+    "- If config schema error appears, run: npm install -g openclaw@latest",
+    "Once the gateway shows 'running' in status, click Start Installation again.",
   ].join("\n");
 }
 
@@ -941,6 +981,11 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
     config.channels.defaults.heartbeat.showOk = true;
   }
 
+  if (!config.agents.defaults || typeof config.agents.defaults !== "object") {
+    config.agents.defaults = {};
+  }
+  config.agents.defaults.heartbeat = { ...defaultHeartbeat };
+
   ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
@@ -1298,7 +1343,12 @@ function resolveLlmModelSelection(provider, requestedModel) {
     return { model: chosen || availableModels[0], source: "provider_default", availableModels, warnings };
   }
 
-  warnings.push(`No discoverable model list found for provider '${provider}'. Falling back to '${fallbackModelForProvider(provider)}'.`);
+  warnings.push(
+    `[ALERT] No discoverable model list found for provider '${provider}'. ` +
+    `Auto-selecting hardcoded default '${fallbackModelForProvider(provider)}' — ` +
+    `this model will be billed to your API key. ` +
+    `To use a different model, after finishing setup, use openclaw config and set the model manually.`,
+  );
   return { model: fallbackModelForProvider(provider), source: "fallback_guess", availableModels, warnings };
 }
 
@@ -1322,6 +1372,58 @@ function ensureAgentsDefaultsSchemaCompat(config) {
 }
 
 /** Re-read config from disk and re-apply defaults shape before gateway/plugin commands that validate the file. */
+/**
+ * Proactively writes the minimum gateway fields required for OpenClaw to start.
+ *
+ * OpenClaw (post-2025) requires `gateway.mode` to be explicitly set to "local"
+ * before `openclaw gateway install` / `gateway restart` are called — the service
+ * crashes immediately at launch when the field is absent, producing
+ * "service stayed stopped / health checks never came up".
+ *
+ * We write these proactively rather than waiting for the first failure and
+ * hoping auto-recovery catches it, because newer OpenClaw validates the config
+ * during `gateway install` itself, before the process even starts.
+ */
+function ensureGatewayBootstrapDefaults(configPath = CONFIG_FILE, log = () => {}) {
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    config = {};
+  }
+
+  if (!config.gateway || typeof config.gateway !== "object") {
+    config.gateway = {};
+  }
+
+  const changed = [];
+  if (!config.gateway.mode) {
+    config.gateway.mode = "local";
+    changed.push("gateway.mode=local");
+  }
+  if (!config.gateway.bind) {
+    config.gateway.bind = "loopback";
+    changed.push("gateway.bind=loopback");
+  }
+  if (!Number.isInteger(config.gateway.port)) {
+    config.gateway.port = 18789;
+    changed.push("gateway.port=18789");
+  }
+
+  ensureAgentsDefaultsSchemaCompat(config);
+
+  if (changed.length > 0) {
+    log(`Gateway bootstrap: pre-writing required config fields: ${changed.join(", ")}`);
+  }
+
+  try {
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  } catch (err) {
+    log(`Gateway bootstrap: could not write config defaults (${err?.message || err}) — will proceed anyway`);
+  }
+}
+
 function normalizeOpenClawConfigFileShape(configPath = CONFIG_FILE) {
   let config = {};
   try {
@@ -1498,6 +1600,7 @@ export class InstallerStepEngine {
       xAccessTokenCtoSecret: typeof options.xAccessTokenCtoSecret === "string" ? options.xAccessTokenCtoSecret : "",
       xAccessTokenIntern: typeof options.xAccessTokenIntern === "string" ? options.xAccessTokenIntern : "",
       xAccessTokenInternSecret: typeof options.xAccessTokenInternSecret === "string" ? options.xAccessTokenInternSecret : "",
+      referralCode: typeof options.referralCode === "string" ? options.referralCode.trim() : "",
     };
     this.hooks = {
       onStepEvent: typeof hooks.onStepEvent === "function" ? hooks.onStepEvent : () => {},
@@ -1719,9 +1822,15 @@ export class InstallerStepEngine {
         "Telegram token is required for this installer flow. Add your bot token in the wizard and start again.",
       );
     }
-    await runCommandWithEvents("openclaw", ["plugins", "enable", "telegram"]);
-    await runCommandWithEvents("openclaw", ["channels", "add", "--channel", "telegram", "--token", this.options.telegramToken]);
-    await runCommandWithEvents("openclaw", ["channels", "status", "--probe"]);
+
+    // OpenClaw no longer supports `openclaw channels add --channel telegram`.
+    // The Telegram plugin does not export register/activate, so that command
+    // fails with "telegram missing register/activate export / Channel telegram
+    // does not support add."  The current documented approach is to write the
+    // bot token directly to openclaw.json — see docs.openclaw.ai/channels/telegram.
+    writeTelegramChannelConfig(this.options.telegramToken, CONFIG_FILE);
+    this.emitLog("telegram_required", "info", "Telegram bot token written to openclaw.json (channels.telegram.botToken).");
+
     const policy = ensureTelegramGroupPolicyOpenForWizard();
     if (policy.changed) {
       this.emitLog(
@@ -1730,6 +1839,14 @@ export class InstallerStepEngine {
         "Set channels.telegram.groupPolicy=open (no sender allowlist yet) to avoid Doctor allowlist warnings on gateway restart. Tighten groupAllowFrom later if you use groups.",
       );
     }
+
+    // Probe channel status for visibility — best-effort, don't fail the step.
+    try {
+      await runCommandWithEvents("openclaw", ["channels", "status", "--probe"]);
+    } catch {
+      this.emitLog("telegram_required", "warn", "channels status --probe did not complete (gateway may not be fully up yet). Token is written and will be active after gateway restart.");
+    }
+
     return { configured: true };
   }
 
@@ -1781,6 +1898,11 @@ export class InstallerStepEngine {
     const gatewayBaseUrl = this.options.gatewayBaseUrl || this.state.detected.funnelUrl || "";
     if (this.options.lane === "event-driven" && gatewayBaseUrl) {
       args.push("--gateway-base-url", gatewayBaseUrl);
+    }
+
+    const ref = String(this.options.referralCode || "").trim();
+    if (ref) {
+      args.push("--referral-code", ref);
     }
 
     const command = [this.modeConfig.cliName, ...args].join(" ");
@@ -1852,19 +1974,27 @@ export class InstallerStepEngine {
         });
         await this.runStep("gateway_bootstrap", "Starting OpenClaw gateway and Funnel", async () => {
           try {
-            normalizeOpenClawConfigFileShape(CONFIG_FILE);
+            // Ensure required gateway fields are present BEFORE install/restart.
+            // OpenClaw now requires gateway.mode="local" to be explicitly set;
+            // without it the service crashes immediately at startup.
+            ensureGatewayBootstrapDefaults(CONFIG_FILE, (msg) =>
+              this.emitLog("gateway_bootstrap", "info", msg),
+            );
             await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "install"]);
             await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "restart"]);
             return this.runFunnel();
           } catch (err) {
             const text = `${err?.message || ""}\n${err?.stderr || ""}\n${err?.stdout || ""}`.toLowerCase();
             const gatewayModeUnset = text.includes("gateway.mode=local") && text.includes("current: unset");
-            if (
+            const gatewayStartFailed =
               text.includes("gateway restart timed out")
               || text.includes("timed out after 60s waiting for health checks")
               || text.includes("waiting for gateway port")
-              || gatewayModeUnset
-            ) {
+              // OpenClaw ≥ current: shorter-timeout variant of the same class of failure
+              || (text.includes("gateway restart failed") && text.includes("service stayed stopped"))
+              || text.includes("health checks never came up")
+              || text.includes("service stayed stopped");
+            if (gatewayStartFailed || gatewayModeUnset) {
               const recovered = await this.tryAutoRecoverGatewayMode("gateway_bootstrap");
               if (recovered.success) {
                 return this.runFunnel();
