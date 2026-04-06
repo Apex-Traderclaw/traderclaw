@@ -520,15 +520,22 @@ function signChallengeLocally(challengeText, privateKeyBase58) {
   return b58Encode(new Uint8Array(sig));
 }
 
-async function doSignup(orchestratorUrl, externalUserId) {
+async function doSignup(orchestratorUrl, externalUserId, referralCode = "") {
   printInfo(`  Signing up as: ${externalUserId}`);
+  const body = { externalUserId };
+  const ref = String(referralCode || "").trim();
+  if (ref) body.referralCode = ref;
   const res = await httpRequest(`${orchestratorUrl}/api/auth/signup`, {
     method: "POST",
-    body: { externalUserId },
+    body,
   });
 
   if (!res.ok) {
-    throw new Error(`Signup failed (HTTP ${res.status}): ${JSON.stringify(res.data)}`);
+    const payload = res.data && typeof res.data === "object" ? res.data : {};
+    const apiMsg = typeof payload.message === "string" ? payload.message : JSON.stringify(res.data);
+    const err = new Error(`Signup failed (HTTP ${res.status}): ${apiMsg}`);
+    if (typeof payload.code === "string") err.code = payload.code;
+    throw err;
   }
 
   return res.data;
