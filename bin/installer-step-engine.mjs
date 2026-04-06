@@ -199,6 +199,38 @@ const NO_COLOR_ENV = { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" };
  * every gateway restart and group messages are dropped. Wizard onboarding targets DMs first; set
  * explicit "open" unless the user already configured sender allowlists.
  */
+/**
+ * Write Telegram bot token directly to openclaw.json.
+ *
+ * `openclaw channels add --channel telegram` was removed — the Telegram plugin
+ * no longer exports register/activate, so the CLI rejects that call with
+ * "telegram missing register/activate export / Channel telegram does not support add."
+ *
+ * The current OpenClaw approach (docs.openclaw.ai/channels/telegram):
+ *   channels.telegram.botToken = "<token>"   → token source
+ *   channels.telegram.enabled  = true        → enable the channel
+ *   channels.telegram.dmPolicy = "pairing"   → safe default (user approves first DM)
+ */
+function writeTelegramChannelConfig(botToken, configPath = CONFIG_FILE) {
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    config = {};
+  }
+  if (!config.channels || typeof config.channels !== "object") config.channels = {};
+  if (!config.channels.telegram || typeof config.channels.telegram !== "object") config.channels.telegram = {};
+  config.channels.telegram.enabled = true;
+  config.channels.telegram.botToken = botToken;
+  // Only set dmPolicy if not already configured (preserve existing policy on re-installs).
+  if (!config.channels.telegram.dmPolicy) {
+    config.channels.telegram.dmPolicy = "pairing";
+  }
+  ensureAgentsDefaultsSchemaCompat(config);
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+}
+
 function ensureTelegramGroupPolicyOpenForWizard(configPath = CONFIG_FILE) {
   if (!existsSync(configPath)) return { changed: false };
   let config = {};
@@ -1790,9 +1822,15 @@ export class InstallerStepEngine {
         "Telegram token is required for this installer flow. Add your bot token in the wizard and start again.",
       );
     }
-    await runCommandWithEvents("openclaw", ["plugins", "enable", "telegram"]);
-    await runCommandWithEvents("openclaw", ["channels", "add", "--channel", "telegram", "--token", this.options.telegramToken]);
-    await runCommandWithEvents("openclaw", ["channels", "status", "--probe"]);
+
+    // OpenClaw no longer supports `openclaw channels add --channel telegram`.
+    // The Telegram plugin does not export register/activate, so that command
+    // fails with "telegram missing register/activate export / Channel telegram
+    // does not support add."  The current documented approach is to write the
+    // bot token directly to openclaw.json — see docs.openclaw.ai/channels/telegram.
+    writeTelegramChannelConfig(this.options.telegramToken, CONFIG_FILE);
+    this.emitLog("telegram_required", "info", "Telegram bot token written to openclaw.json (channels.telegram.botToken).");
+
     const policy = ensureTelegramGroupPolicyOpenForWizard();
     if (policy.changed) {
       this.emitLog(
@@ -1801,6 +1839,14 @@ export class InstallerStepEngine {
         "Set channels.telegram.groupPolicy=open (no sender allowlist yet) to avoid Doctor allowlist warnings on gateway restart. Tighten groupAllowFrom later if you use groups.",
       );
     }
+
+    // Probe channel status for visibility — best-effort, don't fail the step.
+    try {
+      await runCommandWithEvents("openclaw", ["channels", "status", "--probe"]);
+    } catch {
+      this.emitLog("telegram_required", "warn", "channels status --probe did not complete (gateway may not be fully up yet). Token is written and will be active after gateway restart.");
+    }
+
     return { configured: true };
   }
 
