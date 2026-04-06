@@ -1,17 +1,17 @@
-import { execFileSync, execSync, spawn } from "child_process";
+import { execSync, spawn } from "child_process";
 import { randomBytes } from "crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { dirname, join } from "path";
-import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
+import { fileURLToPath } from "url";
 import { choosePreferredProviderModel } from "./llm-model-preference.mjs";
 import { getLinuxGatewayPersistenceSnapshot } from "./gateway-persistence-linux.mjs";
 
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 
-/** Directory containing solana-traderclaw (openclaw.plugin.json) — works for plugin layout or traderclaw-cli + dependency. */
-const PLUGIN_PACKAGE_ROOT = resolvePluginPackageRoot(import.meta.url);
+/** Directory containing this package when running from a git checkout or global npm install. */
+const PLUGIN_PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function readPluginPackageVersion() {
   const pkgJsonPath = join(PLUGIN_PACKAGE_ROOT, "package.json");
@@ -199,38 +199,6 @@ const NO_COLOR_ENV = { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" };
  * every gateway restart and group messages are dropped. Wizard onboarding targets DMs first; set
  * explicit "open" unless the user already configured sender allowlists.
  */
-/**
- * Write Telegram bot token directly to openclaw.json.
- *
- * `openclaw channels add --channel telegram` was removed — the Telegram plugin
- * no longer exports register/activate, so the CLI rejects that call with
- * "telegram missing register/activate export / Channel telegram does not support add."
- *
- * The current OpenClaw approach (docs.openclaw.ai/channels/telegram):
- *   channels.telegram.botToken = "<token>"   → token source
- *   channels.telegram.enabled  = true        → enable the channel
- *   channels.telegram.dmPolicy = "pairing"   → safe default (user approves first DM)
- */
-function writeTelegramChannelConfig(botToken, configPath = CONFIG_FILE) {
-  let config = {};
-  try {
-    config = JSON.parse(readFileSync(configPath, "utf-8"));
-  } catch {
-    config = {};
-  }
-  if (!config.channels || typeof config.channels !== "object") config.channels = {};
-  if (!config.channels.telegram || typeof config.channels.telegram !== "object") config.channels.telegram = {};
-  config.channels.telegram.enabled = true;
-  config.channels.telegram.botToken = botToken;
-  // Only set dmPolicy if not already configured (preserve existing policy on re-installs).
-  if (!config.channels.telegram.dmPolicy) {
-    config.channels.telegram.dmPolicy = "pairing";
-  }
-  ensureAgentsDefaultsSchemaCompat(config);
-  mkdirSync(CONFIG_DIR, { recursive: true });
-  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
-}
-
 function ensureTelegramGroupPolicyOpenForWizard(configPath = CONFIG_FILE) {
   if (!existsSync(configPath)) return { changed: false };
   let config = {};
@@ -340,25 +308,17 @@ function privilegeRemediationMessage(cmd, args = [], customLines = []) {
 
 function gatewayTimeoutRemediation() {
   return [
-    "Gateway failed to start: service stayed stopped and health checks did not pass.",
-    "This usually means the gateway service is misconfigured, crashed at launch, or the system is out of resources.",
-    "",
-    "Run these commands in your VPS terminal to diagnose and recover:",
-    "1) openclaw gateway status --json || true       # check current state",
-    "2) journalctl --user -u openclaw-gateway -n 50 --no-pager || true  # check service logs",
+    "Gateway bootstrap timed out waiting for health checks.",
+    "Run these commands in terminal, then click Start Installation again:",
+    "1) openclaw gateway status --json || true",
+    "2) openclaw gateway probe || true",
     "3) openclaw gateway stop || true",
     "4) openclaw gateway install",
     "5) openclaw gateway restart",
-    "6) openclaw gateway status --json              # should show running + rpc.ok=true",
+    "6) openclaw gateway status --json",
     "7) tailscale funnel --bg 18789",
     "8) tailscale funnel status",
-    "",
-    "If the gateway still fails:",
-    "- Check RAM: openclaw gateway requires >=512MB free (>=2GB total recommended)",
-    "- Check disk: df -h ~/.openclaw",
-    "- Try: openclaw config validate && openclaw gateway doctor || true",
-    "- If config schema error appears, run: npm install -g openclaw@latest",
-    "Once the gateway shows 'running' in status, click Start Installation again.",
+    "If gateway still fails on a low-memory VM, add swap or use a larger staging size (>=2GB RAM recommended).",
   ].join("\n");
 }
 
@@ -808,7 +768,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "30 */2 * * *",
       agentId,
       message:
-        "CRON_JOB: portfolio_risk_audit\n\nStep 1: Call solana_capital_status to get wallet balance and portfolio value.\n\nStep 2: Call solana_positions to get all open positions with entry prices and sizes.\n\nStep 3: For each open position, call solana_token_snapshot to get current price, 24h volume, and market cap.\n\nStep 4: Run concentration check — flag WARNING if any single position exceeds 30 percent of total portfolio value, CRITICAL if above 50 percent.\n\nStep 5: Run exposure check — flag WARNING if total exposure exceeds 50 percent of wallet balance, CRITICAL if above 75 percent.\n\nStep 6: Run drawdown check — CRITICAL if portfolio drawdown exceeds 25 percent from peak capital.\n\nStep 7: Calculate portfolio heat (sum of all position risk scores). Flag WARNING above 50 percent, CRITICAL above 75 percent.\n\nStep 8: Run liquidity check — WARNING if any position exceeds 2 percent of its pool depth.\n\nStep 9: Check solana_killswitch_status.\n\nStep 10: Write risk report via solana_memory_write with tag 'risk_audit'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        "CRON_JOB: portfolio_risk_audit — Portfolio stress tests, exposure checks, correlation analysis, drawdown monitoring. Produce risk report for CTO.",
       enabled: true,
     },
     {
@@ -816,15 +776,15 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "0 */3 * * *",
       agentId,
       message:
-        "CRON_JOB: source_reputation_recalc\n\nStep 1: Call solana_alpha_sources to get per-source performance stats (signal count, conversion rate, avg score).\n\nStep 2: Call solana_alpha_history to get recent signal history with scores and source identifiers.\n\nStep 3: Call solana_trades to get recent trade outcomes. Cross-reference each trade back to its originating signal source.\n\nStep 4: For each source, calculate: win rate (trades that hit TP vs SL), average PnL per trade, signal-to-trade conversion rate.\n\nStep 5: Assign tier rankings:\n- TIER-1 (LOCK): Win rate above 60% AND 5+ trades AND positive avg PnL\n- TIER-2 (CONDITIONAL): Win rate 30-60% OR fewer than 5 trades\n- TIER-3 (BLACKLIST): Win rate below 30% with 5+ trades\n\nStep 6: Write scorecard to memory using solana_memory_write with tag 'source_reputation'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        "CRON_JOB: source_reputation_recalc — Analyze which alpha signal sources led to wins vs losses. Update reputation tracking in memory.",
       enabled: true,
     },
     {
-      id: "meta-rotation",
+      id: "meta-rotation-analysis",
       schedule: "30 */3 * * *",
       agentId,
       message:
-        "CRON_JOB: meta_rotation_analysis\n\nStep 0: Call x_search_tweets with queries: 'solana memecoin', 'pump fun gem', 'sol alpha'. Note which token names and narratives appear most frequently in the last 3 hours. Use this social signal to validate or challenge the on-chain data in the following steps.\n\nStep 1: Call solana_scan_launches to get recent token launches (last 3-6 hours).\n\nStep 2: Categorize each token by narrative cluster: AI/Agents, Animal Memes, Political, Celebrity/IP, DeFi, Gaming, Culture/Humor, Other.\n\nStep 3: For each cluster, aggregate: token count, total volume, average market cap.\n\nStep 4: Call solana_memory_search for 'meta_rotation' to compare with prior scan.\n\nStep 5: Classify each narrative: GAINING, SATURATED, COOLING, DORMANT.\n\nStep 6: Write rotation report via solana_memory_write with tag 'meta_rotation'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        "CRON_JOB: meta_rotation_analysis — Analyze narrative clusters across recent scans and trades. Identify hot vs cooling metas. Write observations to memory.",
       enabled: true,
     },
     {
@@ -840,7 +800,7 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "15 * * * *",
       agentId,
       message:
-        "CRON_JOB: subscription_cleanup\n\nStep 1: Call solana_positions to get all open positions and extract their contract addresses.\n\nStep 2: Call solana_bitquery_subscriptions to list all active Bitquery subscriptions. If this call returns an AUTH_SCOPE_MISSING error, log the error to memory and stop gracefully — do not retry or error out.\n\nStep 3: For each active subscription, check if the associated token CA still has an open position. Build two lists: 'matched' (has position) and 'orphaned' (no position).\n\nStep 4: Unsubscribe orphans via solana_bitquery_unsubscribe.\n\nStep 5: Reopen subscriptions nearing 24h expiry via solana_bitquery_subscription_reopen.\n\nStep 6: Write summary via solana_memory_write with tag 'subscription_cleanup'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        "CRON_JOB: subscription_cleanup — Check active Bitquery subscriptions. Unsubscribe from streams no longer needed (sold tokens, closed positions).",
       enabled: true,
     },
     {
@@ -984,7 +944,69 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   if (!config.agents.defaults || typeof config.agents.defaults !== "object") {
     config.agents.defaults = {};
   }
-  config.agents.defaults.heartbeat = { ...defaultHeartbeat };
+  if (!config.agents.defaults.heartbeat || typeof config.agents.defaults.heartbeat !== "object") {
+    config.agents.defaults.heartbeat = {};
+  }
+  const hbDefaults = config.agents.defaults.heartbeat;
+  if (!hbDefaults.every) hbDefaults.every = defaultHeartbeatEvery;
+  if (hbDefaults.isolatedSession === undefined) hbDefaults.isolatedSession = true;
+  if (hbDefaults.lightContext === undefined) hbDefaults.lightContext = true;
+  if (!hbDefaults.target) hbDefaults.target = "last";
+
+  if (!config.memory || typeof config.memory !== "object") config.memory = {};
+  if (!config.memory.backend) config.memory.backend = "qmd";
+  if (config.memory.citations === undefined) config.memory.citations = "auto";
+  if (!config.memory.qmd || typeof config.memory.qmd !== "object") config.memory.qmd = {};
+  const qmd = config.memory.qmd;
+  if (qmd.includeDefaultMemory === undefined) qmd.includeDefaultMemory = true;
+  if (!qmd.searchMode) qmd.searchMode = "query";
+  if (!qmd.update || typeof qmd.update !== "object") qmd.update = {};
+  if (!qmd.update.interval) qmd.update.interval = "5m";
+  if (qmd.update.debounceMs === undefined) qmd.update.debounceMs = 15000;
+  if (qmd.update.onBoot === undefined) qmd.update.onBoot = true;
+  if (qmd.update.waitForBootSync === undefined) qmd.update.waitForBootSync = false;
+  if (!qmd.limits || typeof qmd.limits !== "object") qmd.limits = {};
+  if (qmd.limits.maxResults === undefined) qmd.limits.maxResults = 6;
+  if (qmd.limits.timeoutMs === undefined) qmd.limits.timeoutMs = 8000;
+  if (qmd.limits.maxSnippetChars === undefined) qmd.limits.maxSnippetChars = 700;
+  if (!qmd.scope || typeof qmd.scope !== "object") qmd.scope = {};
+  if (!qmd.scope.default) qmd.scope.default = "deny";
+  if (!Array.isArray(qmd.scope.rules)) {
+    qmd.scope.rules = [
+      { action: "allow", match: { path: "memory/**" } },
+      { action: "deny", match: { path: "*.env" } },
+      { action: "deny", match: { path: "*.key" } },
+      { action: "deny", match: { path: "*.pem" } },
+      { action: "deny", match: { path: "session-tokens.json" } },
+      { action: "allow", match: { chatType: "direct" } },
+    ];
+  }
+  if (!Array.isArray(qmd.paths)) {
+    qmd.paths = [
+      { name: "decisionLog", path: "memory/decisions", pattern: "*.jsonl" },
+      { name: "dailyLog", path: "memory", pattern: "????-??-??.md" },
+    ];
+  }
+  if (!qmd.sessions || typeof qmd.sessions !== "object") qmd.sessions = {};
+  if (qmd.sessions.enabled === undefined) qmd.sessions.enabled = true;
+
+  if (!config.agents.defaults.memorySearch || typeof config.agents.defaults.memorySearch !== "object") {
+    config.agents.defaults.memorySearch = {};
+  }
+  const ms = config.agents.defaults.memorySearch;
+  if (ms.enabled === undefined) ms.enabled = true;
+  if (!ms.query || typeof ms.query !== "object") ms.query = {};
+  if (!ms.query.hybrid || typeof ms.query.hybrid !== "object") ms.query.hybrid = {};
+  if (ms.query.hybrid.enabled === undefined) ms.query.hybrid.enabled = true;
+  if (ms.query.hybrid.vectorWeight === undefined) ms.query.hybrid.vectorWeight = 0.7;
+  if (ms.query.hybrid.textWeight === undefined) ms.query.hybrid.textWeight = 0.3;
+  if (ms.query.hybrid.candidateMultiplier === undefined) ms.query.hybrid.candidateMultiplier = 4;
+  if (!ms.query.hybrid.mmr || typeof ms.query.hybrid.mmr !== "object") ms.query.hybrid.mmr = {};
+  if (ms.query.hybrid.mmr.enabled === undefined) ms.query.hybrid.mmr.enabled = true;
+  if (ms.query.hybrid.mmr.lambda === undefined) ms.query.hybrid.mmr.lambda = 0.7;
+  if (!ms.query.hybrid.temporalDecay || typeof ms.query.hybrid.temporalDecay !== "object") ms.query.hybrid.temporalDecay = {};
+  if (ms.query.hybrid.temporalDecay.enabled === undefined) ms.query.hybrid.temporalDecay.enabled = true;
+  if (ms.query.hybrid.temporalDecay.halfLifeDays === undefined) ms.query.hybrid.temporalDecay.halfLifeDays = 14;
 
   ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
@@ -992,6 +1014,21 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
 
   const cronStorePath = resolveCronJobsStorePath(config);
   const cronMerge = mergeTraderCronJobsIntoStore(cronStorePath, targetJobs);
+
+  let qmdAvailable = false;
+  let qmdVersion = null;
+  try { qmdAvailable = commandExists("qmd"); } catch {}
+  if (qmdAvailable) {
+    qmdVersion = getCommandOutput("qmd --version");
+  } else {
+    if (typeof console !== "undefined") {
+      console.warn(
+        "[traderclaw] QMD binary not found. Memory engine will fall back to SQLite (no vector search, no temporal decay, no MMR).\n" +
+        "Install QMD:  bun install -g @tobilu/qmd\n" +
+        "Then restart the gateway:  openclaw gateway restart"
+      );
+    }
+  }
 
   return {
     configPath,
@@ -1004,6 +1041,8 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
     cronJobsStoreError: cronMerge.error,
     removedLegacyCronJobs,
     hooksConfigured: config.hooks.mappings.length,
+    qmdAvailable,
+    qmdVersion,
     isV2,
   };
 }
@@ -1259,21 +1298,8 @@ function persistXProfileIdentities(configPath, modeConfig, identities) {
 }
 
 function listProviderModels(provider) {
-  let raw;
-  try {
-    raw = execFileSync(
-      "openclaw",
-      ["models", "list", "--all", "--provider", provider, "--json"],
-      {
-        encoding: "utf-8",
-        maxBuffer: 25 * 1024 * 1024,
-        timeout: 20_000,
-        env: NO_COLOR_ENV,
-      },
-    ).trim();
-  } catch {
-    return [];
-  }
+  const cmd = `openclaw models list --all --provider ${shellQuote(provider)} --json`;
+  const raw = getCommandOutput(cmd);
   if (!raw) return [];
   const parsed = extractJson(raw);
   if (!parsed) return [];
@@ -1343,12 +1369,7 @@ function resolveLlmModelSelection(provider, requestedModel) {
     return { model: chosen || availableModels[0], source: "provider_default", availableModels, warnings };
   }
 
-  warnings.push(
-    `[ALERT] No discoverable model list found for provider '${provider}'. ` +
-    `Auto-selecting hardcoded default '${fallbackModelForProvider(provider)}' — ` +
-    `this model will be billed to your API key. ` +
-    `To use a different model, after finishing setup, use openclaw config and set the model manually.`,
-  );
+  warnings.push(`No discoverable model list found for provider '${provider}'. Falling back to '${fallbackModelForProvider(provider)}'.`);
   return { model: fallbackModelForProvider(provider), source: "fallback_guess", availableModels, warnings };
 }
 
@@ -1372,58 +1393,6 @@ function ensureAgentsDefaultsSchemaCompat(config) {
 }
 
 /** Re-read config from disk and re-apply defaults shape before gateway/plugin commands that validate the file. */
-/**
- * Proactively writes the minimum gateway fields required for OpenClaw to start.
- *
- * OpenClaw (post-2025) requires `gateway.mode` to be explicitly set to "local"
- * before `openclaw gateway install` / `gateway restart` are called — the service
- * crashes immediately at launch when the field is absent, producing
- * "service stayed stopped / health checks never came up".
- *
- * We write these proactively rather than waiting for the first failure and
- * hoping auto-recovery catches it, because newer OpenClaw validates the config
- * during `gateway install` itself, before the process even starts.
- */
-function ensureGatewayBootstrapDefaults(configPath = CONFIG_FILE, log = () => {}) {
-  let config = {};
-  try {
-    config = JSON.parse(readFileSync(configPath, "utf-8"));
-  } catch {
-    config = {};
-  }
-
-  if (!config.gateway || typeof config.gateway !== "object") {
-    config.gateway = {};
-  }
-
-  const changed = [];
-  if (!config.gateway.mode) {
-    config.gateway.mode = "local";
-    changed.push("gateway.mode=local");
-  }
-  if (!config.gateway.bind) {
-    config.gateway.bind = "loopback";
-    changed.push("gateway.bind=loopback");
-  }
-  if (!Number.isInteger(config.gateway.port)) {
-    config.gateway.port = 18789;
-    changed.push("gateway.port=18789");
-  }
-
-  ensureAgentsDefaultsSchemaCompat(config);
-
-  if (changed.length > 0) {
-    log(`Gateway bootstrap: pre-writing required config fields: ${changed.join(", ")}`);
-  }
-
-  try {
-    mkdirSync(dirname(configPath), { recursive: true });
-    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
-  } catch (err) {
-    log(`Gateway bootstrap: could not write config defaults (${err?.message || err}) — will proceed anyway`);
-  }
-}
-
 function normalizeOpenClawConfigFileShape(configPath = CONFIG_FILE) {
   let config = {};
   try {
@@ -1600,7 +1569,6 @@ export class InstallerStepEngine {
       xAccessTokenCtoSecret: typeof options.xAccessTokenCtoSecret === "string" ? options.xAccessTokenCtoSecret : "",
       xAccessTokenIntern: typeof options.xAccessTokenIntern === "string" ? options.xAccessTokenIntern : "",
       xAccessTokenInternSecret: typeof options.xAccessTokenInternSecret === "string" ? options.xAccessTokenInternSecret : "",
-      referralCode: typeof options.referralCode === "string" ? options.referralCode.trim() : "",
     };
     this.hooks = {
       onStepEvent: typeof hooks.onStepEvent === "function" ? hooks.onStepEvent : () => {},
@@ -1822,15 +1790,9 @@ export class InstallerStepEngine {
         "Telegram token is required for this installer flow. Add your bot token in the wizard and start again.",
       );
     }
-
-    // OpenClaw no longer supports `openclaw channels add --channel telegram`.
-    // The Telegram plugin does not export register/activate, so that command
-    // fails with "telegram missing register/activate export / Channel telegram
-    // does not support add."  The current documented approach is to write the
-    // bot token directly to openclaw.json — see docs.openclaw.ai/channels/telegram.
-    writeTelegramChannelConfig(this.options.telegramToken, CONFIG_FILE);
-    this.emitLog("telegram_required", "info", "Telegram bot token written to openclaw.json (channels.telegram.botToken).");
-
+    await runCommandWithEvents("openclaw", ["plugins", "enable", "telegram"]);
+    await runCommandWithEvents("openclaw", ["channels", "add", "--channel", "telegram", "--token", this.options.telegramToken]);
+    await runCommandWithEvents("openclaw", ["channels", "status", "--probe"]);
     const policy = ensureTelegramGroupPolicyOpenForWizard();
     if (policy.changed) {
       this.emitLog(
@@ -1839,14 +1801,6 @@ export class InstallerStepEngine {
         "Set channels.telegram.groupPolicy=open (no sender allowlist yet) to avoid Doctor allowlist warnings on gateway restart. Tighten groupAllowFrom later if you use groups.",
       );
     }
-
-    // Probe channel status for visibility — best-effort, don't fail the step.
-    try {
-      await runCommandWithEvents("openclaw", ["channels", "status", "--probe"]);
-    } catch {
-      this.emitLog("telegram_required", "warn", "channels status --probe did not complete (gateway may not be fully up yet). Token is written and will be active after gateway restart.");
-    }
-
     return { configured: true };
   }
 
@@ -1898,11 +1852,6 @@ export class InstallerStepEngine {
     const gatewayBaseUrl = this.options.gatewayBaseUrl || this.state.detected.funnelUrl || "";
     if (this.options.lane === "event-driven" && gatewayBaseUrl) {
       args.push("--gateway-base-url", gatewayBaseUrl);
-    }
-
-    const ref = String(this.options.referralCode || "").trim();
-    if (ref) {
-      args.push("--referral-code", ref);
     }
 
     const command = [this.modeConfig.cliName, ...args].join(" ");
@@ -1974,27 +1923,19 @@ export class InstallerStepEngine {
         });
         await this.runStep("gateway_bootstrap", "Starting OpenClaw gateway and Funnel", async () => {
           try {
-            // Ensure required gateway fields are present BEFORE install/restart.
-            // OpenClaw now requires gateway.mode="local" to be explicitly set;
-            // without it the service crashes immediately at startup.
-            ensureGatewayBootstrapDefaults(CONFIG_FILE, (msg) =>
-              this.emitLog("gateway_bootstrap", "info", msg),
-            );
+            normalizeOpenClawConfigFileShape(CONFIG_FILE);
             await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "install"]);
             await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "restart"]);
             return this.runFunnel();
           } catch (err) {
             const text = `${err?.message || ""}\n${err?.stderr || ""}\n${err?.stdout || ""}`.toLowerCase();
             const gatewayModeUnset = text.includes("gateway.mode=local") && text.includes("current: unset");
-            const gatewayStartFailed =
+            if (
               text.includes("gateway restart timed out")
               || text.includes("timed out after 60s waiting for health checks")
               || text.includes("waiting for gateway port")
-              // OpenClaw ≥ current: shorter-timeout variant of the same class of failure
-              || (text.includes("gateway restart failed") && text.includes("service stayed stopped"))
-              || text.includes("health checks never came up")
-              || text.includes("service stayed stopped");
-            if (gatewayStartFailed || gatewayModeUnset) {
+              || gatewayModeUnset
+            ) {
               const recovered = await this.tryAutoRecoverGatewayMode("gateway_bootstrap");
               if (recovered.success) {
                 return this.runFunnel();

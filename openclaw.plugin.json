@@ -2,6 +2,7 @@
   "id": "solana-trader",
   "name": "Solana Trader",
   "description": "Public edition V1-Upgraded — Solana trading agent with X/Twitter social intel (read-only, no posting), standardized tool envelopes, intelligence lab, prompt injection scrubbing, and split skill architecture. Full V1 trading capabilities plus 17 new intelligence tools.",
+  "enabledByDefault": true,
   "skills": ["skills/solana-trader"],
   "configSchema": {
     "type": "object",
@@ -38,14 +39,15 @@
       },
       "walletPrivateKey": {
         "type": "string",
-        "description": "Solana wallet private key in base58 (only needed for re-auth when wallet already exists on account)"
+        "deprecated": true,
+        "description": "DEPRECATED — use env TRADERCLAW_WALLET_PRIVATE_KEY or --wallet-private-key arg. Never store private keys in config files."
       },
       "apiTimeout": {
         "type": "integer",
         "minimum": 1000,
-        "maximum": 120000,
-        "default": 30000,
-        "description": "HTTP request timeout in milliseconds"
+        "maximum": 300000,
+        "default": 120000,
+        "description": "HTTP request timeout in milliseconds (on-chain trades can take time)"
       },
       "agentId": {
         "type": "string",
@@ -59,17 +61,9 @@
         "type": "string",
         "description": "Bearer token used by orchestrator when calling your Gateway /v1/responses."
       },
-      "forwardTelegramRecipient": {
-        "type": "string",
-        "description": "Telegram @username or numeric chat id for orchestrator reply forwarding (optional). Legacy key forwardTelegramChatId is also accepted."
-      },
-      "telegramBotToken": {
-        "type": "string",
-        "description": "Telegram bot token from @BotFather. Required only to resolve @username to chat id via Bot API. Set in plugin config (not environment variables) for OpenClaw compatibility."
-      },
       "workspaceDir": {
         "type": "string",
-        "description": "Override workspace directory path. Defaults to ~/.openclaw/workspace/ when unset."
+        "description": "Override workspace directory path. Defaults to ~/.openclaw/workspace/ or OPENCLAW_WORKSPACE_DIR env var."
       },
       "bootstrapDecisionCount": {
         "type": "integer",
@@ -183,17 +177,6 @@
     },
     "gatewayToken": {
       "label": "Gateway Token",
-      "sensitive": true,
-      "advanced": true
-    },
-    "forwardTelegramRecipient": {
-      "label": "Telegram recipient",
-      "placeholder": "@username or numeric chat id",
-      "advanced": true
-    },
-    "telegramBotToken": {
-      "label": "Telegram bot token",
-      "placeholder": "from @BotFather",
       "sensitive": true,
       "advanced": true
     },
