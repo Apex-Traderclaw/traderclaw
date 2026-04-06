@@ -308,17 +308,25 @@ function privilegeRemediationMessage(cmd, args = [], customLines = []) {
 
 function gatewayTimeoutRemediation() {
   return [
-    "Gateway bootstrap timed out waiting for health checks.",
-    "Run these commands in terminal, then click Start Installation again:",
-    "1) openclaw gateway status --json || true",
-    "2) openclaw gateway probe || true",
+    "Gateway failed to start: service stayed stopped and health checks did not pass.",
+    "This usually means the gateway service is misconfigured, crashed at launch, or the system is out of resources.",
+    "",
+    "Run these commands in your VPS terminal to diagnose and recover:",
+    "1) openclaw gateway status --json || true       # check current state",
+    "2) journalctl --user -u openclaw-gateway -n 50 --no-pager || true  # check service logs",
     "3) openclaw gateway stop || true",
     "4) openclaw gateway install",
     "5) openclaw gateway restart",
-    "6) openclaw gateway status --json",
+    "6) openclaw gateway status --json              # should show running + rpc.ok=true",
     "7) tailscale funnel --bg 18789",
     "8) tailscale funnel status",
-    "If gateway still fails on a low-memory VM, add swap or use a larger staging size (>=2GB RAM recommended).",
+    "",
+    "If the gateway still fails:",
+    "- Check RAM: openclaw gateway requires >=512MB free (>=2GB total recommended)",
+    "- Check disk: df -h ~/.openclaw",
+    "- Try: openclaw config validate && openclaw gateway doctor || true",
+    "- If config schema error appears, run: npm install -g openclaw@latest",
+    "Once the gateway shows 'running' in status, click Start Installation again.",
   ].join("\n");
 }
 
@@ -1875,12 +1883,15 @@ export class InstallerStepEngine {
           } catch (err) {
             const text = `${err?.message || ""}\n${err?.stderr || ""}\n${err?.stdout || ""}`.toLowerCase();
             const gatewayModeUnset = text.includes("gateway.mode=local") && text.includes("current: unset");
-            if (
+            const gatewayStartFailed =
               text.includes("gateway restart timed out")
               || text.includes("timed out after 60s waiting for health checks")
               || text.includes("waiting for gateway port")
-              || gatewayModeUnset
-            ) {
+              // OpenClaw ≥ current: shorter-timeout variant of the same class of failure
+              || (text.includes("gateway restart failed") && text.includes("service stayed stopped"))
+              || text.includes("health checks never came up")
+              || text.includes("service stayed stopped");
+            if (gatewayStartFailed || gatewayModeUnset) {
               const recovered = await this.tryAutoRecoverGatewayMode("gateway_bootstrap");
               if (recovered.success) {
                 return this.runFunnel();
