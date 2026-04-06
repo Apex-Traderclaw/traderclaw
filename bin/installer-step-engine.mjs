@@ -1340,6 +1340,58 @@ function ensureAgentsDefaultsSchemaCompat(config) {
 }
 
 /** Re-read config from disk and re-apply defaults shape before gateway/plugin commands that validate the file. */
+/**
+ * Proactively writes the minimum gateway fields required for OpenClaw to start.
+ *
+ * OpenClaw (post-2025) requires `gateway.mode` to be explicitly set to "local"
+ * before `openclaw gateway install` / `gateway restart` are called — the service
+ * crashes immediately at launch when the field is absent, producing
+ * "service stayed stopped / health checks never came up".
+ *
+ * We write these proactively rather than waiting for the first failure and
+ * hoping auto-recovery catches it, because newer OpenClaw validates the config
+ * during `gateway install` itself, before the process even starts.
+ */
+function ensureGatewayBootstrapDefaults(configPath = CONFIG_FILE, log = () => {}) {
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    config = {};
+  }
+
+  if (!config.gateway || typeof config.gateway !== "object") {
+    config.gateway = {};
+  }
+
+  const changed = [];
+  if (!config.gateway.mode) {
+    config.gateway.mode = "local";
+    changed.push("gateway.mode=local");
+  }
+  if (!config.gateway.bind) {
+    config.gateway.bind = "loopback";
+    changed.push("gateway.bind=loopback");
+  }
+  if (!Number.isInteger(config.gateway.port)) {
+    config.gateway.port = 18789;
+    changed.push("gateway.port=18789");
+  }
+
+  ensureAgentsDefaultsSchemaCompat(config);
+
+  if (changed.length > 0) {
+    log(`Gateway bootstrap: pre-writing required config fields: ${changed.join(", ")}`);
+  }
+
+  try {
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  } catch (err) {
+    log(`Gateway bootstrap: could not write config defaults (${err?.message || err}) — will proceed anyway`);
+  }
+}
+
 function normalizeOpenClawConfigFileShape(configPath = CONFIG_FILE) {
   let config = {};
   try {
@@ -1876,7 +1928,12 @@ export class InstallerStepEngine {
         });
         await this.runStep("gateway_bootstrap", "Starting OpenClaw gateway and Funnel", async () => {
           try {
-            normalizeOpenClawConfigFileShape(CONFIG_FILE);
+            // Ensure required gateway fields are present BEFORE install/restart.
+            // OpenClaw now requires gateway.mode="local" to be explicitly set;
+            // without it the service crashes immediately at startup.
+            ensureGatewayBootstrapDefaults(CONFIG_FILE, (msg) =>
+              this.emitLog("gateway_bootstrap", "info", msg),
+            );
             await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "install"]);
             await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "restart"]);
             return this.runFunnel();
