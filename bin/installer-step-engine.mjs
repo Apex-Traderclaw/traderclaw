@@ -984,6 +984,7 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   if (!config.agents.defaults || typeof config.agents.defaults !== "object") {
     config.agents.defaults = {};
   }
+  config.agents.defaults.heartbeat = { ...defaultHeartbeat };
 
   ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
