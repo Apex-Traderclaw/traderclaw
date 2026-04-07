@@ -61,9 +61,17 @@
         "type": "string",
         "description": "Bearer token used by orchestrator when calling your Gateway /v1/responses."
       },
+      "forwardTelegramRecipient": {
+        "type": "string",
+        "description": "Telegram @username or numeric chat id for orchestrator reply forwarding (optional). Legacy key forwardTelegramChatId is also accepted."
+      },
+      "telegramBotToken": {
+        "type": "string",
+        "description": "Telegram bot token from @BotFather. Required only to resolve @username to chat id via Bot API. Set in plugin config (not environment variables) for OpenClaw compatibility."
+      },
       "workspaceDir": {
         "type": "string",
-        "description": "Override workspace directory path. Defaults to ~/.openclaw/workspace/ or OPENCLAW_WORKSPACE_DIR env var."
+        "description": "Override workspace directory path. Defaults to ~/.openclaw/workspace/ when unset."
       },
       "bootstrapDecisionCount": {
         "type": "integer",
@@ -177,6 +185,17 @@
     },
     "gatewayToken": {
       "label": "Gateway Token",
+      "sensitive": true,
+      "advanced": true
+    },
+    "forwardTelegramRecipient": {
+      "label": "Telegram recipient",
+      "placeholder": "@username or numeric chat id",
+      "advanced": true
+    },
+    "telegramBotToken": {
+      "label": "Telegram bot token",
+      "placeholder": "from @BotFather",
       "sensitive": true,
       "advanced": true
     },
