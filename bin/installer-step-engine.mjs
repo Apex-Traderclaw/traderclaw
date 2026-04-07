@@ -984,69 +984,6 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   if (!config.agents.defaults || typeof config.agents.defaults !== "object") {
     config.agents.defaults = {};
   }
-  if (!config.agents.defaults.heartbeat || typeof config.agents.defaults.heartbeat !== "object") {
-    config.agents.defaults.heartbeat = {};
-  }
-  const hbDefaults = config.agents.defaults.heartbeat;
-  if (!hbDefaults.every) hbDefaults.every = defaultHeartbeatEvery;
-  if (hbDefaults.isolatedSession === undefined) hbDefaults.isolatedSession = true;
-  if (hbDefaults.lightContext === undefined) hbDefaults.lightContext = true;
-  if (!hbDefaults.target) hbDefaults.target = "last";
-
-  if (!config.memory || typeof config.memory !== "object") config.memory = {};
-  if (!config.memory.backend) config.memory.backend = "qmd";
-  if (config.memory.citations === undefined) config.memory.citations = "auto";
-  if (!config.memory.qmd || typeof config.memory.qmd !== "object") config.memory.qmd = {};
-  const qmd = config.memory.qmd;
-  if (qmd.includeDefaultMemory === undefined) qmd.includeDefaultMemory = true;
-  if (!qmd.searchMode) qmd.searchMode = "query";
-  if (!qmd.update || typeof qmd.update !== "object") qmd.update = {};
-  if (!qmd.update.interval) qmd.update.interval = "5m";
-  if (qmd.update.debounceMs === undefined) qmd.update.debounceMs = 15000;
-  if (qmd.update.onBoot === undefined) qmd.update.onBoot = true;
-  if (qmd.update.waitForBootSync === undefined) qmd.update.waitForBootSync = false;
-  if (!qmd.limits || typeof qmd.limits !== "object") qmd.limits = {};
-  if (qmd.limits.maxResults === undefined) qmd.limits.maxResults = 6;
-  if (qmd.limits.timeoutMs === undefined) qmd.limits.timeoutMs = 8000;
-  if (qmd.limits.maxSnippetChars === undefined) qmd.limits.maxSnippetChars = 700;
-  if (!qmd.scope || typeof qmd.scope !== "object") qmd.scope = {};
-  if (!qmd.scope.default) qmd.scope.default = "deny";
-  if (!Array.isArray(qmd.scope.rules)) {
-    qmd.scope.rules = [
-      { action: "allow", match: { path: "memory/**" } },
-      { action: "deny", match: { path: "*.env" } },
-      { action: "deny", match: { path: "*.key" } },
-      { action: "deny", match: { path: "*.pem" } },
-      { action: "deny", match: { path: "session-tokens.json" } },
-      { action: "allow", match: { chatType: "direct" } },
-    ];
-  }
-  if (!Array.isArray(qmd.paths)) {
-    qmd.paths = [
-      { name: "decisionLog", path: "memory/decisions", pattern: "*.jsonl" },
-      { name: "dailyLog", path: "memory", pattern: "????-??-??.md" },
-    ];
-  }
-  if (!qmd.sessions || typeof qmd.sessions !== "object") qmd.sessions = {};
-  if (qmd.sessions.enabled === undefined) qmd.sessions.enabled = true;
-
-  if (!config.agents.defaults.memorySearch || typeof config.agents.defaults.memorySearch !== "object") {
-    config.agents.defaults.memorySearch = {};
-  }
-  const ms = config.agents.defaults.memorySearch;
-  if (ms.enabled === undefined) ms.enabled = true;
-  if (!ms.query || typeof ms.query !== "object") ms.query = {};
-  if (!ms.query.hybrid || typeof ms.query.hybrid !== "object") ms.query.hybrid = {};
-  if (ms.query.hybrid.enabled === undefined) ms.query.hybrid.enabled = true;
-  if (ms.query.hybrid.vectorWeight === undefined) ms.query.hybrid.vectorWeight = 0.7;
-  if (ms.query.hybrid.textWeight === undefined) ms.query.hybrid.textWeight = 0.3;
-  if (ms.query.hybrid.candidateMultiplier === undefined) ms.query.hybrid.candidateMultiplier = 4;
-  if (!ms.query.hybrid.mmr || typeof ms.query.hybrid.mmr !== "object") ms.query.hybrid.mmr = {};
-  if (ms.query.hybrid.mmr.enabled === undefined) ms.query.hybrid.mmr.enabled = true;
-  if (ms.query.hybrid.mmr.lambda === undefined) ms.query.hybrid.mmr.lambda = 0.7;
-  if (!ms.query.hybrid.temporalDecay || typeof ms.query.hybrid.temporalDecay !== "object") ms.query.hybrid.temporalDecay = {};
-  if (ms.query.hybrid.temporalDecay.enabled === undefined) ms.query.hybrid.temporalDecay.enabled = true;
-  if (ms.query.hybrid.temporalDecay.halfLifeDays === undefined) ms.query.hybrid.temporalDecay.halfLifeDays = 14;
 
   ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
