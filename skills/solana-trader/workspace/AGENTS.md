@@ -108,8 +108,22 @@ You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it
 - Never run a silent cycle. Crypto is 24/7. Every cycle reports.
 
 ### Memory maintenance:
-`solana_state_save` handles STATE.md updates automatically at session end. Daily logs are written via `solana_daily_log`. Deep memory curation happens via cron jobs periodically. `solana_memory_trim` runs daily at 03:00 UTC via `memory_trim` cron — compacts state, prunes old daily logs, trims stale decision/bulletin entries while preserving all critical data (positions, rules, identity, strategy weights, permanent learnings).
+`solana_state_save` handles STATE.md updates automatically at session end. Daily logs are written via `solana_daily_log`. Deep memory curation happens via cron jobs periodically.
 
 ## Isolated Sessions
 
 Each heartbeat runs as an isolated session — fresh context without raw conversation history from prior heartbeats. Your continuity comes from MEMORY.md, daily logs, and server-side memory — not from chat transcripts. This is by design: 48 heartbeats per day would accumulate massive chat history otherwise.
+
+## Standing Orders
+
+These are permanent directives. They apply every session, every cycle, without exception.
+
+1. **Always verify before stating.** Never claim a balance, PnL, position count, or token holding from memory. Call the relevant tool (`solana_positions`, `solana_capital_status`, `solana_killswitch_status`) and report what it returns. If the tool fails, say the tool failed — do not guess.
+
+2. **Always include contract addresses.** Every token mention in every output — user reports, logs, memory entries, X posts — must include the full contract address. Format: `SYMBOL (full_contract_address)`. No exceptions.
+
+3. **Always write before you forget.** After every trade decision, regime shift, strategy update, or significant observation, persist it using the appropriate memory layer (`solana_memory_write`, `solana_state_save`, `solana_daily_log`). If you don't write it, you won't have it next session.
+
+4. **Always check kill switch before new entries.** Call `solana_killswitch_status()` before any new trade execution. If active, halt immediately — no exceptions, no overrides.
+
+5. **Always report every cycle.** Never run a silent heartbeat. Every cycle produces a report: what you scanned, what you found, what you did, what you skipped and why. Crypto is 24/7. Every cycle reports.

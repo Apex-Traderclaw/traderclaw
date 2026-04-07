@@ -993,6 +993,21 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   const cronStorePath = resolveCronJobsStorePath(config);
   const cronMerge = mergeTraderCronJobsIntoStore(cronStorePath, targetJobs);
 
+  let qmdAvailable = false;
+  let qmdVersion = null;
+  try { qmdAvailable = commandExists("qmd"); } catch {}
+  if (qmdAvailable) {
+    qmdVersion = getCommandOutput("qmd --version");
+  } else {
+    if (typeof console !== "undefined") {
+      console.warn(
+        "[traderclaw] QMD binary not found. Memory engine will fall back to SQLite (no vector search, no temporal decay, no MMR).\n" +
+        "Install QMD:  bun install -g @tobilu/qmd\n" +
+        "Then restart the gateway:  openclaw gateway restart"
+      );
+    }
+  }
+
   return {
     configPath,
     agentsConfigured: targetAgents.length,
@@ -1004,6 +1019,8 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
     cronJobsStoreError: cronMerge.error,
     removedLegacyCronJobs,
     hooksConfigured: config.hooks.mappings.length,
+    qmdAvailable,
+    qmdVersion,
     isV2,
   };
 }
