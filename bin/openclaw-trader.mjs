@@ -3204,6 +3204,7 @@ Commands:
   signup             Create a new account (alias for: setup --signup; run locally, not via the agent)
   precheck           Run environment checks (dry-run or allow-install)
   install            Launch installer flows (--wizard for localhost GUI)
+  repair-openclaw    Re-run npm install in the global openclaw package (fixes missing grammy after upgrade)
   gateway            Gateway helpers (see subcommands below)
   login              Re-authenticate (uses refresh token when valid; full challenge only if needed)
   logout             Revoke current session and clear tokens
@@ -3248,6 +3249,7 @@ Examples:
   traderclaw precheck --allow-install
   traderclaw install --wizard
   traderclaw install --wizard --lane quick-local
+  traderclaw repair-openclaw
   traderclaw gateway ensure-persistent
   traderclaw setup --signup --user-id my_agent_001 --referral-code ABCD1234
   traderclaw setup --api-key oc_xxx --url https://api.traderclaw.ai
@@ -3262,6 +3264,18 @@ Examples:
   traderclaw test-session
   traderclaw test-session --wallet-private-key <base58_key>
 `);
+}
+
+async function cmdRepairOpenclaw() {
+  const { ensureOpenClawGlobalPackageDependencies } = await import("./installer-step-engine.mjs");
+  printInfo("Repairing global OpenClaw npm dependencies (fixes missing grammy / MODULE_NOT_FOUND)...");
+  const r = await ensureOpenClawGlobalPackageDependencies();
+  if (r.skipped) {
+    printError(`Could not find global OpenClaw package (${r.reason}). Install or upgrade: npm install -g openclaw@latest`);
+    process.exit(1);
+  }
+  printSuccess(`Dependencies refreshed under ${r.dir}`);
+  printInfo("Next: openclaw gateway restart");
 }
 
 async function main() {
@@ -3294,6 +3308,9 @@ async function main() {
       break;
     case "install":
       await cmdInstall(args.slice(1));
+      break;
+    case "repair-openclaw":
+      await cmdRepairOpenclaw();
       break;
     case "gateway":
       await cmdGateway(args.slice(1));

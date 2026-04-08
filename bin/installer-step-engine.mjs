@@ -442,6 +442,32 @@ function runCommandWithEvents(cmd, args = [], opts = {}) {
   });
 }
 
+function getGlobalOpenClawPackageDir() {
+  const root = getCommandOutput("npm root -g");
+  if (!root) return null;
+  const dir = join(root.trim(), "openclaw");
+  return existsSync(join(dir, "package.json")) ? dir : null;
+}
+
+/**
+ * Re-run `npm install` inside the global OpenClaw package tree. Some hosts end up with an
+ * incomplete `node_modules` after `npm install -g` (hoisting, optional deps, or interrupted
+ * installs). OpenClaw then fails at runtime with `Cannot find module 'grammy'` while loading
+ * config. Installing from the package directory restores declared dependencies.
+ */
+/** Runs `npm install` in the global `openclaw` package directory (fixes missing `grammy` etc.). */
+export async function ensureOpenClawGlobalPackageDependencies() {
+  const dir = getGlobalOpenClawPackageDir();
+  if (!dir) {
+    return { skipped: true, reason: "global_openclaw_dir_not_found" };
+  }
+  await runCommandWithEvents("npm", ["install", "--omit=dev", "--registry", "https://registry.npmjs.org/"], {
+    cwd: dir,
+    shell: false,
+  });
+  return { repaired: true, dir };
+}
+
 /**
  * Install or upgrade the global OpenClaw CLI. We always run npm even when `openclaw` is already
  * on PATH: bundled plugin manifests track a minimum OpenClaw version (e.g. >=2026.4.8). A stale
@@ -1987,6 +2013,9 @@ export class InstallerStepEngine {
             this.modeConfig,
             (evt) => this.emitLog("install_plugin_package", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
           ));
+        await this.runStep("openclaw_global_deps", "Ensuring OpenClaw global package dependencies", async () =>
+          ensureOpenClawGlobalPackageDependencies(),
+        );
         await this.runStep(
           "activate_openclaw_plugin",
           "Installing and enabling TraderClaw inside OpenClaw",
