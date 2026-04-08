@@ -2082,12 +2082,13 @@ function wizardHtml(defaults) {
       .oauth-row input[readonly] { flex:1 1 280px; font-size:12px; }
       .oauth-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
       .oauth-actions button.secondary { background:#334a87; }
-      .oauth-terminal-box { background:#0a1f2e; border:1px solid #2a7a6a; border-radius:10px; padding:14px; margin-top:8px; }
-      .oauth-terminal-box ol { margin:8px 0 0 18px; padding:0; color:#c5d7f5; font-size:13px; line-height:1.55; }
-      .oauth-terminal-box li { margin-bottom:6px; }
-      .oauth-details { margin-top:14px; border:1px solid #2a3f6a; border-radius:10px; padding:10px 14px 14px; background:#0a1224; }
-      .oauth-details summary { list-style-position: outside; padding:4px 0; color:#b8cff5; font-weight:600; font-size:14px; }
-      .oauth-details[open] summary { margin-bottom:8px; }
+      .oauth-guide { background:#0a1f2e; border:1px solid #2a7a6a; border-radius:10px; padding:14px; margin-top:8px; }
+      .oauth-guide ol { margin:10px 0 0 18px; padding:0; color:#d9e8ff; font-size:13px; line-height:1.55; }
+      .oauth-guide li { margin-bottom:7px; }
+      .oauth-step.pending { color:#9cb0de; }
+      .oauth-step.active { color:#9ee6ff; font-weight:700; }
+      .oauth-step.done { color:#78f0a9; }
+      .oauth-step.error { color:#ff9b9b; font-weight:700; }
       .ok-banner { color:#78f0a9; font-size:13px; margin-top:8px; }
       .err-banner { color:#ff6b6b; font-size:13px; margin-top:8px; }
     </style>
@@ -2136,52 +2137,28 @@ function wizardHtml(defaults) {
         </div>
         <div style="margin-top:12px;" id="llmOauthBlock" class="hidden">
           <p class="muted" style="margin-bottom:12px;">
-            <strong>Why doesn’t OpenClaw “just ask for a link” in the terminal?</strong> It does not need to. In the usual setup, you run OpenClaw’s login on the <strong>same machine</strong> where OpenClaw runs: ChatGPT sends your browser to <code>http://localhost:1455/…</code> and OpenClaw <strong>receives that callback automatically</strong> — no copying from the address bar. You only need to paste a long callback URL when your <strong>browser is on another computer</strong> than the one running OpenClaw (for example, you opened the sign-in page on your laptop but OpenClaw is on a VPS).
+            OAuth here is fully guided. After you choose OAuth, we start OpenClaw login automatically. Use the sign-in button below, then complete ChatGPT in this browser. You should not need to copy any code.
           </p>
-          <div class="oauth-terminal-box">
-            <strong style="color:#8ef5d0;">Recommended: sign in from a terminal on this machine</strong>
-            <ol>
-              <li>Copy the command below (or type it).</li>
-              <li>Run it in a normal terminal on <strong>this</strong> host. Your browser may open; sign in with ChatGPT and approve access.</li>
-              <li>When the command finishes successfully, check <strong>“ChatGPT login is done”</strong> below — you do <strong>not</strong> need to paste a callback URL for this path.</li>
-            </ol>
-            <div class="oauth-row" style="margin-top:12px;">
-              <input type="text" id="oauthTerminalCmdDisplay" readonly value="openclaw models auth login --provider openai-codex" style="flex:1 1 320px; font-size:13px;" />
-              <button type="button" id="oauthCopyTerminalCmdBtn" class="secondary">Copy command</button>
-            </div>
-          </div>
-          <label style="display:flex; align-items:flex-start; gap:10px; font-size:14px; color:#e8eef9; margin-top:16px; cursor:pointer;">
-            <input id="llmOAuthSkipLogin" type="checkbox" style="width:auto; margin-top:3px;" />
-            <span><strong>ChatGPT login is done</strong> — I ran the command above in a terminal on <strong>this</strong> machine and OpenClaw completed without errors.</span>
-          </label>
-          <details id="oauthWizardAltDetails" class="oauth-details">
-            <summary>Alternative: no shell on this server — sign in using this browser only</summary>
-            <p class="muted" style="margin-top:8px;">
-              Use this when you <strong>cannot</strong> run a terminal on the machine where this wizard runs (typical remote VPS + browser on your laptop). You will copy the <strong>full URL from the address bar</strong> after ChatGPT redirects — even if the page shows “connection refused”, the URL in the bar is still valid.
+          <div class="oauth-guide">
+            <p class="muted" style="margin-top:0;">
+              <strong>Important:</strong> Complete the ChatGPT sign-in in this browser, then return to this tab. The wizard detects the result automatically.
             </p>
-            <div class="oauth-flow" style="margin-top:10px;">
-              <strong style="color:#9ee6ff;">Steps</strong>
-              <ol>
-                <li>Click <strong>Get ChatGPT sign-in link</strong> — we run the same OpenClaw login process and show the <code>https://auth.openai.com/oauth/authorize?…</code> URL.</li>
-                <li>Open that URL, sign in, and let the browser redirect toward <code>localhost:1455</code>.</li>
-                <li>Paste the <strong>entire callback URL</strong> from the address bar into the box below, then click <strong>Submit to OpenClaw</strong>.</li>
-              </ol>
-              <div class="oauth-actions">
-                <button type="button" id="oauthGetLinkBtn" class="secondary">Get ChatGPT sign-in link</button>
-                <button type="button" id="oauthSubmitBtn" class="secondary" disabled>Submit to OpenClaw</button>
-              </div>
-              <div id="oauthUrlRow" class="oauth-row hidden">
-                <label style="flex:1 1 100%; font-size:12px; color:#9cb0de;">Sign-in URL (open in browser — not what you paste back)</label>
-                <input type="text" id="oauthUrlDisplay" readonly placeholder="Click “Get ChatGPT sign-in link” first" />
-                <button type="button" id="oauthCopyUrlBtn" class="secondary" disabled>Copy URL</button>
-                <a id="oauthOpenUrlBtn" class="secondary" href="#" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:10px 14px;border-radius:8px;background:#2d7dff;color:#fff;text-decoration:none;font-weight:600;">Open in browser</a>
-              </div>
-              <p id="oauthFlowStatus" class="muted" style="margin-top:8px;" aria-live="polite"></p>
+            <p class="muted" style="margin-top:4px;font-size:13px;color:#7a8ba8;">
+              <strong>Remote VPS?</strong> Forward port <code>1455</code> alongside the wizard port:
+              <code style="display:block;margin-top:4px;padding:4px 8px;background:#111827;border-radius:4px;font-size:12px;">ssh -L 17890:127.0.0.1:17890 -L 1455:127.0.0.1:1455 user@your-vps</code>
+            </p>
+            <ol>
+              <li class="oauth-step pending" id="oauthStepPrepare">Preparing ChatGPT sign-in...</li>
+              <li class="oauth-step pending" id="oauthStepOpen">Open ChatGPT sign-in in this browser.</li>
+              <li class="oauth-step pending" id="oauthStepComplete">Finish ChatGPT approval, then return here.</li>
+              <li class="oauth-step pending" id="oauthStepVerify">We detect completion automatically.</li>
+            </ol>
+            <div class="oauth-actions">
+              <a id="oauthOpenUrlBtn" class="secondary" href="#" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:10px 14px;border-radius:8px;background:#2d7dff;color:#fff;text-decoration:none;font-weight:600;opacity:.55;pointer-events:none;">Open ChatGPT sign-in</a>
+              <button type="button" id="oauthRetryBtn" class="secondary hidden">Try sign-in again</button>
             </div>
-            <label style="display:block; margin-top:14px;">Paste redirect URL or authorization code</label>
-            <textarea id="llmOAuthPaste" autocomplete="off" placeholder="Example: http://localhost:1455/auth/callback?code=… (full URL from address bar). You can paste only the code if that is all you have."></textarea>
-          </details>
-          <p class="muted" style="margin-top:12px;"><strong>SSH tip:</strong> To make your laptop’s browser hit OpenClaw on the server, you can run <code>ssh -L 1455:127.0.0.1:1455 user@this-server</code> before signing in so <code>localhost:1455</code> on your machine forwards to the wizard host.</p>
+            <p id="oauthFlowStatus" class="muted" style="margin-top:8px;" aria-live="polite">Choose OAuth and wait a moment. We will prepare your sign-in automatically.</p>
+          </div>
         </div>
         <p class="muted" id="llmLoadState" aria-live="polite">Loading LLM provider catalog...</p>
         <div id="llmLoadingHint" class="loading-hint" role="status" aria-live="polite">
@@ -2326,8 +2303,6 @@ function wizardHtml(defaults) {
       const llmOauthProviderNote = document.getElementById("llmOauthProviderNote");
       const llmApiKeyBlock = document.getElementById("llmApiKeyBlock");
       const llmOauthBlock = document.getElementById("llmOauthBlock");
-      const llmOAuthPasteEl = document.getElementById("llmOAuthPaste");
-      const llmOAuthSkipLoginEl = document.getElementById("llmOAuthSkipLogin");
       const telegramTokenEl = document.getElementById("telegramToken");
       const llmLoadStateEl = document.getElementById("llmLoadState");
       const llmLoadingHintEl = document.getElementById("llmLoadingHint");
@@ -2357,16 +2332,56 @@ function wizardHtml(defaults) {
       let savedApiKeyProvider = "";
       let oauthSessionId = null;
       let oauthWizardLoginDone = false;
+      let oauthStartInFlight = false;
+      let oauthPollTimer = null;
+      let oauthOpenedInBrowser = false;
+      let oauthFlowStartedAtMs = 0;
 
-      const oauthGetLinkBtn = document.getElementById("oauthGetLinkBtn");
-      const oauthSubmitBtn = document.getElementById("oauthSubmitBtn");
-      const oauthUrlRow = document.getElementById("oauthUrlRow");
-      const oauthUrlDisplay = document.getElementById("oauthUrlDisplay");
-      const oauthCopyUrlBtn = document.getElementById("oauthCopyUrlBtn");
       const oauthOpenUrlBtn = document.getElementById("oauthOpenUrlBtn");
+      const oauthRetryBtn = document.getElementById("oauthRetryBtn");
       const oauthFlowStatus = document.getElementById("oauthFlowStatus");
+      const oauthStepPrepare = document.getElementById("oauthStepPrepare");
+      const oauthStepOpen = document.getElementById("oauthStepOpen");
+      const oauthStepComplete = document.getElementById("oauthStepComplete");
+      const oauthStepVerify = document.getElementById("oauthStepVerify");
+
+      function setOauthStep(stepEl, mode) {
+        if (!stepEl) return;
+        stepEl.classList.remove("pending", "active", "done", "error");
+        stepEl.classList.add(mode || "pending");
+      }
+
+      function setOauthStatus(text, isError = false, isSuccess = false) {
+        if (!oauthFlowStatus) return;
+        oauthFlowStatus.className = isError ? "err-banner" : isSuccess ? "ok-banner" : "muted";
+        oauthFlowStatus.textContent = text;
+      }
+
+      function setOauthOpenButton(url) {
+        if (!oauthOpenUrlBtn) return;
+        if (!url) {
+          oauthOpenUrlBtn.href = "#";
+          oauthOpenUrlBtn.style.opacity = ".55";
+          oauthOpenUrlBtn.style.pointerEvents = "none";
+          oauthOpenUrlBtn.setAttribute("aria-disabled", "true");
+          return;
+        }
+        oauthOpenUrlBtn.href = url;
+        oauthOpenUrlBtn.style.opacity = "1";
+        oauthOpenUrlBtn.style.pointerEvents = "auto";
+        oauthOpenUrlBtn.removeAttribute("aria-disabled");
+      }
+
+      function stopOauthPolling() {
+        if (oauthPollTimer) {
+          clearInterval(oauthPollTimer);
+          oauthPollTimer = null;
+        }
+      }
 
       async function cancelOauthSession() {
+        stopOauthPolling();
+        oauthStartInFlight = false;
         if (!oauthSessionId) {
           try {
             await fetch("/api/llm/oauth/cancel", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
@@ -2388,17 +2403,19 @@ function wizardHtml(defaults) {
       }
 
       function resetOauthWizardState() {
+        stopOauthPolling();
         oauthSessionId = null;
         oauthWizardLoginDone = false;
-        if (oauthUrlRow) oauthUrlRow.classList.add("hidden");
-        if (oauthUrlDisplay) oauthUrlDisplay.value = "";
-        if (oauthCopyUrlBtn) oauthCopyUrlBtn.disabled = true;
-        if (oauthOpenUrlBtn) {
-          oauthOpenUrlBtn.href = "#";
-          oauthOpenUrlBtn.setAttribute("aria-disabled", "true");
-        }
-        if (oauthSubmitBtn) oauthSubmitBtn.disabled = true;
-        if (oauthFlowStatus) oauthFlowStatus.textContent = "";
+        oauthStartInFlight = false;
+        oauthOpenedInBrowser = false;
+        oauthFlowStartedAtMs = 0;
+        if (oauthRetryBtn) oauthRetryBtn.classList.add("hidden");
+        setOauthOpenButton("");
+        setOauthStep(oauthStepPrepare, "pending");
+        setOauthStep(oauthStepOpen, "pending");
+        setOauthStep(oauthStepComplete, "pending");
+        setOauthStep(oauthStepVerify, "pending");
+        setOauthStatus("Choose OAuth and wait a moment. We will prepare your sign-in automatically.");
       }
 
       (function initLlmAuthDefaults() {
@@ -2406,10 +2423,6 @@ function wizardHtml(defaults) {
         if (mode === "oauth") {
           llmAuthModeOauth.checked = true;
           llmAuthModeApiKey.checked = false;
-        }
-        llmOAuthPasteEl.value = ${JSON.stringify(defaults.llmOAuthPaste || "")};
-        if (${defaults.llmOAuthSkipLogin === true ? "true" : "false"}) {
-          llmOAuthSkipLoginEl.checked = true;
         }
         applyLlmAuthModeUi();
       })();
@@ -2431,6 +2444,9 @@ function wizardHtml(defaults) {
           llmOauthProviderNote.classList.remove("hidden");
           llmApiKeyBlock.classList.add("hidden");
           llmOauthBlock.classList.remove("hidden");
+          if (!oauthWizardLoginDone && !oauthStartInFlight && !oauthSessionId) {
+            void startOauthGuidedFlow();
+          }
         } else {
           void cancelOauthSession();
           resetOauthWizardState();
@@ -2452,11 +2468,155 @@ function wizardHtml(defaults) {
       function hasRequiredInputs() {
         if (!llmCatalogReady || !Boolean(telegramTokenEl.value.trim())) return false;
         if (isOauthMode()) {
-          if (oauthWizardLoginDone) return true;
-          if (llmOAuthSkipLoginEl.checked) return true;
-          return Boolean(llmOAuthPasteEl.value.trim());
+          return oauthWizardLoginDone === true;
         }
         return Boolean(llmProviderEl.value.trim()) && Boolean(llmCredentialEl.value.trim());
+      }
+
+      async function pollOauthStatusOnce() {
+        if (!oauthSessionId || !isOauthMode()) return;
+        try {
+          const sessionId = oauthSessionId;
+          const res = await fetch("/api/llm/oauth/status?sessionId=" + encodeURIComponent(sessionId));
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            stopOauthPolling();
+            oauthStartInFlight = false;
+            if (data && data.error === "invalid_or_expired_session") {
+              setOauthStep(oauthStepPrepare, "done");
+              setOauthStep(oauthStepOpen, "error");
+              setOauthStep(oauthStepComplete, "error");
+              setOauthStep(oauthStepVerify, "error");
+              setOauthStatus(
+                "Automatic OAuth session expired. This flow requires the wizard and OpenClaw on the same machine and the same browser. Click Try sign-in again.",
+                true,
+              );
+            } else {
+              setOauthStatus((data && (data.message || data.error)) || "Could not read OAuth status.", true);
+            }
+            if (oauthRetryBtn) oauthRetryBtn.classList.remove("hidden");
+            updateStartButtonState();
+            return;
+          }
+          const state = typeof data.state === "string" ? data.state : "unknown";
+          if (state === "awaiting_browser_callback") {
+            setOauthStep(oauthStepPrepare, "done");
+            setOauthStep(oauthStepOpen, oauthOpenedInBrowser ? "done" : "active");
+            setOauthStep(oauthStepComplete, oauthOpenedInBrowser ? "active" : "pending");
+            setOauthStep(oauthStepVerify, oauthOpenedInBrowser ? "active" : "pending");
+            if (oauthOpenedInBrowser) {
+              const elapsed = oauthFlowStartedAtMs > 0 ? Math.floor((Date.now() - oauthFlowStartedAtMs) / 1000) : 0;
+              if (elapsed >= 90) {
+                setOauthStatus(
+                  "Still waiting for callback. Keep using this same browser on this same machine. If you opened OAuth on another computer, this automatic flow cannot complete.",
+                  true,
+                );
+                if (oauthRetryBtn) oauthRetryBtn.classList.remove("hidden");
+              } else {
+                setOauthStatus("Waiting for ChatGPT approval to finish. Return here after you continue.", false);
+              }
+            } else {
+              setOauthStatus("Step 2: click Open ChatGPT sign-in, then complete approval and return here.", false);
+            }
+            updateStartButtonState();
+            return;
+          }
+          stopOauthPolling();
+          oauthStartInFlight = false;
+          if (state === "succeeded") {
+            oauthWizardLoginDone = true;
+            oauthSessionId = null;
+            setOauthStep(oauthStepPrepare, "done");
+            setOauthStep(oauthStepOpen, "done");
+            setOauthStep(oauthStepComplete, "done");
+            setOauthStep(oauthStepVerify, "done");
+            setOauthStatus(data.message || "ChatGPT is connected. You can start installation now.", false, true);
+            setOauthOpenButton("");
+            if (oauthRetryBtn) oauthRetryBtn.classList.add("hidden");
+            updateStartButtonState();
+            return;
+          }
+          const errorText = data.message || data.error || "OAuth login failed.";
+          setOauthStep(oauthStepPrepare, "done");
+          setOauthStep(oauthStepOpen, "error");
+          setOauthStep(oauthStepComplete, "error");
+          setOauthStep(oauthStepVerify, "error");
+          setOauthStatus(
+            errorText + " Automatic mode only works on the same machine and browser. Click Try sign-in again.",
+            true,
+          );
+          setOauthOpenButton("");
+          if (oauthRetryBtn) oauthRetryBtn.classList.remove("hidden");
+          updateStartButtonState();
+        } catch (err) {
+          stopOauthPolling();
+          oauthStartInFlight = false;
+          setOauthStep(oauthStepPrepare, "done");
+          setOauthStep(oauthStepOpen, "error");
+          setOauthStep(oauthStepComplete, "error");
+          setOauthStep(oauthStepVerify, "error");
+          setOauthStatus(err && err.message ? String(err.message) : "OAuth status request failed.", true);
+          if (oauthRetryBtn) oauthRetryBtn.classList.remove("hidden");
+          updateStartButtonState();
+        }
+      }
+
+      function beginOauthStatusPolling() {
+        stopOauthPolling();
+        oauthPollTimer = setInterval(() => {
+          void pollOauthStatusOnce();
+        }, 1500);
+        void pollOauthStatusOnce();
+      }
+
+      async function startOauthGuidedFlow() {
+        if (!isOauthMode() || oauthStartInFlight) return;
+        oauthStartInFlight = true;
+        oauthWizardLoginDone = false;
+        oauthOpenedInBrowser = false;
+        oauthFlowStartedAtMs = Date.now();
+        if (oauthRetryBtn) oauthRetryBtn.classList.add("hidden");
+        setOauthStep(oauthStepPrepare, "active");
+        setOauthStep(oauthStepOpen, "pending");
+        setOauthStep(oauthStepComplete, "pending");
+        setOauthStep(oauthStepVerify, "pending");
+        setOauthStatus("Preparing ChatGPT sign-in link...");
+        setOauthOpenButton("");
+        updateStartButtonState();
+        try {
+          const res = await fetch("/api/llm/oauth/start", { method: "POST" });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            oauthStartInFlight = false;
+            setOauthStep(oauthStepPrepare, "error");
+            setOauthStep(oauthStepOpen, "error");
+            setOauthStep(oauthStepComplete, "error");
+            setOauthStep(oauthStepVerify, "error");
+            setOauthStatus((data && (data.message || data.error)) || "Could not start OAuth sign-in.", true);
+            if (oauthRetryBtn) oauthRetryBtn.classList.remove("hidden");
+            updateStartButtonState();
+            return;
+          }
+          oauthSessionId = typeof data.sessionId === "string" ? data.sessionId : "";
+          const authUrl = typeof data.authUrl === "string" ? data.authUrl : "";
+          if (!oauthSessionId || !authUrl) {
+            oauthStartInFlight = false;
+            setOauthStep(oauthStepPrepare, "error");
+            setOauthStatus("OpenClaw did not return a valid sign-in URL. Try again.", true);
+            if (oauthRetryBtn) oauthRetryBtn.classList.remove("hidden");
+            return;
+          }
+          setOauthOpenButton(authUrl);
+          setOauthStep(oauthStepPrepare, "done");
+          setOauthStep(oauthStepOpen, "active");
+          setOauthStatus("Step 2: click Open ChatGPT sign-in and continue in this same browser.");
+          beginOauthStatusPolling();
+        } catch (err) {
+          oauthStartInFlight = false;
+          setOauthStep(oauthStepPrepare, "error");
+          setOauthStatus(err && err.message ? String(err.message) : "Could not start OAuth sign-in.", true);
+          if (oauthRetryBtn) oauthRetryBtn.classList.remove("hidden");
+        }
       }
 
       /** All-or-nothing: 0 or 4 non-empty X fields; partial is invalid. */
@@ -2635,8 +2795,8 @@ function wizardHtml(defaults) {
           llmProvider: oauth ? "openai-codex" : llmProviderEl.value.trim(),
           llmModel: llmModelEl.value.trim(),
           llmCredential: oauth ? "" : llmCredentialEl.value.trim(),
-          llmOAuthPaste: llmOAuthPasteEl.value.trim(),
-          llmOAuthSkipLogin: llmOAuthSkipLoginEl.checked,
+          llmOAuthPaste: "",
+          llmOAuthSkipLogin: oauth ? true : false,
           apiKey: document.getElementById("apiKey").value.trim(),
           telegramToken: document.getElementById("telegramToken").value.trim(),
           referralCode: document.getElementById("referralCode").value.trim(),
@@ -2645,16 +2805,12 @@ function wizardHtml(defaults) {
           xAccessTokenMain: xAccessTokenMainEl.value.trim(),
           xAccessTokenMainSecret: xAccessTokenMainSecretEl.value.trim(),
         };
-        if (oauth && oauthWizardLoginDone) {
-          payload.llmOAuthSkipLogin = true;
-          payload.llmOAuthPaste = "";
-        }
         if (oauth) {
-          if (!payload.llmOAuthSkipLogin && !payload.llmOAuthPaste && !oauthWizardLoginDone) {
+          if (!oauthWizardLoginDone) {
             stateEl.textContent = "blocked";
             readyEl.textContent = "";
             manualEl.textContent =
-              "Codex OAuth: check “ChatGPT login is done” after running the terminal command on this machine, or expand “Alternative” and use Get link + paste + Submit, or finish wizard Submit if you already used those buttons.";
+              "Codex OAuth is not completed yet. Use the guided sign-in above in this same browser and wait for the green success message.";
             return;
           }
         } else if (!payload.llmProvider || !payload.llmCredential) {
@@ -2905,150 +3061,23 @@ function wizardHtml(defaults) {
       llmAuthModeApiKey.addEventListener("change", onLlmAuthModeChange);
       llmAuthModeOauth.addEventListener("change", onLlmAuthModeChange);
       llmCredentialEl.addEventListener("input", updateStartButtonState);
-      llmOAuthPasteEl.addEventListener("input", updateStartButtonState);
-      llmOAuthSkipLoginEl.addEventListener("change", updateStartButtonState);
-
-      if (oauthGetLinkBtn) {
-        oauthGetLinkBtn.addEventListener("click", async () => {
-          oauthWizardLoginDone = false;
-          if (oauthFlowStatus) {
-            oauthFlowStatus.className = "muted";
-            oauthFlowStatus.textContent = "Starting OpenClaw (same as running models auth login in a terminal)...";
-          }
-          oauthGetLinkBtn.disabled = true;
-          try {
-            const res = await fetch("/api/llm/oauth/start", { method: "POST" });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-              if (oauthFlowStatus) {
-                oauthFlowStatus.className = "err-banner";
-                let errText = data.message || data.error || "Could not get sign-in URL.";
-                if (data.detail) {
-                  const d = String(data.detail).replace(/\s+/g, " ").trim();
-                  errText += d ? " " + d.slice(0, 700) : "";
-                }
-                oauthFlowStatus.textContent = errText;
-              }
-              oauthGetLinkBtn.disabled = false;
-              return;
-            }
-            oauthSessionId = data.sessionId;
-            if (oauthUrlDisplay) oauthUrlDisplay.value = data.authUrl || "";
-            if (oauthUrlRow) oauthUrlRow.classList.remove("hidden");
-            if (oauthCopyUrlBtn) oauthCopyUrlBtn.disabled = !data.authUrl;
-            if (oauthOpenUrlBtn && data.authUrl) {
-              oauthOpenUrlBtn.href = data.authUrl;
-              oauthOpenUrlBtn.removeAttribute("aria-disabled");
-            }
-            if (oauthSubmitBtn) oauthSubmitBtn.disabled = false;
-            const altDetails = document.getElementById("oauthWizardAltDetails");
-            if (altDetails) altDetails.open = true;
-            if (oauthFlowStatus) {
-              oauthFlowStatus.className = "muted";
-              oauthFlowStatus.textContent =
-                "Open this URL in your browser. After ChatGPT redirects, copy the full callback URL from the address bar (localhost:1455?code=…) — even if the page says connection refused — then paste it below and click Submit.";
-            }
-          } catch (err) {
-            if (oauthFlowStatus) {
-              oauthFlowStatus.className = "err-banner";
-              oauthFlowStatus.textContent = err && err.message ? String(err.message) : "Request failed.";
-            }
-          }
-          oauthGetLinkBtn.disabled = false;
+      if (oauthOpenUrlBtn) {
+        oauthOpenUrlBtn.addEventListener("click", () => {
+          if (!oauthSessionId || oauthWizardLoginDone) return;
+          oauthOpenedInBrowser = true;
+          setOauthStep(oauthStepOpen, "done");
+          setOauthStep(oauthStepComplete, "active");
+          setOauthStep(oauthStepVerify, "active");
+          setOauthStatus("Complete ChatGPT approval in this same browser, then return here. We detect completion automatically.");
         });
       }
 
-      if (oauthSubmitBtn) {
-        oauthSubmitBtn.addEventListener("click", async () => {
-          const paste = llmOAuthPasteEl.value.trim();
-          if (!paste) {
-            if (oauthFlowStatus) {
-              oauthFlowStatus.className = "err-banner";
-              oauthFlowStatus.textContent = "Paste the redirect URL (from the browser address bar) or the authorization code first.";
-            }
-            return;
-          }
-          if (!oauthSessionId) {
-            if (oauthFlowStatus) {
-              oauthFlowStatus.className = "err-banner";
-              oauthFlowStatus.textContent = "Click “Get ChatGPT sign-in link” first, or check “ChatGPT login is done” if you already signed in via the terminal command.";
-            }
-            return;
-          }
-          oauthSubmitBtn.disabled = true;
-          if (oauthFlowStatus) {
-            oauthFlowStatus.className = "muted";
-            oauthFlowStatus.textContent = "Sending to OpenClaw...";
-          }
-          try {
-            const res = await fetch("/api/llm/oauth/submit", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ sessionId: oauthSessionId, paste }),
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-              if (oauthFlowStatus) {
-                oauthFlowStatus.className = "err-banner";
-                oauthFlowStatus.textContent = data.message || data.error || "Login failed.";
-              }
-              oauthSubmitBtn.disabled = false;
-              return;
-            }
-            oauthWizardLoginDone = true;
-            oauthSessionId = null;
-            llmOAuthSkipLoginEl.checked = true;
-            if (oauthFlowStatus) {
-              oauthFlowStatus.className = "ok-banner";
-              oauthFlowStatus.textContent = "OpenClaw saved your ChatGPT login. You can start installation below.";
-            }
-            oauthSubmitBtn.disabled = true;
-            updateStartButtonState();
-          } catch (err) {
-            if (oauthFlowStatus) {
-              oauthFlowStatus.className = "err-banner";
-              oauthFlowStatus.textContent = err && err.message ? String(err.message) : "Request failed.";
-            }
-            oauthSubmitBtn.disabled = false;
-          }
-        });
-      }
-
-      if (oauthCopyUrlBtn && oauthUrlDisplay) {
-        oauthCopyUrlBtn.addEventListener("click", async () => {
-          const v = oauthUrlDisplay.value;
-          if (!v) return;
-          try {
-            await navigator.clipboard.writeText(v);
-            oauthCopyUrlBtn.textContent = "Copied";
-            setTimeout(() => {
-              oauthCopyUrlBtn.textContent = "Copy URL";
-            }, 1500);
-          } catch {
-            oauthCopyUrlBtn.textContent = "Copy failed";
-            setTimeout(() => {
-              oauthCopyUrlBtn.textContent = "Copy URL";
-            }, 1500);
-          }
-        });
-      }
-
-      const oauthTerminalCmdDisplay = document.getElementById("oauthTerminalCmdDisplay");
-      const oauthCopyTerminalCmdBtn = document.getElementById("oauthCopyTerminalCmdBtn");
-      if (oauthCopyTerminalCmdBtn && oauthTerminalCmdDisplay) {
-        oauthCopyTerminalCmdBtn.addEventListener("click", async () => {
-          const v = oauthTerminalCmdDisplay.value || "openclaw models auth login --provider openai-codex";
-          try {
-            await navigator.clipboard.writeText(v);
-            oauthCopyTerminalCmdBtn.textContent = "Copied";
-            setTimeout(() => {
-              oauthCopyTerminalCmdBtn.textContent = "Copy command";
-            }, 1500);
-          } catch {
-            oauthCopyTerminalCmdBtn.textContent = "Copy failed";
-            setTimeout(() => {
-              oauthCopyTerminalCmdBtn.textContent = "Copy command";
-            }, 1500);
+      if (oauthRetryBtn) {
+        oauthRetryBtn.addEventListener("click", async () => {
+          await cancelOauthSession();
+          resetOauthWizardState();
+          if (isOauthMode()) {
+            await startOauthGuidedFlow();
           }
         });
       }
@@ -3095,16 +3124,69 @@ async function cmdInstall(args) {
   let running = false;
   let shuttingDown = false;
 
-  /** In-browser Codex OAuth: one pending `openclaw models auth login` child waiting for stdin (same flow as CLI). */
+  /** Guided Codex OAuth sessions keyed by sessionId. */
   const oauthSessions = new Map();
   const OPENAI_OAUTH_AUTHORIZE_RE = /https:\/\/auth\.openai\.com\/oauth\/authorize\S*/;
   const oauthSessionTtlMs = 15 * 60 * 1000;
+
+  // Long-lived callback proxy on port 1455. Bound at wizard startup so
+  // Cursor/VSCode auto-forwards it to the user's laptop before they begin
+  // the OAuth flow. When ChatGPT redirects the browser to localhost:1455,
+  // this proxy catches the callback and feeds the code to the active
+  // openclaw child process.
+  let oauthCallbackProxy = null;
+
+  function findActiveOauthSession() {
+    for (const [, s] of oauthSessions) {
+      if (s.status === "awaiting_browser_callback" && s.child) return s;
+    }
+    return null;
+  }
+
+  function startCallbackProxy() {
+    if (oauthCallbackProxy) return;
+    try {
+      oauthCallbackProxy = createServer((cbReq, cbRes) => {
+        const s = findActiveOauthSession();
+        const fullUrl = `http://localhost:1455${cbReq.url}`;
+        if (s && cbReq.url && cbReq.url.includes("code=")) {
+          s.updatedAt = Date.now();
+          try {
+            if (s.child && s.child.stdin && !s.child.stdin.writableEnded && !s.child.stdin.destroyed) {
+              s.child.stdin.write(`${fullUrl}\n`, () => {
+                setTimeout(() => {
+                  try {
+                    if (s.child && s.child.stdin && !s.child.stdin.destroyed && !s.child.stdin.writableEnded) {
+                      s.child.stdin.end();
+                    }
+                  } catch { /* ignore */ }
+                }, 100);
+              });
+            }
+          } catch { /* ignore */ }
+          cbRes.statusCode = 200;
+          cbRes.setHeader("content-type", "text/html; charset=utf-8");
+          cbRes.end(`<html><body style="background:#0a0e1a;color:#78f0a9;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;"><h2>ChatGPT sign-in received!</h2><p style="color:#c5d7f5;font-size:16px;">You can close this tab and return to the installer wizard.</p></body></html>`);
+        } else {
+          cbRes.statusCode = 200;
+          cbRes.setHeader("content-type", "text/html; charset=utf-8");
+          cbRes.end(`<html><body style="background:#0a0e1a;color:#9cb0de;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;"><h2>TraderClaw OAuth Callback Listener</h2><p>Waiting for ChatGPT redirect. If you see this page, the callback proxy is working.</p></body></html>`);
+        }
+      });
+      oauthCallbackProxy.listen(1455, "127.0.0.1");
+      oauthCallbackProxy.on("error", () => {
+        oauthCallbackProxy = null;
+      });
+    } catch {
+      oauthCallbackProxy = null;
+    }
+  }
 
   function killOauthSession(sessionId, signal = "SIGTERM") {
     const s = oauthSessions.get(sessionId);
     if (!s) return;
     try {
-      s.child.kill(signal);
+      if (s.child) s.child.kill(signal);
     } catch {
       /* ignore */
     }
@@ -3114,7 +3196,8 @@ async function cmdInstall(args) {
   function pruneExpiredOauthSessions() {
     const now = Date.now();
     for (const [id, s] of oauthSessions) {
-      if (now - s.createdAt > oauthSessionTtlMs) {
+      const anchor = s.updatedAt || s.createdAt || now;
+      if (now - anchor > oauthSessionTtlMs) {
         killOauthSession(id);
       }
     }
@@ -3183,6 +3266,35 @@ async function cmdInstall(args) {
       return;
     }
 
+    if (req.method === "GET" && req.url.startsWith("/api/llm/oauth/status")) {
+      pruneExpiredOauthSessions();
+      let sessionId = "";
+      try {
+        const u = new URL(req.url, "http://127.0.0.1");
+        sessionId = String(u.searchParams.get("sessionId") || "").trim();
+      } catch {
+        sessionId = "";
+      }
+      if (!sessionId) {
+        respondJson(400, { ok: false, error: "session_id_required" });
+        return;
+      }
+      const s = oauthSessions.get(sessionId);
+      if (!s) {
+        respondJson(404, { ok: false, error: "invalid_or_expired_session", message: "OAuth session expired. Start sign-in again." });
+        return;
+      }
+      respondJson(200, {
+        ok: true,
+        state: s.status || "unknown",
+        message: s.message || "",
+        authUrl: s.authUrl || "",
+        exitCode: typeof s.exitCode === "number" ? s.exitCode : null,
+        detail: s.detail || "",
+      });
+      return;
+    }
+
     if (req.method === "POST" && req.url === "/api/llm/oauth/start") {
       pruneExpiredOauthSessions();
       if (running) {
@@ -3219,7 +3331,7 @@ async function cmdInstall(args) {
           ok: false,
           error: "oauth_url_timeout",
           message:
-            "OpenClaw did not print a ChatGPT sign-in URL in time. Run `openclaw models auth login --provider openai-codex` in a terminal on this machine, then use the checkbox below.",
+            "OpenClaw did not provide a ChatGPT sign-in URL in time. Try again.",
         });
       }, 45_000);
 
@@ -3229,7 +3341,17 @@ async function cmdInstall(args) {
         if (!m || !m[0]) return;
         clearTimeout(urlTimeout);
         responded = true;
-        oauthSessions.set(sessionId, { child, createdAt: Date.now(), submitted: false });
+        oauthSessions.set(sessionId, {
+          child,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          status: "awaiting_browser_callback",
+          authUrl: m[0],
+          message: "Sign in in this same browser. OpenClaw is waiting for callback...",
+          detail: "",
+          exitCode: null,
+          submitted: false,
+        });
         respondJson(200, { ok: true, sessionId, authUrl: m[0] });
       };
 
@@ -3258,14 +3380,25 @@ async function cmdInstall(args) {
             error: "oauth_login_exited_early",
             exitCode: code,
             message:
-              "OpenClaw exited before showing a sign-in URL. Try again; or run `openclaw models auth login --provider openai-codex` in a terminal on this machine and use the checkbox below.",
+              "OpenClaw exited before showing a sign-in URL. Start OAuth again and keep the flow on this same machine/browser.",
             detail: stripAnsi(combined).slice(-4000),
           });
           return;
         }
         const pending = oauthSessions.get(sessionId);
-        if (pending && !pending.submitted) {
-          oauthSessions.delete(sessionId);
+        if (pending) {
+          pending.child = null;
+          pending.updatedAt = Date.now();
+          pending.exitCode = typeof code === "number" ? code : null;
+          pending.detail = stripAnsi(combined).slice(-4000);
+          if (code === 0) {
+            pending.status = "succeeded";
+            pending.message = "ChatGPT OAuth completed successfully.";
+          } else {
+            pending.status = "failed";
+            pending.message =
+              "OpenClaw OAuth did not complete. Try again — make sure you continue in the same browser that opened the sign-in link.";
+          }
         }
       });
       return;
@@ -3522,12 +3655,21 @@ async function cmdInstall(args) {
     server.listen(defaults.port, "127.0.0.1", resolve);
   });
 
+  // Start the OAuth callback proxy on port 1455 early so Cursor/VSCode
+  // auto-forwards it to the user's laptop before the OAuth flow begins.
+  startCallbackProxy();
+  if (oauthCallbackProxy) {
+    printInfo(`OAuth callback proxy listening on http://127.0.0.1:1455`);
+  }
+
   const url = `http://127.0.0.1:${defaults.port}`;
   printSuccess(`Installer wizard is running at ${url}`);
   if (!openBrowser(url)) {
     printInfo(`Open this URL in your browser: ${url}`);
   }
   printInfo("Press Ctrl+C to stop the wizard server.");
+  printInfo(`If you are on a remote VPS, forward both ports from your local machine:`);
+  printInfo(`  ssh -L ${defaults.port}:127.0.0.1:${defaults.port} -L 1455:127.0.0.1:1455 <user>@<your-vps>`);
 }
 
 async function cmdTestSession(args) {
