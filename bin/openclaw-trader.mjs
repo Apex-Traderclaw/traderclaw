@@ -2082,6 +2082,12 @@ function wizardHtml(defaults) {
       .oauth-row input[readonly] { flex:1 1 280px; font-size:12px; }
       .oauth-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
       .oauth-actions button.secondary { background:#334a87; }
+      .oauth-terminal-box { background:#0a1f2e; border:1px solid #2a7a6a; border-radius:10px; padding:14px; margin-top:8px; }
+      .oauth-terminal-box ol { margin:8px 0 0 18px; padding:0; color:#c5d7f5; font-size:13px; line-height:1.55; }
+      .oauth-terminal-box li { margin-bottom:6px; }
+      .oauth-details { margin-top:14px; border:1px solid #2a3f6a; border-radius:10px; padding:10px 14px 14px; background:#0a1224; }
+      .oauth-details summary { list-style-position: outside; padding:4px 0; color:#b8cff5; font-weight:600; font-size:14px; }
+      .oauth-details[open] summary { margin-bottom:8px; }
       .ok-banner { color:#78f0a9; font-size:13px; margin-top:8px; }
       .err-banner { color:#ff6b6b; font-size:13px; margin-top:8px; }
     </style>
@@ -2129,36 +2135,53 @@ function wizardHtml(defaults) {
           <p class="muted">Written to OpenClaw <code>config.env</code> for the selected provider. If you do not choose a model manually, the installer picks a safe default.</p>
         </div>
         <div style="margin-top:12px;" id="llmOauthBlock" class="hidden">
-          <p class="muted" style="margin-bottom:10px;">
-            Follow the flow below to sign in with ChatGPT and submit your login to OpenClaw.
+          <p class="muted" style="margin-bottom:12px;">
+            <strong>Why doesn’t OpenClaw “just ask for a link” in the terminal?</strong> It does not need to. In the usual setup, you run OpenClaw’s login on the <strong>same machine</strong> where OpenClaw runs: ChatGPT sends your browser to <code>http://localhost:1455/…</code> and OpenClaw <strong>receives that callback automatically</strong> — no copying from the address bar. You only need to paste a long callback URL when your <strong>browser is on another computer</strong> than the one running OpenClaw (for example, you opened the sign-in page on your laptop but OpenClaw is on a VPS).
           </p>
-          <div class="oauth-flow">
-            <strong style="color:#9ee6ff;">Guided sign-in (recommended)</strong>
+          <div class="oauth-terminal-box">
+            <strong style="color:#8ef5d0;">Recommended: sign in from a terminal on this machine</strong>
             <ol>
-              <li>Click <strong>Get ChatGPT sign-in link</strong> — we run the same command as OpenClaw and show the long <code>https://auth.openai.com/oauth/authorize?…</code> URL here.</li>
-              <li>Open that URL in your <strong>local</strong> browser (on your PC if this is SSH), sign in with ChatGPT.</li>
-              <li>After login, copy either the <strong>full URL</strong> from the address bar or the <strong>code</strong> from the prompt, and paste into the box below.</li>
-              <li>Click <strong>Submit to OpenClaw</strong>. When it succeeds, you can start installation — no need to guess what to paste.</li>
+              <li>Copy the command below (or type it).</li>
+              <li>Run it in a normal terminal on <strong>this</strong> host. Your browser may open; sign in with ChatGPT and approve access.</li>
+              <li>When the command finishes successfully, check <strong>“ChatGPT login is done”</strong> below — you do <strong>not</strong> need to paste a callback URL for this path.</li>
             </ol>
-            <div class="oauth-actions">
-              <button type="button" id="oauthGetLinkBtn" class="secondary">1. Get ChatGPT sign-in link</button>
-              <button type="button" id="oauthSubmitBtn" class="secondary" disabled>3. Submit to OpenClaw</button>
+            <div class="oauth-row" style="margin-top:12px;">
+              <input type="text" id="oauthTerminalCmdDisplay" readonly value="openclaw models auth login --provider openai-codex" style="flex:1 1 320px; font-size:13px;" />
+              <button type="button" id="oauthCopyTerminalCmdBtn" class="secondary">Copy command</button>
             </div>
-            <div id="oauthUrlRow" class="oauth-row hidden">
-              <label style="flex:1 1 100%; font-size:12px; color:#9cb0de;">Sign-in URL (open this in your browser — this is not what you paste back)</label>
-              <input type="text" id="oauthUrlDisplay" readonly placeholder="Click “Get ChatGPT sign-in link” first" />
-              <button type="button" id="oauthCopyUrlBtn" class="secondary" disabled>Copy URL</button>
-              <a id="oauthOpenUrlBtn" class="secondary" href="#" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:10px 14px;border-radius:8px;background:#2d7dff;color:#fff;text-decoration:none;font-weight:600;">Open in browser</a>
-            </div>
-            <p id="oauthFlowStatus" class="muted" style="margin-top:8px;" aria-live="polite"></p>
           </div>
-          <label style="margin-top:14px;">Paste redirect URL or authorization code (step 2 → 3)</label>
-          <textarea id="llmOAuthPaste" autocomplete="off" placeholder="After signing in at ChatGPT, paste here: the full http://127.0.0.1:1455/... or http://localhost:1455/... URL from your browser, OR the code string if the prompt asks for the code only."></textarea>
-          <label style="display:flex; align-items:flex-start; gap:8px; font-size:13px; color:#9cb0de; margin-top:8px; cursor:pointer;">
+          <label style="display:flex; align-items:flex-start; gap:10px; font-size:14px; color:#e8eef9; margin-top:16px; cursor:pointer;">
             <input id="llmOAuthSkipLogin" type="checkbox" style="width:auto; margin-top:3px;" />
-            <span>I already completed <code>openclaw models auth login --provider openai-codex</code> in a terminal on <strong>this</strong> machine (skip the buttons above)</span>
+            <span><strong>ChatGPT login is done</strong> — I ran the command above in a terminal on <strong>this</strong> machine and OpenClaw completed without errors.</span>
           </label>
-          <p class="muted">SSH tip: the browser must reach your machine for localhost callbacks; if that fails, run the same login command in a desktop terminal on this host, then use the checkbox.</p>
+          <details id="oauthWizardAltDetails" class="oauth-details">
+            <summary>Alternative: no shell on this server — sign in using this browser only</summary>
+            <p class="muted" style="margin-top:8px;">
+              Use this when you <strong>cannot</strong> run a terminal on the machine where this wizard runs (typical remote VPS + browser on your laptop). You will copy the <strong>full URL from the address bar</strong> after ChatGPT redirects — even if the page shows “connection refused”, the URL in the bar is still valid.
+            </p>
+            <div class="oauth-flow" style="margin-top:10px;">
+              <strong style="color:#9ee6ff;">Steps</strong>
+              <ol>
+                <li>Click <strong>Get ChatGPT sign-in link</strong> — we run the same OpenClaw login process and show the <code>https://auth.openai.com/oauth/authorize?…</code> URL.</li>
+                <li>Open that URL, sign in, and let the browser redirect toward <code>localhost:1455</code>.</li>
+                <li>Paste the <strong>entire callback URL</strong> from the address bar into the box below, then click <strong>Submit to OpenClaw</strong>.</li>
+              </ol>
+              <div class="oauth-actions">
+                <button type="button" id="oauthGetLinkBtn" class="secondary">Get ChatGPT sign-in link</button>
+                <button type="button" id="oauthSubmitBtn" class="secondary" disabled>Submit to OpenClaw</button>
+              </div>
+              <div id="oauthUrlRow" class="oauth-row hidden">
+                <label style="flex:1 1 100%; font-size:12px; color:#9cb0de;">Sign-in URL (open in browser — not what you paste back)</label>
+                <input type="text" id="oauthUrlDisplay" readonly placeholder="Click “Get ChatGPT sign-in link” first" />
+                <button type="button" id="oauthCopyUrlBtn" class="secondary" disabled>Copy URL</button>
+                <a id="oauthOpenUrlBtn" class="secondary" href="#" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:10px 14px;border-radius:8px;background:#2d7dff;color:#fff;text-decoration:none;font-weight:600;">Open in browser</a>
+              </div>
+              <p id="oauthFlowStatus" class="muted" style="margin-top:8px;" aria-live="polite"></p>
+            </div>
+            <label style="display:block; margin-top:14px;">Paste redirect URL or authorization code</label>
+            <textarea id="llmOAuthPaste" autocomplete="off" placeholder="Example: http://localhost:1455/auth/callback?code=… (full URL from address bar). You can paste only the code if that is all you have."></textarea>
+          </details>
+          <p class="muted" style="margin-top:12px;"><strong>SSH tip:</strong> To make your laptop’s browser hit OpenClaw on the server, you can run <code>ssh -L 1455:127.0.0.1:1455 user@this-server</code> before signing in so <code>localhost:1455</code> on your machine forwards to the wizard host.</p>
         </div>
         <p class="muted" id="llmLoadState" aria-live="polite">Loading LLM provider catalog...</p>
         <div id="llmLoadingHint" class="loading-hint" role="status" aria-live="polite">
@@ -2631,7 +2654,7 @@ function wizardHtml(defaults) {
             stateEl.textContent = "blocked";
             readyEl.textContent = "";
             manualEl.textContent =
-              "Codex OAuth: use “Get ChatGPT sign-in link” and “Submit to OpenClaw”, paste a redirect URL/code, or check the box if you already ran openclaw models auth login on this machine.";
+              "Codex OAuth: check “ChatGPT login is done” after running the terminal command on this machine, or expand “Alternative” and use Get link + paste + Submit, or finish wizard Submit if you already used those buttons.";
             return;
           }
         } else if (!payload.llmProvider || !payload.llmCredential) {
@@ -2899,7 +2922,12 @@ function wizardHtml(defaults) {
             if (!res.ok) {
               if (oauthFlowStatus) {
                 oauthFlowStatus.className = "err-banner";
-                oauthFlowStatus.textContent = data.message || data.error || "Could not get sign-in URL.";
+                let errText = data.message || data.error || "Could not get sign-in URL.";
+                if (data.detail) {
+                  const d = String(data.detail).replace(/\s+/g, " ").trim();
+                  errText += d ? " " + d.slice(0, 700) : "";
+                }
+                oauthFlowStatus.textContent = errText;
               }
               oauthGetLinkBtn.disabled = false;
               return;
@@ -2913,10 +2941,12 @@ function wizardHtml(defaults) {
               oauthOpenUrlBtn.removeAttribute("aria-disabled");
             }
             if (oauthSubmitBtn) oauthSubmitBtn.disabled = false;
+            const altDetails = document.getElementById("oauthWizardAltDetails");
+            if (altDetails) altDetails.open = true;
             if (oauthFlowStatus) {
               oauthFlowStatus.className = "muted";
               oauthFlowStatus.textContent =
-                "Open this URL in your browser (on your PC if you use SSH). After ChatGPT sign-in, paste the localhost redirect URL or the code, then click Submit.";
+                "Open this URL in your browser. After ChatGPT redirects, copy the full callback URL from the address bar (localhost:1455?code=…) — even if the page says connection refused — then paste it below and click Submit.";
             }
           } catch (err) {
             if (oauthFlowStatus) {
@@ -2941,7 +2971,7 @@ function wizardHtml(defaults) {
           if (!oauthSessionId) {
             if (oauthFlowStatus) {
               oauthFlowStatus.className = "err-banner";
-              oauthFlowStatus.textContent = "Click “Get ChatGPT sign-in link” first, or use the “already completed login in terminal” checkbox.";
+              oauthFlowStatus.textContent = "Click “Get ChatGPT sign-in link” first, or check “ChatGPT login is done” if you already signed in via the terminal command.";
             }
             return;
           }
@@ -2998,6 +3028,26 @@ function wizardHtml(defaults) {
             oauthCopyUrlBtn.textContent = "Copy failed";
             setTimeout(() => {
               oauthCopyUrlBtn.textContent = "Copy URL";
+            }, 1500);
+          }
+        });
+      }
+
+      const oauthTerminalCmdDisplay = document.getElementById("oauthTerminalCmdDisplay");
+      const oauthCopyTerminalCmdBtn = document.getElementById("oauthCopyTerminalCmdBtn");
+      if (oauthCopyTerminalCmdBtn && oauthTerminalCmdDisplay) {
+        oauthCopyTerminalCmdBtn.addEventListener("click", async () => {
+          const v = oauthTerminalCmdDisplay.value || "openclaw models auth login --provider openai-codex";
+          try {
+            await navigator.clipboard.writeText(v);
+            oauthCopyTerminalCmdBtn.textContent = "Copied";
+            setTimeout(() => {
+              oauthCopyTerminalCmdBtn.textContent = "Copy command";
+            }, 1500);
+          } catch {
+            oauthCopyTerminalCmdBtn.textContent = "Copy failed";
+            setTimeout(() => {
+              oauthCopyTerminalCmdBtn.textContent = "Copy command";
             }, 1500);
           }
         });
