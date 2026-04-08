@@ -10,7 +10,9 @@ Read MEMORY.md (auto-loaded). If empty or missing wallet/tier/strategy → run M
 
 1. **MEMORY.md** (already in context): tier, wallet, mode, strategy version, watchlist, regime canary
 2. **Daily log** (`memory/YYYY-MM-DD.md`, auto-loaded): what already happened today — don't repeat work
-3. **Server-side memory** — call `solana_memory_search` for: `"source_reputation"`, `"strategy_drift_warning"`, `"pre_trade_rationale"`, `"meta_rotation"`
+3. **Context engine** (automatic): `[TraderClaw Trading Context]` is injected into your system prompt at session start with current state, last 3 decisions, and entitlement limits. You do not need to call anything — just read it when present.
+4. **Server-side memory** — call `solana_memory_search` for: `"source_reputation"`, `"strategy_drift_warning"`, `"pre_trade_rationale"`, `"meta_rotation"`
+5. **QMD recall** — before analyzing any candidate, call `memory_search` with the token symbol or contract address. If you've seen this token before, use prior analysis to: skip repeat work, apply re-entry penalties, catch repeat rug patterns, and reference prior confidence scores.
 
 ---
 
@@ -398,5 +400,5 @@ NEXT CYCLE: [1 sentence — what you're watching for]
 | API endpoint reference | refs/api-reference.md |
 | Wallet proof vs signup | SKILL.md § Wallet proof vs signup |
 | Strategy evolution details | refs/strategy-evolution.md |
-| Cron job definitions | refs/cron-jobs.md |
+| Cron job definitions | refs/cron-jobs.md (10 consolidated jobs, ~39 sessions/day) |
 | Position management details | refs/position-management.md |

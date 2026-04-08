@@ -693,6 +693,14 @@ function buildOpenClawCronStoreJob(def) {
     .split("-")
     .map((w) => (w.length ? w.charAt(0).toUpperCase() + w.slice(1) : w))
     .join(" ");
+  const payload = {
+    kind: "agentTurn",
+    message: def.message,
+    lightContext: def.lightContext !== undefined ? def.lightContext : true,
+  };
+  if (def.model) payload.model = def.model;
+  if (def.thinking !== undefined) payload.thinking = def.thinking;
+  const delivery = def.delivery || { mode: "announce", channel: "last", bestEffort: true };
   return {
     id: def.id,
     name: nameFromId.length <= 60 ? nameFromId : nameFromId.slice(0, 59) + "…",
@@ -701,13 +709,8 @@ function buildOpenClawCronStoreJob(def) {
     sessionTarget: "isolated",
     wakeMode: "now",
     agentId: def.agentId,
-    payload: {
-      kind: "agentTurn",
-      message: def.message,
-      lightContext: true,
-    },
-    // OpenClaw: "none" = no channel post; announce + last = summary to user's last chat (see OpenClaw cron delivery docs)
-    delivery: { mode: "announce", channel: "last", bestEffort: true },
+    payload,
+    delivery,
     state: {},
   };
 }
@@ -806,66 +809,74 @@ function traderCronPrescriptiveJobs(agentId) {
   return [
     {
       id: "alpha-scan",
-      schedule: "0 * * * *",
-      agentId,
-      message:
-        "CRON_JOB: alpha_scan — Call solana_scan_launches to find new token launches from the last hour. For each candidate, call solana_token_snapshot to check price, volume, and age. Filter for: 24h volume above 50000 USD, market cap above 10000 USD. For tokens that pass, call solana_token_holders to check holder distribution (skip if top holder owns more than 30 percent), then solana_token_risk to check for mint/freeze authority (hard skip if present). If a token passes all checks, use solana_trade_precheck and consider trade execution using solana_trade_execute. Log all scanned tokens and results using solana_memory_write. Do not ask questions.",
-      enabled: true,
-    },
-    {
-      id: "dead-money-sweep",
-      schedule: "0 */2 * * *",
-      agentId,
-      message:
-        "CRON_JOB: dead_money_sweep — Check all open LOCAL_MANAGED positions for dead money. Exit stale positions. Tag as dead_money.",
-      enabled: true,
-    },
-    {
-      id: "risk-audit",
-      schedule: "30 */2 * * *",
-      agentId,
-      message:
-        "CRON_JOB: portfolio_risk_audit\n\nStep 1: Call solana_capital_status to get wallet balance and portfolio value.\n\nStep 2: Call solana_positions to get all open positions with entry prices and sizes.\n\nStep 3: For each open position, call solana_token_snapshot to get current price, 24h volume, and market cap.\n\nStep 4: Run concentration check — flag WARNING if any single position exceeds 30 percent of total portfolio value, CRITICAL if above 50 percent.\n\nStep 5: Run exposure check — flag WARNING if total exposure exceeds 50 percent of wallet balance, CRITICAL if above 75 percent.\n\nStep 6: Run drawdown check — CRITICAL if portfolio drawdown exceeds 25 percent from peak capital.\n\nStep 7: Calculate portfolio heat (sum of all position risk scores). Flag WARNING above 50 percent, CRITICAL above 75 percent.\n\nStep 8: Run liquidity check — WARNING if any position exceeds 2 percent of its pool depth.\n\nStep 9: Check solana_killswitch_status.\n\nStep 10: Write risk report via solana_memory_write with tag 'risk_audit'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
-      enabled: true,
-    },
-    {
-      id: "source-reputation-recalc",
       schedule: "0 */3 * * *",
       agentId,
       message:
-        "CRON_JOB: source_reputation_recalc\n\nStep 1: Call solana_alpha_sources to get per-source performance stats (signal count, conversion rate, avg score).\n\nStep 2: Call solana_alpha_history to get recent signal history with scores and source identifiers.\n\nStep 3: Call solana_trades to get recent trade outcomes. Cross-reference each trade back to its originating signal source.\n\nStep 4: For each source, calculate: win rate (trades that hit TP vs SL), average PnL per trade, signal-to-trade conversion rate.\n\nStep 5: Assign tier rankings:\n- TIER-1 (LOCK): Win rate above 60% AND 5+ trades AND positive avg PnL\n- TIER-2 (CONDITIONAL): Win rate 30-60% OR fewer than 5 trades\n- TIER-3 (BLACKLIST): Win rate below 30% with 5+ trades\n\nStep 6: Write scorecard to memory using solana_memory_write with tag 'source_reputation'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        "CRON_JOB: alpha_scan\n\nScan new launches, filter, score, log alpha. Tools: solana_scan_launches → filter (vol>30K, mcap>10K, liq>5K) → solana_token_snapshot for survivors → quality filter (top10 <50%, deployer <3 abandoned, has social) → score 0-100 → solana_alpha_log for 65+. Summarize results.",
+      model: "anthropic/claude-sonnet-4-20250514",
+      thinking: false,
+      lightContext: true,
+      delivery: { mode: "announce", channel: "last", bestEffort: true },
+      enabled: true,
+    },
+    {
+      id: "portfolio-health",
+      schedule: "0 */4 * * *",
+      agentId,
+      message:
+        "CRON_JOB: portfolio_health\n\nCombined dead-money + whale + risk audit. solana_capital_status + solana_positions → solana_token_snapshot per position → dead money exit (loss>40% or 90min+down+low vol) → whale flags (>5% supply moves) → risk checks (concentration/drawdown/exposure) → sell if CRITICAL → solana_memory_write tag 'portfolio_health'.",
+      model: "anthropic/claude-sonnet-4-20250514",
+      thinking: false,
+      lightContext: true,
+      delivery: { mode: "announce", channel: "last", bestEffort: true },
+      enabled: true,
+    },
+    {
+      id: "trust-refresh",
+      schedule: "0 */8 * * *",
+      agentId,
+      message:
+        "CRON_JOB: trust_refresh\n\nCombined source + deployer trust. solana_source_trust_refresh + solana_deployer_trust_refresh → solana_alpha_sources + solana_trades for win rates → solana_source_trust_get + solana_deployer_trust_get, flag <30 → solana_memory_write tag 'trust_refresh'.",
+      model: "anthropic/claude-haiku-4-5",
+      thinking: false,
+      lightContext: true,
+      delivery: { mode: "none" },
       enabled: true,
     },
     {
       id: "meta-rotation",
-      schedule: "30 */3 * * *",
+      schedule: "30 */8 * * *",
       agentId,
       message:
-        "CRON_JOB: meta_rotation_analysis\n\nStep 0: Call x_search_tweets with queries: 'solana memecoin', 'pump fun gem', 'sol alpha'. Note which token names and narratives appear most frequently in the last 3 hours. Use this social signal to validate or challenge the on-chain data in the following steps.\n\nStep 1: Call solana_scan_launches to get recent token launches (last 3-6 hours).\n\nStep 2: Categorize each token by narrative cluster: AI/Agents, Animal Memes, Political, Celebrity/IP, DeFi, Gaming, Culture/Humor, Other.\n\nStep 3: For each cluster, aggregate: token count, total volume, average market cap.\n\nStep 4: Call solana_memory_search for 'meta_rotation' to compare with prior scan.\n\nStep 5: Classify each narrative: GAINING, SATURATED, COOLING, DORMANT.\n\nStep 6: Write rotation report via solana_memory_write with tag 'meta_rotation'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        "CRON_JOB: meta_rotation_analysis\n\nx_search_tweets trending topics → solana_scan_launches → categorize by narrative cluster → per-cluster metrics → compare vs solana_memory_search tag 'meta_rotation' → declare hot/fading clusters → solana_memory_write tag 'meta_rotation'.",
+      model: "anthropic/claude-sonnet-4-20250514",
+      thinking: false,
+      lightContext: true,
+      delivery: { mode: "announce", channel: "last", bestEffort: true },
       enabled: true,
     },
     {
       id: "strategy-evolution",
-      schedule: "0 */4 * * *",
+      schedule: "0 6 * * *",
       agentId,
       message:
-        "CRON_JOB: strategy_evolution — Review trade journal, compute weight adjustments, update strategy. Only update if sufficient closed trades have accumulated.",
+        "CRON_JOB: strategy_evolution\n\nDaily strategy review. solana_journal_summary — if <10 closed trades since last evolution, log 'insufficient data' and stop. Otherwise: solana_trades to bucket by confidence tier → solana_strategy_state for current weights → analyze tier performance → solana_strategy_update with conservative adjustments (max 10% per weight per cycle) → solana_memory_write tag 'strategy_evolution'.",
+      model: "anthropic/claude-sonnet-4-20250514",
+      thinking: true,
+      lightContext: false,
+      delivery: { mode: "announce", channel: "last", bestEffort: true },
       enabled: true,
     },
     {
       id: "subscription-cleanup",
-      schedule: "15 * * * *",
+      schedule: "15 */8 * * *",
       agentId,
       message:
-        "CRON_JOB: subscription_cleanup\n\nStep 1: Call solana_positions to get all open positions and extract their contract addresses.\n\nStep 2: Call solana_bitquery_subscriptions to list all active Bitquery subscriptions. If this call returns an AUTH_SCOPE_MISSING error, log the error to memory and stop gracefully — do not retry or error out.\n\nStep 3: For each active subscription, check if the associated token CA still has an open position. Build two lists: 'matched' (has position) and 'orphaned' (no position).\n\nStep 4: Unsubscribe orphans via solana_bitquery_unsubscribe.\n\nStep 5: Reopen subscriptions nearing 24h expiry via solana_bitquery_subscription_reopen.\n\nStep 6: Write summary via solana_memory_write with tag 'subscription_cleanup'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
-      enabled: true,
-    },
-    {
-      id: "whale-watch",
-      schedule: "45 */2 * * *",
-      agentId,
-      message:
-        "CRON_JOB: whale_activity_scan — Scan for large wallet movements, deployer activity, accumulation patterns. Detect smart money consensus and fresh wallet surges.",
+        "CRON_JOB: subscription_cleanup\n\nsolana_positions for open CAs → solana_bitquery_subscriptions for active subs (if AUTH_SCOPE_MISSING, log and stop) → match subs to positions → solana_bitquery_unsubscribe orphaned subs → solana_memory_write tag 'subscription_cleanup'. Summarize before/after counts.",
+      model: "anthropic/claude-haiku-4-5",
+      thinking: false,
+      lightContext: true,
+      delivery: { mode: "announce", channel: "last", bestEffort: true },
       enabled: true,
     },
     {
@@ -873,7 +884,47 @@ function traderCronPrescriptiveJobs(agentId) {
       schedule: "0 4 * * *",
       agentId,
       message:
-        "CRON_JOB: daily_performance_report — Calculate daily PnL, aggregate win/loss stats, source reputation summary, write comprehensive memory entry.",
+        "CRON_JOB: daily_performance_report\n\nCompile 24h report. solana_journal_summary + solana_capital_status + solana_positions + solana_trades + solana_strategy_state → sections: Portfolio Summary, Trading Activity (count/win rate/PnL), Best/Worst Trades, Strategy State, Risk Metrics, Recommendations → solana_memory_write tag 'daily_report'. Deliver full report.",
+      model: "anthropic/claude-sonnet-4-20250514",
+      thinking: false,
+      lightContext: false,
+      delivery: { mode: "announce", channel: "telegram" },
+      enabled: true,
+    },
+    {
+      id: "intelligence-lab-eval",
+      schedule: "0 16 * * *",
+      agentId,
+      message:
+        "CRON_JOB: intelligence_lab_eval\n\nsolana_candidate_get — if <20 labeled candidates, log 'insufficient data' and exit. Otherwise: solana_evaluation_report → solana_model_registry for challengers → solana_replay_eval if challenger exists → solana_model_promote if challenger beats champion by >5% F1 → solana_memory_write tag 'intelligence_lab'.",
+      model: "anthropic/claude-sonnet-4-20250514",
+      thinking: true,
+      lightContext: false,
+      delivery: { mode: "none" },
+      enabled: true,
+    },
+    {
+      id: "memory-trim",
+      schedule: "0 3 * * *",
+      agentId,
+      message:
+        "CRON_JOB: memory_trim\n\nsolana_memory_trim dryRun:true first → review → solana_memory_trim retentionDays:2 → solana_memory_write tag 'memory_trim' with summary.",
+      model: "anthropic/claude-haiku-4-5",
+      thinking: false,
+      lightContext: true,
+      delivery: { mode: "none" },
+      enabled: true,
+    },
+    {
+      id: "balance-watchdog",
+      schedule: "0 */2 * * *",
+      agentId,
+      message:
+        "Balance watchdog. 1) solana_capital_status 2) solana_positions 3) solana_context_snapshot_read 4) Compare real vs believed. If mismatch: solana_context_snapshot_write with corrected state, summarize changes. If match: reply WATCHDOG_OK.",
+      model: "anthropic/claude-haiku-4-5",
+      thinking: false,
+      lightContext: true,
+      delivery: { mode: "announce", channel: "telegram" },
       enabled: true,
     },
   ];
