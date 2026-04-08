@@ -858,7 +858,9 @@ async function cmdSetup(args) {
 
   const existingForRecovery = readConfig();
   const prevPlugin = getPluginConfig(existingForRecovery);
+  const prevSafe = prevPlugin && typeof prevPlugin === "object" ? { ...prevPlugin } : {};
   const pluginConfig = {
+    ...prevSafe,
     orchestratorUrl,
     walletId: null,
     apiKey,
@@ -2118,7 +2120,7 @@ function wizardHtml(defaults) {
             <input id="xAccessTokenMainSecret" type="password" autocomplete="off" />
           </div>
         </div>
-        <p class="muted">If you use X: create an app at <a href="https://developer.x.com" target="_blank" rel="noopener noreferrer">developer.x.com</a> with OAuth 1.0a Read and Write, and fill all four fields above (or leave all blank). Values are written to <code>openclaw.json</code> under the plugin <code>x</code> block.</p>
+        <p class="muted">If you use X: create an app at <a href="https://developer.x.com" target="_blank" rel="noopener noreferrer">developer.x.com</a> with OAuth 1.0a Read and Write, and fill all four fields above (or leave all blank). Values are written to <code>openclaw.json</code> at <code>plugins.entries.solana-trader.config.x</code> (consumer key/secret plus <code>profiles.main</code> and <code>profiles.solana-trader</code>, same tokens unless you set <code>X_ACCESS_TOKEN_SOLANA_TRADER</code> / <code>_SECRET</code>).</p>
       </div>
       <div class="card" id="startCard">
         <div class="grid">

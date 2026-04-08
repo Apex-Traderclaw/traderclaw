@@ -1188,13 +1188,23 @@ function seedXConfig(modeConfig, configPath = CONFIG_FILE, wizardOpts = {}) {
     entry.config.x.profiles = {};
   }
 
-  const agentIds = modeConfig.pluginId === "solana-trader-v2"
-    ? ["cto", "intern"]
-    : ["main"];
+  const agentIds =
+    modeConfig.pluginId === "solana-trader-v2"
+      ? ["cto", "intern"]
+      : modeConfig.pluginId === "solana-trader"
+        ? ["main", "solana-trader"]
+        : ["main"];
   let profilesFound = 0;
 
   for (const agentId of agentIds) {
-    const { at, ats } = getAccessPairForAgent(wizardOpts, agentId);
+    let { at, ats } = getAccessPairForAgent(wizardOpts, agentId);
+    if (
+      modeConfig.pluginId === "solana-trader"
+      && agentId === "solana-trader"
+      && (!at || !ats)
+    ) {
+      ({ at, ats } = getAccessPairForAgent(wizardOpts, "main"));
+    }
     if (at && ats) {
       entry.config.x.profiles[agentId] = { accessToken: at, accessTokenSecret: ats };
       profilesFound++;
