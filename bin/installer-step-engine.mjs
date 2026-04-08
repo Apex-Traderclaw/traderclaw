@@ -1595,15 +1595,37 @@ function configureOpenClawLlmModelPrimaryOnly({ provider, model }, configPath = 
 }
 
 /**
+ * Spawns `openclaw models auth login --provider openai-codex` with a pseudo-TTY when possible.
+ * The CLI often exits immediately when stdin/stdout are plain pipes (no TTY). On Unix, `script(1)`
+ * allocates a PTY so the same flow works as in an interactive terminal.
+ */
+export function spawnOpenClawCodexAuthLoginChild() {
+  const argv = ["models", "auth", "login", "--provider", "openai-codex"];
+  if (process.platform === "win32") {
+    return spawn("openclaw", argv, { stdio: ["pipe", "pipe", "pipe"], shell: false });
+  }
+  // `unbuffer` (expect package) runs the CLI under a PTY and forwards stdin for the paste step reliably.
+  // Plain `script` often does not forward Node's stdin to the inner openclaw process, which causes hangs until timeout.
+  if (commandExists("unbuffer")) {
+    return spawn("unbuffer", ["openclaw", ...argv], { stdio: ["pipe", "pipe", "pipe"], shell: false });
+  }
+  if (commandExists("script")) {
+    const cmdline = "openclaw models auth login --provider openai-codex";
+    return spawn("script", ["-q", "-c", cmdline, "/dev/null"], {
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: false,
+    });
+  }
+  return spawn("openclaw", argv, { stdio: ["pipe", "pipe", "pipe"], shell: false });
+}
+
+/**
  * Runs `openclaw models auth login --provider openai-codex` and feeds the pasted redirect URL or code on stdin
  * when the CLI prompts (with a timed fallback for non-interactive / SSH).
  */
 function runOpenClawCodexOAuthLogin(paste, emitLog) {
   return new Promise((resolve, reject) => {
-    const child = spawn("openclaw", ["models", "auth", "login", "--provider", "openai-codex"], {
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: false,
-    });
+    const child = spawnOpenClawCodexAuthLoginChild();
 
     let stdout = "";
     let stderr = "";
