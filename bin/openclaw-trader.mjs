@@ -2158,6 +2158,16 @@ function wizardHtml(defaults) {
               <button type="button" id="oauthRetryBtn" class="secondary hidden">Try sign-in again</button>
             </div>
             <p id="oauthFlowStatus" class="muted" style="margin-top:8px;" aria-live="polite">Choose OAuth and wait a moment. We will prepare your sign-in automatically.</p>
+            <div id="oauthFallbackPaste" class="hidden" style="margin-top:12px;padding:12px;background:#111827;border:1px solid #334a87;border-radius:8px;">
+              <p class="muted" style="margin:0 0 8px;font-size:13px;color:#ffcc70;">
+                <strong>Redirect didn't reach us?</strong> Copy the full URL from the error page in your browser (it starts with <code>http://localhost:1455/auth/callback?code=…</code>) and paste it below.
+              </p>
+              <div style="display:flex;gap:8px;">
+                <input id="oauthFallbackUrlInput" type="text" placeholder="Paste the full localhost:1455/auth/callback?code=… URL here" style="flex:1;font-size:12px;padding:8px 10px;border-radius:6px;border:1px solid #334a87;background:#0a1224;color:#e0e8ff;">
+                <button type="button" id="oauthFallbackSubmitBtn" class="secondary" style="padding:8px 14px;white-space:nowrap;">Submit URL</button>
+              </div>
+              <p id="oauthFallbackError" class="muted hidden" style="margin:6px 0 0;font-size:12px;color:#ff6b6b;"></p>
+            </div>
           </div>
         </div>
         <p class="muted" id="llmLoadState" aria-live="polite">Loading LLM provider catalog...</p>
@@ -2344,6 +2354,11 @@ function wizardHtml(defaults) {
       const oauthStepOpen = document.getElementById("oauthStepOpen");
       const oauthStepComplete = document.getElementById("oauthStepComplete");
       const oauthStepVerify = document.getElementById("oauthStepVerify");
+      const oauthFallbackPaste = document.getElementById("oauthFallbackPaste");
+      const oauthFallbackUrlInput = document.getElementById("oauthFallbackUrlInput");
+      const oauthFallbackSubmitBtn = document.getElementById("oauthFallbackSubmitBtn");
+      const oauthFallbackError = document.getElementById("oauthFallbackError");
+      let oauthFallbackTimer = null;
 
       function setOauthStep(stepEl, mode) {
         if (!stepEl) return;
@@ -2402,8 +2417,25 @@ function wizardHtml(defaults) {
         oauthSessionId = null;
       }
 
+      function hideFallbackPaste() {
+        if (oauthFallbackPaste) oauthFallbackPaste.classList.add("hidden");
+        if (oauthFallbackUrlInput) oauthFallbackUrlInput.value = "";
+        if (oauthFallbackError) { oauthFallbackError.textContent = ""; oauthFallbackError.classList.add("hidden"); }
+        if (oauthFallbackTimer) { clearTimeout(oauthFallbackTimer); oauthFallbackTimer = null; }
+      }
+
+      function showFallbackPasteAfterDelay(ms) {
+        hideFallbackPaste();
+        oauthFallbackTimer = setTimeout(() => {
+          if (oauthFallbackPaste && oauthSessionId && oauthOpenedInBrowser && !oauthWizardLoginDone) {
+            oauthFallbackPaste.classList.remove("hidden");
+          }
+        }, ms);
+      }
+
       function resetOauthWizardState() {
         stopOauthPolling();
+        hideFallbackPaste();
         oauthSessionId = null;
         oauthWizardLoginDone = false;
         oauthStartInFlight = false;
@@ -2526,6 +2558,7 @@ function wizardHtml(defaults) {
           if (state === "succeeded") {
             oauthWizardLoginDone = true;
             oauthSessionId = null;
+            hideFallbackPaste();
             setOauthStep(oauthStepPrepare, "done");
             setOauthStep(oauthStepOpen, "done");
             setOauthStep(oauthStepComplete, "done");
@@ -3068,7 +3101,49 @@ function wizardHtml(defaults) {
           setOauthStep(oauthStepOpen, "done");
           setOauthStep(oauthStepComplete, "active");
           setOauthStep(oauthStepVerify, "active");
-          setOauthStatus("Complete ChatGPT approval in this same browser, then return here. We detect completion automatically.");
+          setOauthStatus("Complete ChatGPT approval in this browser, then return here. We detect completion automatically.");
+          showFallbackPasteAfterDelay(15_000);
+        });
+      }
+
+      if (oauthFallbackSubmitBtn) {
+        oauthFallbackSubmitBtn.addEventListener("click", async () => {
+          const raw = (oauthFallbackUrlInput && oauthFallbackUrlInput.value || "").trim();
+          if (!raw || !raw.includes("code=")) {
+            if (oauthFallbackError) {
+              oauthFallbackError.textContent = "Paste the full URL from the browser address bar. It must contain code=…";
+              oauthFallbackError.classList.remove("hidden");
+            }
+            return;
+          }
+          if (oauthFallbackError) oauthFallbackError.classList.add("hidden");
+          oauthFallbackSubmitBtn.disabled = true;
+          oauthFallbackSubmitBtn.textContent = "Submitting…";
+          try {
+            const res = await fetch("/api/llm/oauth/submit-callback-url", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ sessionId: oauthSessionId, callbackUrl: raw }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.ok) {
+              hideFallbackPaste();
+              setOauthStatus("Callback received! Waiting for OpenClaw to finish…", false);
+            } else {
+              if (oauthFallbackError) {
+                oauthFallbackError.textContent = data.message || data.error || "Could not submit the URL. Try again.";
+                oauthFallbackError.classList.remove("hidden");
+              }
+            }
+          } catch (err) {
+            if (oauthFallbackError) {
+              oauthFallbackError.textContent = err.message || "Request failed.";
+              oauthFallbackError.classList.remove("hidden");
+            }
+          } finally {
+            oauthFallbackSubmitBtn.disabled = false;
+            oauthFallbackSubmitBtn.textContent = "Submit URL";
+          }
         });
       }
 
@@ -3483,6 +3558,41 @@ async function cmdInstall(args) {
           finish(500, { ok: false, error: "stdin_write_failed", message: err?.message || String(err) });
         }
       });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/llm/oauth/submit-callback-url") {
+      const body = await parseJsonBody(req).catch(() => ({}));
+      const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+      const callbackUrl = typeof body.callbackUrl === "string" ? body.callbackUrl.trim() : "";
+      if (!callbackUrl || !callbackUrl.includes("code=")) {
+        respondJson(400, { ok: false, error: "invalid_url", message: "URL must contain a code= parameter." });
+        return;
+      }
+      const s = sessionId ? oauthSessions.get(sessionId) : findActiveOauthSession();
+      if (!s || !s.child) {
+        respondJson(404, { ok: false, error: "no_active_session", message: "No active OAuth session. Click Try sign-in again." });
+        return;
+      }
+      try {
+        if (s.child.stdin && !s.child.stdin.writableEnded && !s.child.stdin.destroyed) {
+          s.child.stdin.write(`${callbackUrl}\n`, () => {
+            setTimeout(() => {
+              try {
+                if (s.child && s.child.stdin && !s.child.stdin.destroyed && !s.child.stdin.writableEnded) {
+                  s.child.stdin.end();
+                }
+              } catch { /* ignore */ }
+            }, 100);
+          });
+          s.updatedAt = Date.now();
+          respondJson(200, { ok: true, message: "Callback URL submitted. Waiting for OpenClaw to complete…" });
+        } else {
+          respondJson(500, { ok: false, error: "stdin_closed", message: "OpenClaw process stdin is closed. Click Try sign-in again." });
+        }
+      } catch (err) {
+        respondJson(500, { ok: false, error: "write_error", message: err.message || "Failed to write to OpenClaw." });
+      }
       return;
     }
 
