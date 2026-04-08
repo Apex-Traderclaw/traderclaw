@@ -6,7 +6,7 @@ import { dirname, join } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { homedir } from "os";
 import { randomUUID, createPrivateKey, sign as cryptoSign } from "crypto";
-import { execFile, execSync, spawn } from "child_process";
+import { execFile, execSync } from "child_process";
 import { promisify } from "util";
 import { createServer } from "http";
 import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
@@ -3024,7 +3024,8 @@ async function cmdInstall(args) {
   }
 
   const defaults = parseInstallWizardArgs(args);
-  const { createInstallerStepEngine, assertWizardXCredentials } = await import("./installer-step-engine.mjs");
+  const { createInstallerStepEngine, assertWizardXCredentials, spawnOpenClawCodexAuthLoginChild } =
+    await import("./installer-step-engine.mjs");
   const modeConfig = {
     pluginPackage: "solana-traderclaw",
     pluginId: "solana-trader",
@@ -3151,10 +3152,7 @@ async function cmdInstall(args) {
       }
 
       const sessionId = randomUUID();
-      const child = spawn("openclaw", ["models", "auth", "login", "--provider", "openai-codex"], {
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: false,
-      });
+      const child = spawnOpenClawCodexAuthLoginChild();
 
       let combined = "";
       let responded = false;
@@ -3209,7 +3207,9 @@ async function cmdInstall(args) {
             ok: false,
             error: "oauth_login_exited_early",
             exitCode: code,
-            detail: combined.slice(-4000),
+            message:
+              "OpenClaw exited before showing a sign-in URL. Try again; or run `openclaw models auth login --provider openai-codex` in a terminal on this machine and use the checkbox below.",
+            detail: stripAnsi(combined).slice(-4000),
           });
           return;
         }
@@ -3256,7 +3256,7 @@ async function cmdInstall(args) {
             error: "oauth_submit_timeout",
             message: "Login did not finish in time. Try again or complete login in a normal terminal.",
           });
-        }, 120_000);
+        }, 300_000);
 
         child.once("close", (code) => {
           if (code === 0) {
@@ -3272,7 +3272,29 @@ async function cmdInstall(args) {
         });
 
         try {
-          child.stdin.write(`${paste}\n`);
+          const line = `${paste}\n`;
+          if (child.stdin?.writableEnded || child.stdin?.destroyed) {
+            killOauthSession(sessionId);
+            finish(500, { ok: false, error: "stdin_closed", message: "The login session closed before paste could be sent." });
+            return;
+          }
+          child.stdin.write(line, (err) => {
+            if (err) {
+              killOauthSession(sessionId);
+              finish(500, { ok: false, error: "stdin_write_failed", message: err?.message || String(err) });
+              return;
+            }
+            // End stdin so the PTY/readline layer forwards the line and the CLI can proceed (plain `script` often buffers otherwise).
+            setTimeout(() => {
+              try {
+                if (child.stdin && !child.stdin.destroyed && !child.stdin.writableEnded) {
+                  child.stdin.end();
+                }
+              } catch {
+                /* ignore */
+              }
+            }, 100);
+          });
         } catch (err) {
           killOauthSession(sessionId);
           finish(500, { ok: false, error: "stdin_write_failed", message: err?.message || String(err) });
