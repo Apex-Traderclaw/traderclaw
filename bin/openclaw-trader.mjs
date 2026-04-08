@@ -769,7 +769,7 @@ async function cmdSetup(args) {
       "\n  Optional: enter a referral code for bonus access time (24h extra when valid). Press Enter to skip.\n",
     );
     printInfo(
-      "  Benefits: extra trial time now; referring others later earns +8h per user who completes at least one trade with the agent.\n",
+      "  Benefits: extra trial time now; referring others later earns +24h per user who completes at least one trade with the agent.\n",
     );
     referralCodeArg = await prompt("Referral code (optional)", "");
   }
