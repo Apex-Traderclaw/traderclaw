@@ -2174,10 +2174,10 @@ function wizardHtml(defaults) {
         </div>
         <div style="margin-top:12px;">
           <label style="display:flex;align-items:center;gap:8px;">Referral code (optional)
-            <span class="info-dot" title="Included access: 24 hours for every new account. Add a valid referral code for an extra 24 hours. Refer others: when they complete at least one trade with the agent, you earn +8 hours per active referral. When your access window ends, you will need to stake or keep referring to continue.">i</span>
+            <span class="info-dot" title="Included access: 24 hours for every new account. Add a valid referral code for an extra 24 hours. Refer others: when they complete at least one trade with the agent, you earn +24 hours per active referral. When your access window ends, you will need to stake or keep referring to continue.">i</span>
           </label>
           <input id="referralCode" type="text" maxlength="16" autocomplete="off" placeholder="e.g. ABCD1234" />
-          <p class="muted">If you have a friend’s code, enter it here. The setup command below will include it for <code>traderclaw setup</code>. If the server rejects the code, clear this field or fix it and copy the updated command — or run <code>traderclaw setup</code> again and enter a valid code or leave referral blank when prompted.</p>
+          <p class="muted">Included access: 24 hours for every new account. Add a valid referral code for an extra 24 hours. Refer others: when they complete at least one trade with the agent, you earn +24 hours per active referral. When your access window ends, you will need to stake or keep referring to continue.</p>
         </div>
         <button id="start" disabled>Start Installation</button>
       </div>
