@@ -1562,6 +1562,115 @@ function configureOpenClawLlmProvider({ provider, model, credential }, configPat
   return { configPath, provider, model };
 }
 
+/**
+ * Sets only `agents.defaults.model.primary` (OAuth / subscription paths where credentials live in OpenClaw auth profiles).
+ * Does not write API keys into config.env.
+ */
+function configureOpenClawLlmModelPrimaryOnly({ provider, model }, configPath = CONFIG_FILE) {
+  if (!provider || !model) {
+    throw new Error("LLM provider and model are required.");
+  }
+  if (!model.startsWith(`${provider}/`)) {
+    throw new Error(`Selected model '${model}' does not match provider '${provider}'.`);
+  }
+
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    config = {};
+  }
+
+  if (!config.agents) config.agents = {};
+  if (!config.agents.defaults) config.agents.defaults = {};
+  ensureAgentsDefaultsSchemaCompat(config);
+  if (!config.agents.defaults.model || typeof config.agents.defaults.model !== "object") {
+    config.agents.defaults.model = {};
+  }
+  config.agents.defaults.model.primary = model;
+
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  return { configPath, provider, model };
+}
+
+/**
+ * Runs `openclaw models auth login --provider openai-codex` and feeds the pasted redirect URL or code on stdin
+ * when the CLI prompts (with a timed fallback for non-interactive / SSH).
+ */
+function runOpenClawCodexOAuthLogin(paste, emitLog) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("openclaw", ["models", "auth", "login", "--provider", "openai-codex"], {
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: false,
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let pasteSent = false;
+
+    const sendPaste = () => {
+      if (pasteSent) return;
+      const p = String(paste || "").trim();
+      if (!p) return;
+      pasteSent = true;
+      try {
+        child.stdin.write(`${p}\n`);
+      } catch {
+        // ignore
+      }
+    };
+
+    let fallbackTimer = setTimeout(() => sendPaste(), 9000);
+
+    const onChunk = (chunk) => {
+      const combined = (stdout + stderr).toLowerCase();
+      const c = typeof chunk === "string" ? chunk : chunk.toString();
+      if (!pasteSent && /paste|authorization|redirect|callback/i.test(combined) && c.length > 0) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = setTimeout(() => sendPaste(), 400);
+      }
+    };
+
+    child.stdout?.on("data", (d) => {
+      const t = d.toString();
+      stdout += t;
+      const urls = extractUrls(t);
+      emitLog("info", t, urls);
+      onChunk(t);
+    });
+
+    child.stderr?.on("data", (d) => {
+      const t = d.toString();
+      stderr += t;
+      const urls = extractUrls(t);
+      emitLog("warn", t, urls);
+      onChunk(t);
+    });
+
+    child.on("close", (code) => {
+      clearTimeout(fallbackTimer);
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      const detail = `${stderr}\n${stdout}`.trim();
+      const err = new Error(
+        detail || `openclaw models auth login failed with exit code ${code}. Try running the same command in a normal shell, then re-run the wizard with "already logged in" checked.`,
+      );
+      err.code = code;
+      err.stdout = stdout;
+      err.stderr = stderr;
+      reject(err);
+    });
+
+    child.on("error", (e) => {
+      clearTimeout(fallbackTimer);
+      reject(e);
+    });
+  });
+}
+
 function verifyInstallation(modeConfig, apiKey) {
   const gatewayFile = join(CONFIG_DIR, "gateway", modeConfig.gatewayConfig);
   let llmConfigured = false;
@@ -1645,9 +1754,12 @@ export class InstallerStepEngine {
     this.modeConfig = modeConfig;
     this.options = {
       lane: normalizeLane(options.lane),
+      llmAuthMode: options.llmAuthMode === "oauth" ? "oauth" : "api_key",
       llmProvider: options.llmProvider || "",
       llmModel: options.llmModel || "",
       llmCredential: options.llmCredential || "",
+      llmOAuthPaste: typeof options.llmOAuthPaste === "string" ? options.llmOAuthPaste.trim() : "",
+      llmOAuthSkipLogin: options.llmOAuthSkipLogin === true,
       apiKey: options.apiKey || "",
       orchestratorUrl: options.orchestratorUrl || "https://api.traderclaw.ai",
       gatewayBaseUrl: options.gatewayBaseUrl || "",
@@ -1924,13 +2036,76 @@ export class InstallerStepEngine {
     const provider = String(this.options.llmProvider || "").trim();
     const requestedModel = String(this.options.llmModel || "").trim();
     const credential = String(this.options.llmCredential || "").trim();
-    if (!provider || !credential) {
+    const authMode = this.options.llmAuthMode === "oauth" ? "oauth" : "api_key";
+
+    if (!provider) {
       throw new Error(
-        "Missing required LLM settings. Select provider and provide credential in the wizard before starting installation.",
+        "Missing required LLM settings. Select provider in the wizard before starting installation.",
       );
     }
     if (!commandExists("openclaw")) {
       throw new Error("OpenClaw is not available yet. Install step must complete before LLM configuration.");
+    }
+
+    if (authMode === "oauth") {
+      if (provider !== "openai-codex") {
+        throw new Error("OAuth mode requires LLM provider openai-codex (ChatGPT / Codex subscription).");
+      }
+      const skipLogin = this.options.llmOAuthSkipLogin === true;
+      const oauthPaste = String(this.options.llmOAuthPaste || "").trim();
+      if (!skipLogin && !oauthPaste) {
+        throw new Error(
+          "Codex OAuth requires a pasted authorization code or redirect URL, or enable skip if you already ran openclaw models auth login on this host.",
+        );
+      }
+      if (!skipLogin) {
+        try {
+          await runOpenClawCodexOAuthLogin(oauthPaste, (level, text, urls) =>
+            this.emitLog("configure_llm", level, text, urls || []),
+          );
+        } catch (err) {
+          const tail = `${err?.stderr || ""}\n${err?.stdout || ""}\n${err?.message || ""}`.trim();
+          throw new Error(
+            `${tail}\n\nIf OAuth cannot complete from the wizard, run in a shell: openclaw models auth login --provider openai-codex — then re-run the wizard with "already logged in" checked.`,
+          );
+        }
+      }
+
+      const selection = resolveLlmModelSelection(provider, requestedModel);
+      for (const msg of selection.warnings) {
+        this.emitLog("configure_llm", "warn", msg);
+      }
+      const model = selection.model;
+
+      const saved = configureOpenClawLlmModelPrimaryOnly({ provider, model });
+      this.emitLog(
+        "configure_llm",
+        "info",
+        `Configured OpenClaw model primary=${model} (Codex OAuth; credentials in OpenClaw auth profiles, not OPENAI_API_KEY).`,
+      );
+
+      await runCommandWithEvents("openclaw", ["config", "validate"], {
+        onEvent: (evt) => this.emitLog("configure_llm", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
+      });
+
+      try {
+        await runCommandWithEvents("openclaw", ["models", "status", "--check", "--probe-provider", provider], {
+          onEvent: (evt) => this.emitLog("configure_llm", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
+        });
+      } catch (err) {
+        const details = `${err?.stderr || ""}\n${err?.stdout || ""}\n${err?.message || ""}`.trim();
+        throw new Error(
+          `LLM provider validation failed for '${provider}'. Check OAuth login and model, then retry.\n${details}`,
+        );
+      }
+
+      return { configured: true, provider, model, configPath: saved.configPath, authMode: "oauth" };
+    }
+
+    if (!credential) {
+      throw new Error(
+        "Missing required LLM settings. Paste your API key or token in the wizard before starting installation.",
+      );
     }
 
     const selection = resolveLlmModelSelection(provider, requestedModel);
@@ -1957,7 +2132,7 @@ export class InstallerStepEngine {
       );
     }
 
-    return { configured: true, provider, model, configPath: saved.configPath };
+    return { configured: true, provider, model, configPath: saved.configPath, authMode: "api_key" };
   }
 
   buildSetupHandoff() {

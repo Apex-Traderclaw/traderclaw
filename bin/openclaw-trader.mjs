@@ -1689,6 +1689,9 @@ function parseInstallWizardArgs(args) {
     llmProvider: "",
     llmModel: "",
     llmCredential: "",
+    llmAuthMode: "api_key",
+    llmOAuthPaste: "",
+    llmOAuthSkipLogin: false,
     orchestratorUrl: "https://api.traderclaw.ai",
     gatewayBaseUrl: "",
     gatewayToken: "",
@@ -1709,6 +1712,12 @@ function parseInstallWizardArgs(args) {
     if (key === "--llm-provider" && next) out.llmProvider = args[++i];
     if (key === "--llm-model" && next) out.llmModel = args[++i];
     if ((key === "--llm-api-key" || key === "--llm-token") && next) out.llmCredential = args[++i];
+    if (key === "--llm-auth" && next) {
+      const v = args[++i];
+      out.llmAuthMode = v === "oauth" ? "oauth" : "api_key";
+    }
+    if (key === "--llm-oauth-paste" && next) out.llmOAuthPaste = args[++i];
+    if (key === "--llm-oauth-skip-login") out.llmOAuthSkipLogin = true;
     if ((key === "--url" || key === "-u") && next) out.orchestratorUrl = args[++i];
     if ((key === "--gateway-base-url" || key === "-g") && next) out.gatewayBaseUrl = args[++i];
     if ((key === "--gateway-token" || key === "-t") && next) out.gatewayToken = args[++i];
@@ -1867,7 +1876,7 @@ async function cmdPrecheck(args) {
 
   log.info("Manual staging run commands:");
   log.info("  1) traderclaw install --wizard");
-  log.info("  2) In wizard, set LLM provider + credential and Telegram token");
+  log.info("  2) In wizard, set LLM (API key or Codex OAuth) and Telegram token");
   log.info("  3) Approve tailscale login in provided URL");
   log.info("  4) Confirm /v1/responses returns non-404 on funnel host");
   log.info("  5) Verify Telegram channel setup + probe");
@@ -1944,7 +1953,13 @@ async function loadWizardLlmCatalogAsync() {
       },
       {
         id: "openai-codex",
-        models: [{ id: "openai-codex/gpt-5-codex", name: "GPT-5 Codex" }],
+        models: [
+          { id: "openai-codex/gpt-5.4", name: "GPT-5.4 Codex (recommended, ChatGPT OAuth)" },
+          {
+            id: "openai-codex/gpt-5.3-codex-spark",
+            name: "GPT-5.3 Codex Spark (subscription entitlement; experimental)",
+          },
+        ],
       },
       {
         id: "google",
@@ -2027,7 +2042,8 @@ function wizardHtml(defaults) {
       .card { background:#121a31; border:1px solid #22315a; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
       .grid { display:grid; grid-template-columns:1fr 1fr; gap: 12px; }
       label { display:block; font-size: 12px; color:#9cb0de; margin-bottom: 4px; }
-      input, select { width:100%; padding:10px; border-radius:8px; border:1px solid #334a87; background:#0d1530; color:#e8eef9; }
+      input, select, textarea { width:100%; padding:10px; border-radius:8px; border:1px solid #334a87; background:#0d1530; color:#e8eef9; font-family: inherit; font-size: 14px; box-sizing: border-box; }
+      textarea { min-height: 88px; resize: vertical; }
       button { border:0; border-radius:8px; padding:10px 14px; background:#4d7cff; color:#fff; cursor:pointer; font-weight:600; }
       button:disabled { opacity:0.6; cursor:not-allowed; }
       .muted { color:#9cb0de; font-size:13px; }
@@ -2069,9 +2085,20 @@ function wizardHtml(defaults) {
       </div>
       <div class="card" id="llmCard">
         <h3>Required: OpenClaw LLM Provider</h3>
-        <p class="muted">Pick your LLM provider and paste your credential. Beginner mode supports common API-key providers.</p>
-        <div class="grid">
-          <div>
+        <p class="muted">Use an API key for OpenAI Platform and other providers, or ChatGPT/Codex OAuth for subscription access (no separate API billing). OAuth tokens are stored by OpenClaw — not as <code>OPENAI_API_KEY</code>.</p>
+        <div style="margin-bottom:12px;">
+          <label style="margin-bottom:8px;">LLM authentication</label>
+          <label style="display:flex; align-items:flex-start; gap:8px; font-size:14px; color:#e8eef9; margin-bottom:6px; cursor:pointer;">
+            <input id="llmAuthModeApiKey" name="llmAuthMode" type="radio" value="api_key" style="width:auto; margin-top:3px;" checked />
+            <span><strong>API key</strong> — OpenAI Platform (<code>openai</code>), Anthropic, OpenRouter, etc.</span>
+          </label>
+          <label style="display:flex; align-items:flex-start; gap:8px; font-size:14px; color:#e8eef9; cursor:pointer;">
+            <input id="llmAuthModeOauth" name="llmAuthMode" type="radio" value="oauth" style="width:auto; margin-top:3px;" />
+            <span><strong>ChatGPT / Codex (OAuth)</strong> — provider <code>openai-codex</code> (Plus/Pro subscription via OpenClaw login)</span>
+          </label>
+        </div>
+        <div class="grid" id="llmProviderModelGrid">
+          <div id="llmProviderWrap">
             <label>LLM provider (required)</label>
             <select id="llmProvider"></select>
           </div>
@@ -2080,21 +2107,31 @@ function wizardHtml(defaults) {
             <select id="llmModel"></select>
           </div>
         </div>
+        <p class="muted hidden" id="llmOauthProviderNote">Provider is fixed to <code>openai-codex</code>. Pick a Codex model below (or enable manual selection).</p>
         <div style="margin-top:8px;">
           <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#9cb0de;">
             <input id="llmModelManual" type="checkbox" style="width:auto; padding:0; margin:0;" />
             Choose model manually (advanced)
           </label>
         </div>
-        <div style="margin-top:12px;">
+        <div style="margin-top:12px;" id="llmApiKeyBlock">
           <label>LLM API key or token (required)</label>
           <input id="llmCredential" type="password" placeholder="Paste the credential for the selected provider/model" />
-          <p class="muted">This credential is written to OpenClaw model provider config so your agent can run. If you skip manual model selection, the installer will choose a safe provider default.</p>
-          <p class="muted" id="llmLoadState" aria-live="polite">Loading LLM provider catalog...</p>
-          <div id="llmLoadingHint" class="loading-hint" role="status" aria-live="polite">
-            <span class="spinner" aria-hidden="true"></span>
-            <span id="llmLoadingHintText">Fetching provider list...</span>
-          </div>
+          <p class="muted">Written to OpenClaw <code>config.env</code> for the selected provider. If you do not choose a model manually, the installer picks a safe default.</p>
+        </div>
+        <div style="margin-top:12px;" id="llmOauthBlock" class="hidden">
+          <label>Paste authorization code or full redirect URL</label>
+          <textarea id="llmOAuthPaste" autocomplete="off" placeholder="After the installer prints an OAuth URL in the log, sign in locally and paste the code or full callback URL here. Leave empty if you use the option below."></textarea>
+          <label style="display:flex; align-items:flex-start; gap:8px; font-size:13px; color:#9cb0de; margin-top:8px; cursor:pointer;">
+            <input id="llmOAuthSkipLogin" type="checkbox" style="width:auto; margin-top:3px;" />
+            <span>I already ran <code>openclaw models auth login --provider openai-codex</code> on this machine</span>
+          </label>
+          <p class="muted">If login hangs over SSH, complete OAuth in a normal shell first, then enable the checkbox above and start again. Live install logs will show the authorize URL when the CLI prints it.</p>
+        </div>
+        <p class="muted" id="llmLoadState" aria-live="polite">Loading LLM provider catalog...</p>
+        <div id="llmLoadingHint" class="loading-hint" role="status" aria-live="polite">
+          <span class="spinner" aria-hidden="true"></span>
+          <span id="llmLoadingHintText">Fetching provider list...</span>
         </div>
       </div>
       <div class="card" id="xCard">
@@ -2228,6 +2265,14 @@ function wizardHtml(defaults) {
       const llmModelEl = document.getElementById("llmModel");
       const llmModelManualEl = document.getElementById("llmModelManual");
       const llmCredentialEl = document.getElementById("llmCredential");
+      const llmAuthModeApiKey = document.getElementById("llmAuthModeApiKey");
+      const llmAuthModeOauth = document.getElementById("llmAuthModeOauth");
+      const llmProviderWrap = document.getElementById("llmProviderWrap");
+      const llmOauthProviderNote = document.getElementById("llmOauthProviderNote");
+      const llmApiKeyBlock = document.getElementById("llmApiKeyBlock");
+      const llmOauthBlock = document.getElementById("llmOauthBlock");
+      const llmOAuthPasteEl = document.getElementById("llmOAuthPaste");
+      const llmOAuthSkipLoginEl = document.getElementById("llmOAuthSkipLogin");
       const telegramTokenEl = document.getElementById("telegramToken");
       const llmLoadStateEl = document.getElementById("llmLoadState");
       const llmLoadingHintEl = document.getElementById("llmLoadingHint");
@@ -2254,14 +2299,61 @@ function wizardHtml(defaults) {
       let pollTimer = null;
       let pollIntervalMs = 1200;
       let installLocked = false;
+      let savedApiKeyProvider = "";
+
+      (function initLlmAuthDefaults() {
+        const mode = ${JSON.stringify(defaults.llmAuthMode || "api_key")};
+        if (mode === "oauth") {
+          llmAuthModeOauth.checked = true;
+          llmAuthModeApiKey.checked = false;
+        }
+        llmOAuthPasteEl.value = ${JSON.stringify(defaults.llmOAuthPaste || "")};
+        if (${defaults.llmOAuthSkipLogin === true ? "true" : "false"}) {
+          llmOAuthSkipLoginEl.checked = true;
+        }
+        applyLlmAuthModeUi();
+      })();
+
+      function isOauthMode() {
+        return llmAuthModeOauth && llmAuthModeOauth.checked;
+      }
+
+      function effectiveLlmProvider() {
+        return isOauthMode() ? "openai-codex" : llmProviderEl.value.trim();
+      }
+
+      function applyLlmAuthModeUi() {
+        if (!llmProviderWrap || !llmApiKeyBlock || !llmOauthBlock) return;
+        if (isOauthMode()) {
+          savedApiKeyProvider = llmProviderEl.value || savedApiKeyProvider;
+          llmProviderEl.value = "openai-codex";
+          llmProviderWrap.classList.add("hidden");
+          llmOauthProviderNote.classList.remove("hidden");
+          llmApiKeyBlock.classList.add("hidden");
+          llmOauthBlock.classList.remove("hidden");
+        } else {
+          llmProviderWrap.classList.remove("hidden");
+          llmOauthProviderNote.classList.add("hidden");
+          llmApiKeyBlock.classList.remove("hidden");
+          llmOauthBlock.classList.add("hidden");
+          if (savedApiKeyProvider) {
+            llmProviderEl.value = savedApiKeyProvider;
+          }
+        }
+      }
+
+      function onLlmAuthModeChange() {
+        applyLlmAuthModeUi();
+        refreshModelOptions("");
+      }
 
       function hasRequiredInputs() {
-        return (
-          llmCatalogReady
-          && Boolean(llmProviderEl.value.trim())
-          && Boolean(llmCredentialEl.value.trim())
-          && Boolean(telegramTokenEl.value.trim())
-        );
+        if (!llmCatalogReady || !Boolean(telegramTokenEl.value.trim())) return false;
+        if (isOauthMode()) {
+          if (llmOAuthSkipLoginEl.checked) return true;
+          return Boolean(llmOAuthPasteEl.value.trim());
+        }
+        return Boolean(llmProviderEl.value.trim()) && Boolean(llmCredentialEl.value.trim());
       }
 
       /** All-or-nothing: 0 or 4 non-empty X fields; partial is invalid. */
@@ -2348,7 +2440,7 @@ function wizardHtml(defaults) {
       }
 
       function refreshModelOptions(preferredModel) {
-        const provider = llmProviderEl.value;
+        const provider = effectiveLlmProvider();
         const providerEntry = (llmCatalog.providers || []).find((entry) => entry.id === provider);
         const modelItems = (providerEntry ? providerEntry.models : []).map((item) => ({ value: item.id, label: item.name + " (" + item.id + ")" }));
         if (modelItems.length === 0) {
@@ -2378,8 +2470,9 @@ function wizardHtml(defaults) {
             return;
           }
           setSelectOptions(llmProviderEl, providers, "${defaults.llmProvider}");
+          applyLlmAuthModeUi();
           refreshModelOptions("${defaults.llmModel}");
-          const catalogMsg = "Select your provider, paste your API key, and start installation. After setup, run \`openclaw models list\` to explore your live catalog.";
+          const catalogMsg = "Choose API key or Codex OAuth, then start installation. After setup, run \`openclaw models list\` for your live catalog.";
           setLlmCatalogReady(true, catalogMsg, false);
         } catch (err) {
           setLlmCatalogReady(false, "Failed to load LLM providers. Reload the page and try again.", true);
@@ -2433,10 +2526,14 @@ function wizardHtml(defaults) {
         manualEl.textContent = "";
         readyEl.textContent = "Starting installation...";
 
+        const oauth = isOauthMode();
         const payload = {
-          llmProvider: llmProviderEl.value.trim(),
+          llmAuthMode: oauth ? "oauth" : "api_key",
+          llmProvider: oauth ? "openai-codex" : llmProviderEl.value.trim(),
           llmModel: llmModelEl.value.trim(),
-          llmCredential: llmCredentialEl.value.trim(),
+          llmCredential: oauth ? "" : llmCredentialEl.value.trim(),
+          llmOAuthPaste: llmOAuthPasteEl.value.trim(),
+          llmOAuthSkipLogin: llmOAuthSkipLoginEl.checked,
           apiKey: document.getElementById("apiKey").value.trim(),
           telegramToken: document.getElementById("telegramToken").value.trim(),
           referralCode: document.getElementById("referralCode").value.trim(),
@@ -2445,10 +2542,18 @@ function wizardHtml(defaults) {
           xAccessTokenMain: xAccessTokenMainEl.value.trim(),
           xAccessTokenMainSecret: xAccessTokenMainSecretEl.value.trim(),
         };
-        if (!payload.llmProvider || !payload.llmCredential) {
+        if (oauth) {
+          if (!payload.llmOAuthSkipLogin && !payload.llmOAuthPaste) {
+            stateEl.textContent = "blocked";
+            readyEl.textContent = "";
+            manualEl.textContent =
+              "Codex OAuth: paste the authorization code or full redirect URL, or check the box if you already ran openclaw models auth login on this machine.";
+            return;
+          }
+        } else if (!payload.llmProvider || !payload.llmCredential) {
           stateEl.textContent = "blocked";
           readyEl.textContent = "";
-          manualEl.textContent = "LLM provider and credential are required before starting installation.";
+          manualEl.textContent = "LLM provider and API key are required before starting installation.";
           return;
         }
         if (!payload.telegramToken) {
@@ -2690,7 +2795,11 @@ function wizardHtml(defaults) {
         llmModelEl.disabled = !llmModelManualEl.checked;
         updateStartButtonState();
       });
+      llmAuthModeApiKey.addEventListener("change", onLlmAuthModeChange);
+      llmAuthModeOauth.addEventListener("change", onLlmAuthModeChange);
       llmCredentialEl.addEventListener("input", updateStartButtonState);
+      llmOAuthPasteEl.addEventListener("input", updateStartButtonState);
+      llmOAuthSkipLoginEl.addEventListener("change", updateStartButtonState);
       telegramTokenEl.addEventListener("input", updateStartButtonState);
       xConsumerKeyEl.addEventListener("input", updateStartButtonState);
       xConsumerSecretEl.addEventListener("input", updateStartButtonState);
@@ -2831,12 +2940,17 @@ async function cmdInstall(args) {
       }
 
       const body = await parseJsonBody(req).catch(() => ({}));
+      const rawLlmAuth = body.llmAuthMode != null ? body.llmAuthMode : defaults.llmAuthMode;
       const wizardOpts = {
         mode: "light",
         lane: defaults.lane,
+        llmAuthMode: rawLlmAuth === "oauth" ? "oauth" : "api_key",
         llmProvider: body.llmProvider || defaults.llmProvider,
         llmModel: body.llmModel || defaults.llmModel,
         llmCredential: body.llmCredential || defaults.llmCredential,
+        llmOAuthPaste: typeof body.llmOAuthPaste === "string" ? body.llmOAuthPaste.trim() : defaults.llmOAuthPaste,
+        llmOAuthSkipLogin:
+          typeof body.llmOAuthSkipLogin === "boolean" ? body.llmOAuthSkipLogin : defaults.llmOAuthSkipLogin === true,
         apiKey: body.apiKey || defaults.apiKey,
         orchestratorUrl: defaults.orchestratorUrl,
         gatewayBaseUrl: defaults.gatewayBaseUrl,
@@ -2870,9 +2984,12 @@ async function cmdInstall(args) {
         {
           mode: "light",
           lane: defaults.lane,
+          llmAuthMode: wizardOpts.llmAuthMode,
           llmProvider: body.llmProvider || defaults.llmProvider,
           llmModel: body.llmModel || defaults.llmModel,
           llmCredential: body.llmCredential || defaults.llmCredential,
+          llmOAuthPaste: wizardOpts.llmOAuthPaste,
+          llmOAuthSkipLogin: wizardOpts.llmOAuthSkipLogin,
           apiKey: body.apiKey || defaults.apiKey,
           orchestratorUrl: defaults.orchestratorUrl,
           gatewayBaseUrl: defaults.gatewayBaseUrl,
@@ -3240,6 +3357,15 @@ Config subcommands:
   config set <k> <v> Update a configuration value
   config reset       Remove plugin configuration
 
+Install wizard (traderclaw install --wizard):
+  --port                 Local port for the wizard (default 17890)
+  --llm-provider         e.g. openai, openai-codex, anthropic
+  --llm-model            e.g. openai/gpt-5.4 or openai-codex/gpt-5.4
+  --llm-api-key, --llm-token   API key for LLM (api_key mode)
+  --llm-auth api_key|oauth     OpenAI Platform key vs ChatGPT/Codex OAuth (openai-codex)
+  --llm-oauth-paste    Paste redirect URL or code for Codex OAuth (non-skip)
+  --llm-oauth-skip-login       Skip login when you already ran openclaw models auth login
+
 Examples:
   traderclaw signup
   traderclaw setup
@@ -3249,6 +3375,7 @@ Examples:
   traderclaw precheck --allow-install
   traderclaw install --wizard
   traderclaw install --wizard --lane quick-local
+  traderclaw install --wizard --llm-auth oauth --llm-provider openai-codex --llm-oauth-skip-login
   traderclaw repair-openclaw
   traderclaw gateway ensure-persistent
   traderclaw setup --signup --user-id my_agent_001 --referral-code ABCD1234
