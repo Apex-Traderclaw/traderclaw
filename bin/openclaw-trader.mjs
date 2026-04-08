@@ -1807,7 +1807,7 @@ async function cmdPrecheck(args) {
   } else if (opts.mode === "allow-install") {
     log.info("Installing openclaw (allow-install mode)");
     try {
-      execSync("npm install -g openclaw", { stdio: "ignore" });
+      execSync("npm install -g --registry https://registry.npmjs.org/ openclaw@latest", { stdio: "ignore" });
       if (commandExists("openclaw")) log.pass("openclaw installed successfully");
       else log.fail("openclaw install completed but command is still missing");
     } catch {

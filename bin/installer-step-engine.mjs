@@ -442,12 +442,29 @@ function runCommandWithEvents(cmd, args = [], opts = {}) {
   });
 }
 
+/**
+ * Install or upgrade the global OpenClaw CLI. We always run npm even when `openclaw` is already
+ * on PATH: bundled plugin manifests track a minimum OpenClaw version (e.g. >=2026.4.8). A stale
+ * global from an older install causes `openclaw plugins install` to fail config validation with
+ * "plugin requires OpenClaw >=… but this host is …".
+ */
 async function installOpenClawPlatform() {
-  if (commandExists("openclaw")) {
-    return { alreadyInstalled: true, version: getCommandOutput("openclaw --version") };
+  const hadOpenclaw = commandExists("openclaw");
+  const previousVersion = hadOpenclaw ? getCommandOutput("openclaw --version") : null;
+  await runCommandWithEvents("npm", ["install", "-g", "--registry", "https://registry.npmjs.org/", "openclaw@latest"]);
+  const available = commandExists("openclaw");
+  const version = available ? getCommandOutput("openclaw --version") : null;
+  if (!available) {
+    throw new Error("npm install -g openclaw@latest finished but `openclaw` is not available on PATH");
   }
-  await runCommandWithEvents("npm", ["install", "-g", "openclaw"]);
-  return { alreadyInstalled: false, installed: true, available: commandExists("openclaw") };
+  return {
+    alreadyInstalled: hadOpenclaw,
+    installed: true,
+    upgraded: hadOpenclaw,
+    previousVersion,
+    version,
+    available: true,
+  };
 }
 
 function isNpmGlobalBinConflict(err, cliName) {
@@ -1961,7 +1978,7 @@ export class InstallerStepEngine {
       }
 
       if (!this.options.skipInstallOpenClaw) {
-        await this.runStep("install_openclaw", "Installing OpenClaw platform", async () => installOpenClawPlatform());
+        await this.runStep("install_openclaw", "Installing or upgrading OpenClaw platform", async () => installOpenClawPlatform());
       }
       await this.runStep("configure_llm", "Configuring required OpenClaw LLM provider", async () => this.configureLlmStep());
       if (!this.options.skipInstallPlugin) {
