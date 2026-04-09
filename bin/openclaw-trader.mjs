@@ -3257,6 +3257,32 @@ async function cmdInstall(args) {
     }
   }
 
+  /**
+   * Release port 1455 so the OpenClaw CLI can bind its own callback server
+   * during `openclaw models auth login`. Returns a promise that resolves
+   * once the proxy is fully closed (or after a safety timeout).
+   */
+  function stopCallbackProxy() {
+    return new Promise((resolve) => {
+      if (!oauthCallbackProxy) { resolve(); return; }
+      const proxy = oauthCallbackProxy;
+      oauthCallbackProxy = null;
+      const safety = setTimeout(resolve, 2000);
+      proxy.close(() => { clearTimeout(safety); setTimeout(resolve, 150); });
+    });
+  }
+
+  function hasOpenaiCodexAuthTokens() {
+    try {
+      const authFile = join(homedir(), ".openclaw", "agents", "main", "agent", "auth-profiles.json");
+      const raw = readFileSync(authFile, "utf-8");
+      const data = JSON.parse(raw);
+      return data && typeof data === "object" && JSON.stringify(data).length > 20;
+    } catch {
+      return false;
+    }
+  }
+
   function killOauthSession(sessionId, signal = "SIGTERM") {
     const s = oauthSessions.get(sessionId);
     if (!s) return;
@@ -3388,6 +3414,13 @@ async function cmdInstall(args) {
         killOauthSession(id);
       }
 
+      // Release port 1455 so the OpenClaw CLI can bind its own callback
+      // server directly. The previous approach relied on the wizard proxy
+      // catching the callback and forwarding the code via stdin, but
+      // `script` (PTY wrapper) does not reliably forward stdin to the
+      // inner process, causing tokens to never be saved.
+      await stopCallbackProxy();
+
       const sessionId = randomUUID();
       const child = spawnOpenClawCodexAuthLoginChild();
 
@@ -3402,6 +3435,7 @@ async function cmdInstall(args) {
           /* ignore */
         }
         oauthSessions.delete(sessionId);
+        startCallbackProxy();
         respondJson(504, {
           ok: false,
           error: "oauth_url_timeout",
@@ -3440,6 +3474,7 @@ async function cmdInstall(args) {
       });
       child.on("error", (err) => {
         clearTimeout(urlTimeout);
+        startCallbackProxy();
         if (responded) return;
         responded = true;
         oauthSessions.delete(sessionId);
@@ -3447,6 +3482,7 @@ async function cmdInstall(args) {
       });
       child.on("close", (code) => {
         clearTimeout(urlTimeout);
+        startCallbackProxy();
         if (!responded) {
           responded = true;
           oauthSessions.delete(sessionId);
@@ -3466,9 +3502,15 @@ async function cmdInstall(args) {
           pending.updatedAt = Date.now();
           pending.exitCode = typeof code === "number" ? code : null;
           pending.detail = stripAnsi(combined).slice(-4000);
-          if (code === 0) {
+          if (code === 0 && hasOpenaiCodexAuthTokens()) {
             pending.status = "succeeded";
             pending.message = "ChatGPT OAuth completed successfully.";
+          } else if (code === 0) {
+            pending.status = "failed";
+            pending.message =
+              "OpenClaw exited OK but no auth tokens were saved. " +
+              "Run 'openclaw models auth login --provider openai-codex' in a terminal, " +
+              "then re-run the wizard with the already-logged-in option.";
           } else {
             pending.status = "failed";
             pending.message =

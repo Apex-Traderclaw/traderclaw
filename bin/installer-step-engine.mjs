@@ -1604,14 +1604,14 @@ export function spawnOpenClawCodexAuthLoginChild() {
   if (process.platform === "win32") {
     return spawn("openclaw", argv, { stdio: ["pipe", "pipe", "pipe"], shell: false });
   }
-  // `unbuffer` (expect package) runs the CLI under a PTY and forwards stdin for the paste step reliably.
-  // Plain `script` often does not forward Node's stdin to the inner openclaw process, which causes hangs until timeout.
   if (commandExists("unbuffer")) {
     return spawn("unbuffer", ["openclaw", ...argv], { stdio: ["pipe", "pipe", "pipe"], shell: false });
   }
   if (commandExists("script")) {
     const cmdline = "openclaw models auth login --provider openai-codex";
-    return spawn("script", ["-q", "-c", cmdline, "/dev/null"], {
+    // --return propagates the inner command's exit code (util-linux 2.38+).
+    // Without it, script may exit 0 even if openclaw fails.
+    return spawn("script", ["--return", "-q", "-c", cmdline, "/dev/null"], {
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
     });
@@ -2091,6 +2091,20 @@ export class InstallerStepEngine {
             `${tail}\n\nIf OAuth cannot complete from the wizard, run in a shell: openclaw models auth login --provider openai-codex — then re-run the wizard with "already logged in" checked.`,
           );
         }
+      }
+
+      const authFile = join(homedir(), ".openclaw", "agents", "main", "agent", "auth-profiles.json");
+      let hasAuth = false;
+      try {
+        hasAuth = readFileSync(authFile, "utf-8").length > 20;
+      } catch { /* file missing */ }
+      if (!hasAuth) {
+        throw new Error(
+          "No OAuth credentials found at " + authFile + ". " +
+          "The wizard OAuth flow did not save tokens (the callback may not have reached the OpenClaw CLI). " +
+          "Run 'openclaw models auth login --provider openai-codex' in a terminal, " +
+          "then re-run the wizard with the 'already logged in' option.",
+        );
       }
 
       const selection = resolveLlmModelSelection(provider, requestedModel);
