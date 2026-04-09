@@ -10,6 +10,7 @@ import { execFile, execSync } from "child_process";
 import { promisify } from "util";
 import { createServer } from "http";
 import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
+import { OPENCLAW_VERSION } from "./installer-step-engine.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -1816,7 +1817,7 @@ async function cmdPrecheck(args) {
   } else if (opts.mode === "allow-install") {
     log.info("Installing openclaw (allow-install mode)");
     try {
-      execSync("npm install -g --registry https://registry.npmjs.org/ openclaw@latest", { stdio: "ignore" });
+      execSync(`npm install -g --ignore-scripts --registry https://registry.npmjs.org/ openclaw@${OPENCLAW_VERSION}`, { stdio: "ignore" });
       if (commandExists("openclaw")) log.pass("openclaw installed successfully");
       else log.fail("openclaw install completed but command is still missing");
     } catch {
@@ -4155,7 +4156,7 @@ async function cmdRepairOpenclaw() {
   printInfo("Repairing global OpenClaw npm dependencies (fixes missing grammy, @buape/carbon, etc.)...");
   const r = await ensureOpenClawGlobalPackageDependencies();
   if (r.skipped) {
-    printError(`Could not find global OpenClaw package (${r.reason}). Install or upgrade: npm install -g openclaw@latest`);
+    printError(`Could not find global OpenClaw package (${r.reason}). Install or upgrade: npm install -g openclaw@${OPENCLAW_VERSION}`);
     process.exit(1);
   }
   printSuccess(`Dependencies refreshed under ${r.dir}`);

@@ -10,6 +10,9 @@ import { getLinuxGatewayPersistenceSnapshot } from "./gateway-persistence-linux.
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 
+/** Pinned openclaw platform version — bump deliberately after testing, never use "latest". */
+export const OPENCLAW_VERSION = "2026.4.9";
+
 /** Directory containing solana-traderclaw (openclaw.plugin.json) — works for plugin layout or traderclaw-cli + dependency. */
 const PLUGIN_PACKAGE_ROOT = resolvePluginPackageRoot(import.meta.url);
 
@@ -357,7 +360,7 @@ function gatewayTimeoutRemediation() {
     "- Check RAM: openclaw gateway requires >=512MB free (>=2GB total recommended)",
     "- Check disk: df -h ~/.openclaw",
     "- Try: openclaw config validate && openclaw gateway doctor || true",
-    "- If config schema error appears, run: npm install -g openclaw@latest",
+    `- If config schema error appears, run: npm install -g openclaw@${OPENCLAW_VERSION}`,
     "Once the gateway shows 'running' in status, click Start Installation again.",
   ].join("\n");
 }
@@ -380,7 +383,7 @@ function gatewayConfigValidationRemediation() {
     "The first `openclaw config validate` in this installer runs before plugins install; validation must be re-run once plugin schemas are registered — that is why this can appear only at gateway.",
     "On the VPS, try in order:",
     "1) openclaw --version",
-    "2) npm install -g openclaw@latest",
+    `2) npm install -g openclaw@${OPENCLAW_VERSION}`,
     "3) openclaw config validate",
     "4) openclaw plugins doctor",
     "5) cp ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.bak.$(date +%s) || true",
@@ -511,11 +514,11 @@ export async function ensureOpenClawGlobalPackageDependencies() {
 async function installOpenClawPlatform() {
   const hadOpenclaw = commandExists("openclaw");
   const previousVersion = hadOpenclaw ? getCommandOutput("openclaw --version") : null;
-  await runCommandWithEvents("npm", ["install", "-g", "--ignore-scripts", "--registry", "https://registry.npmjs.org/", "openclaw@latest"]);
+  await runCommandWithEvents("npm", ["install", "-g", "--ignore-scripts", "--registry", "https://registry.npmjs.org/", `openclaw@${OPENCLAW_VERSION}`]);
   const available = commandExists("openclaw");
   const version = available ? getCommandOutput("openclaw --version") : null;
   if (!available) {
-    throw new Error("npm install -g openclaw@latest finished but `openclaw` is not available on PATH");
+    throw new Error(`npm install -g openclaw@${OPENCLAW_VERSION} finished but \`openclaw\` is not available on PATH`);
   }
   return {
     alreadyInstalled: hadOpenclaw,
