@@ -4078,7 +4078,7 @@ Commands:
   signup             Create a new account (alias for: setup --signup; run locally, not via the agent)
   precheck           Run environment checks (dry-run or allow-install)
   install            Launch installer flows (--wizard for localhost GUI)
-  repair-openclaw    Re-run npm install in the global openclaw package (fixes missing grammy after upgrade)
+  repair-openclaw    Re-run npm install in the global openclaw package (fixes missing grammy / @buape/carbon; uses --ignore-scripts so @discordjs/opus does not require build tools)
   gateway            Gateway helpers (see subcommands below)
   login              Re-authenticate (uses refresh token when valid; full challenge only if needed)
   logout             Revoke current session and clear tokens
@@ -4152,7 +4152,7 @@ Examples:
 
 async function cmdRepairOpenclaw() {
   const { ensureOpenClawGlobalPackageDependencies } = await import("./installer-step-engine.mjs");
-  printInfo("Repairing global OpenClaw npm dependencies (fixes missing grammy / MODULE_NOT_FOUND)...");
+  printInfo("Repairing global OpenClaw npm dependencies (fixes missing grammy, @buape/carbon, etc.)...");
   const r = await ensureOpenClawGlobalPackageDependencies();
   if (r.skipped) {
     printError(`Could not find global OpenClaw package (${r.reason}). Install or upgrade: npm install -g openclaw@latest`);

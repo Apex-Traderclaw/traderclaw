@@ -400,6 +400,14 @@ function isOpenClawConfigSchemaFailure(text) {
 function runCommandWithEvents(cmd, args = [], opts = {}) {
   return new Promise((resolve, reject) => {
     const { onEvent, ...spawnOpts } = opts;
+    const isNpm = /(?:^|[\\/])npm(?:\.cmd)?$/.test(cmd) || cmd === "npm";
+    if (isNpm && !spawnOpts.env?.NODE_OPTIONS?.includes("max-old-space-size")) {
+      spawnOpts.env = {
+        ...process.env,
+        ...spawnOpts.env,
+        NODE_OPTIONS: [spawnOpts.env?.NODE_OPTIONS || process.env.NODE_OPTIONS || "", "--max-old-space-size=512"].filter(Boolean).join(" "),
+      };
+    }
     const child = spawn(cmd, args, {
       stdio: "pipe",
       shell: true,
@@ -427,14 +435,19 @@ function runCommandWithEvents(cmd, args = [], opts = {}) {
       const urls = [...new Set([...extractUrls(stdout), ...extractUrls(stderr)])];
       if (code === 0) resolve({ stdout, stderr, code, urls });
       else {
+        const isOom = code === 137 || (stderr || stdout || "").includes("Killed");
         const raw = (stderr || "").trim();
         const tailLines = raw.split("\n").filter((l) => l.length > 0).slice(-40).join("\n");
         const stderrPreview = tailLines.length > 8000 ? tailLines.slice(-8000) : tailLines;
-        const err = new Error(stderrPreview ? `command failed with exit code ${code}: ${stderrPreview}` : `command failed with exit code ${code}`);
+        const prefix = isOom
+          ? `Out of memory (exit 137 / SIGKILL): the host killed '${cmd}' — try a machine with ≥1 GB free RAM, or reduce concurrency with npm_config_maxsockets=2`
+          : `command failed with exit code ${code}`;
+        const err = new Error(stderrPreview ? `${prefix}: ${stderrPreview}` : prefix);
         err.code = code;
         err.stdout = stdout;
         err.stderr = stderr;
         err.urls = urls;
+        err.oom = isOom;
         reject(err);
       }
     });
@@ -454,6 +467,14 @@ function getGlobalOpenClawPackageDir() {
  * incomplete `node_modules` after `npm install -g` (hoisting, optional deps, or interrupted
  * installs). OpenClaw then fails at runtime with `Cannot find module 'grammy'` while loading
  * config. Installing from the package directory restores declared dependencies.
+ *
+ * `--ignore-scripts` avoids OpenClaw's postinstall (and nested installs) failing on hosts without
+ * a C toolchain: e.g. `@discordjs/opus` has no prebuild for Node 22 and falls back to `node-gyp`
+ * (`make` not found). Skipping scripts still installs declared JS deps (e.g. `grammy`). Users who
+ * need native/voice features can install build-essential and re-run `npm install` without
+ * `--ignore-scripts` in the global openclaw directory.
+ *
+ * We still run `npm install grammy @buape/carbon --no-save` with `--ignore-scripts` as a safety net.
  */
 /** Runs `npm install` in the global `openclaw` package directory (fixes missing `grammy` etc.). */
 export async function ensureOpenClawGlobalPackageDependencies() {
@@ -461,10 +482,23 @@ export async function ensureOpenClawGlobalPackageDependencies() {
   if (!dir) {
     return { skipped: true, reason: "global_openclaw_dir_not_found" };
   }
-  await runCommandWithEvents("npm", ["install", "--omit=dev", "--registry", "https://registry.npmjs.org/"], {
-    cwd: dir,
-    shell: false,
-  });
+  const registry = "https://registry.npmjs.org/";
+  const installFlags = ["install", "--omit=dev", "--ignore-scripts", "--registry", registry];
+  await runCommandWithEvents("npm", installFlags, { cwd: dir, shell: false });
+  await runCommandWithEvents(
+    "npm",
+    [
+      "install",
+      "--omit=dev",
+      "--no-save",
+      "--ignore-scripts",
+      "--registry",
+      registry,
+      "grammy",
+      "@buape/carbon",
+    ],
+    { cwd: dir, shell: false },
+  );
   return { repaired: true, dir };
 }
 
@@ -477,7 +511,7 @@ export async function ensureOpenClawGlobalPackageDependencies() {
 async function installOpenClawPlatform() {
   const hadOpenclaw = commandExists("openclaw");
   const previousVersion = hadOpenclaw ? getCommandOutput("openclaw --version") : null;
-  await runCommandWithEvents("npm", ["install", "-g", "--registry", "https://registry.npmjs.org/", "openclaw@latest"]);
+  await runCommandWithEvents("npm", ["install", "-g", "--ignore-scripts", "--registry", "https://registry.npmjs.org/", "openclaw@latest"]);
   const available = commandExists("openclaw");
   const version = available ? getCommandOutput("openclaw --version") : null;
   if (!available) {
@@ -514,7 +548,7 @@ function isNpmFilesystemPackageSpec(spec) {
  * IMPORTANT: run with `{ shell: false }` — `spawn(..., { shell: true })` can drop argv on Unix and npm then mis-resolves the package name.
  */
 function npmGlobalInstallArgs(spec, { force = false } = {}) {
-  const args = ["install", "-g"];
+  const args = ["install", "-g", "--ignore-scripts"];
   if (force) args.push("--force");
   if (!isNpmFilesystemPackageSpec(spec)) {
     args.push("--registry", "https://registry.npmjs.org/");
