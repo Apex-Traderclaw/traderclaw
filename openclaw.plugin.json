@@ -2,6 +2,7 @@
   "id": "solana-trader",
   "name": "Solana Trader",
   "description": "Public edition V1-Upgraded — Solana trading agent with X/Twitter social intel (read-only, no posting), standardized tool envelopes, intelligence lab, prompt injection scrubbing, and split skill architecture. Full V1 trading capabilities plus 17 new intelligence tools.",
+  "enabledByDefault": true,
   "skills": ["skills/solana-trader"],
   "configSchema": {
     "type": "object",
@@ -38,14 +39,15 @@
       },
       "walletPrivateKey": {
         "type": "string",
-        "description": "Solana wallet private key in base58 (only needed for re-auth when wallet already exists on account)"
+        "deprecated": true,
+        "description": "DEPRECATED — use env TRADERCLAW_WALLET_PRIVATE_KEY or --wallet-private-key arg. Never store private keys in config files."
       },
       "apiTimeout": {
         "type": "integer",
         "minimum": 1000,
-        "maximum": 120000,
-        "default": 30000,
-        "description": "HTTP request timeout in milliseconds"
+        "maximum": 300000,
+        "default": 120000,
+        "description": "HTTP request timeout in milliseconds (on-chain trades can take time)"
       },
       "agentId": {
         "type": "string",

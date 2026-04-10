@@ -10,6 +10,7 @@ import { execFile, execSync } from "child_process";
 import { promisify } from "util";
 import { createServer } from "http";
 import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
+import { OPENCLAW_VERSION } from "./installer-step-engine.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -769,7 +770,7 @@ async function cmdSetup(args) {
       "\n  Optional: enter a referral code for bonus access time (24h extra when valid). Press Enter to skip.\n",
     );
     printInfo(
-      "  Benefits: extra trial time now; referring others later earns +8h per user who completes at least one trade with the agent.\n",
+      "  Benefits: extra trial time now; referring others later earns +24h per user who completes at least one trade with the agent.\n",
     );
     referralCodeArg = await prompt("Referral code (optional)", "");
   }
@@ -858,7 +859,9 @@ async function cmdSetup(args) {
 
   const existingForRecovery = readConfig();
   const prevPlugin = getPluginConfig(existingForRecovery);
+  const prevSafe = prevPlugin && typeof prevPlugin === "object" ? { ...prevPlugin } : {};
   const pluginConfig = {
+    ...prevSafe,
     orchestratorUrl,
     walletId: null,
     apiKey,
@@ -1687,6 +1690,9 @@ function parseInstallWizardArgs(args) {
     llmProvider: "",
     llmModel: "",
     llmCredential: "",
+    llmAuthMode: "api_key",
+    llmOAuthPaste: "",
+    llmOAuthSkipLogin: false,
     orchestratorUrl: "https://api.traderclaw.ai",
     gatewayBaseUrl: "",
     gatewayToken: "",
@@ -1707,6 +1713,12 @@ function parseInstallWizardArgs(args) {
     if (key === "--llm-provider" && next) out.llmProvider = args[++i];
     if (key === "--llm-model" && next) out.llmModel = args[++i];
     if ((key === "--llm-api-key" || key === "--llm-token") && next) out.llmCredential = args[++i];
+    if (key === "--llm-auth" && next) {
+      const v = args[++i];
+      out.llmAuthMode = v === "oauth" ? "oauth" : "api_key";
+    }
+    if (key === "--llm-oauth-paste" && next) out.llmOAuthPaste = args[++i];
+    if (key === "--llm-oauth-skip-login") out.llmOAuthSkipLogin = true;
     if ((key === "--url" || key === "-u") && next) out.orchestratorUrl = args[++i];
     if ((key === "--gateway-base-url" || key === "-g") && next) out.gatewayBaseUrl = args[++i];
     if ((key === "--gateway-token" || key === "-t") && next) out.gatewayToken = args[++i];
@@ -1805,7 +1817,7 @@ async function cmdPrecheck(args) {
   } else if (opts.mode === "allow-install") {
     log.info("Installing openclaw (allow-install mode)");
     try {
-      execSync("npm install -g openclaw", { stdio: "ignore" });
+      execSync(`npm install -g --ignore-scripts --registry https://registry.npmjs.org/ openclaw@${OPENCLAW_VERSION}`, { stdio: "ignore" });
       if (commandExists("openclaw")) log.pass("openclaw installed successfully");
       else log.fail("openclaw install completed but command is still missing");
     } catch {
@@ -1865,7 +1877,7 @@ async function cmdPrecheck(args) {
 
   log.info("Manual staging run commands:");
   log.info("  1) traderclaw install --wizard");
-  log.info("  2) In wizard, set LLM provider + credential and Telegram token");
+  log.info("  2) In wizard, set LLM (API key or Codex OAuth) and Telegram token");
   log.info("  3) Approve tailscale login in provided URL");
   log.info("  4) Confirm /v1/responses returns non-404 on funnel host");
   log.info("  5) Verify Telegram channel setup + probe");
@@ -1942,7 +1954,13 @@ async function loadWizardLlmCatalogAsync() {
       },
       {
         id: "openai-codex",
-        models: [{ id: "openai-codex/gpt-5-codex", name: "GPT-5 Codex" }],
+        models: [
+          { id: "openai-codex/gpt-5.4", name: "GPT-5.4 Codex (recommended, ChatGPT OAuth)" },
+          {
+            id: "openai-codex/gpt-5.3-codex-spark",
+            name: "GPT-5.3 Codex Spark (subscription entitlement; experimental)",
+          },
+        ],
       },
       {
         id: "google",
@@ -2025,7 +2043,8 @@ function wizardHtml(defaults) {
       .card { background:#121a31; border:1px solid #22315a; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
       .grid { display:grid; grid-template-columns:1fr 1fr; gap: 12px; }
       label { display:block; font-size: 12px; color:#9cb0de; margin-bottom: 4px; }
-      input, select { width:100%; padding:10px; border-radius:8px; border:1px solid #334a87; background:#0d1530; color:#e8eef9; }
+      input, select, textarea { width:100%; padding:10px; border-radius:8px; border:1px solid #334a87; background:#0d1530; color:#e8eef9; font-family: inherit; font-size: 14px; box-sizing: border-box; }
+      textarea { min-height: 88px; resize: vertical; }
       button { border:0; border-radius:8px; padding:10px 14px; background:#4d7cff; color:#fff; cursor:pointer; font-weight:600; }
       button:disabled { opacity:0.6; cursor:not-allowed; }
       .muted { color:#9cb0de; font-size:13px; }
@@ -2057,6 +2076,22 @@ function wizardHtml(defaults) {
       .muted a:hover { color:#c5e5ff; }
       .info-dot { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:50%; background:#22315a; color:#9cb0de; font-size:11px; font-weight:700; cursor:help; flex-shrink:0; }
       @keyframes spin { to { transform:rotate(360deg); } }
+      .oauth-flow { background:#0d1530; border:1px solid #334a87; border-radius:10px; padding:14px; margin-top:10px; }
+      .oauth-flow ol { margin:8px 0 0 18px; padding:0; color:#c5d7f5; font-size:13px; line-height:1.5; }
+      .oauth-flow li { margin-bottom:8px; }
+      .oauth-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+      .oauth-row input[readonly] { flex:1 1 280px; font-size:12px; }
+      .oauth-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+      .oauth-actions button.secondary { background:#334a87; }
+      .oauth-guide { background:#0a1f2e; border:1px solid #2a7a6a; border-radius:10px; padding:14px; margin-top:8px; }
+      .oauth-guide ol { margin:10px 0 0 18px; padding:0; color:#d9e8ff; font-size:13px; line-height:1.55; }
+      .oauth-guide li { margin-bottom:7px; }
+      .oauth-step.pending { color:#9cb0de; }
+      .oauth-step.active { color:#9ee6ff; font-weight:700; }
+      .oauth-step.done { color:#78f0a9; }
+      .oauth-step.error { color:#ff9b9b; font-weight:700; }
+      .ok-banner { color:#78f0a9; font-size:13px; margin-top:8px; }
+      .err-banner { color:#ff6b6b; font-size:13px; margin-top:8px; }
     </style>
   </head>
   <body>
@@ -2067,9 +2102,20 @@ function wizardHtml(defaults) {
       </div>
       <div class="card" id="llmCard">
         <h3>Required: OpenClaw LLM Provider</h3>
-        <p class="muted">Pick your LLM provider and paste your credential. Beginner mode supports common API-key providers.</p>
-        <div class="grid">
-          <div>
+        <p class="muted">Use an API key for OpenAI Platform and other providers, or ChatGPT/Codex OAuth for subscription access (no separate API billing). OAuth tokens are stored by OpenClaw — not as <code>OPENAI_API_KEY</code>.</p>
+        <div style="margin-bottom:12px;">
+          <label style="margin-bottom:8px;">LLM authentication</label>
+          <label style="display:flex; align-items:flex-start; gap:8px; font-size:14px; color:#e8eef9; margin-bottom:6px; cursor:pointer;">
+            <input id="llmAuthModeApiKey" name="llmAuthMode" type="radio" value="api_key" style="width:auto; margin-top:3px;" checked />
+            <span><strong>API key</strong> — OpenAI Platform (<code>openai</code>), Anthropic, OpenRouter, etc.</span>
+          </label>
+          <label style="display:flex; align-items:flex-start; gap:8px; font-size:14px; color:#e8eef9; cursor:pointer;">
+            <input id="llmAuthModeOauth" name="llmAuthMode" type="radio" value="oauth" style="width:auto; margin-top:3px;" />
+            <span><strong>ChatGPT / Codex (OAuth)</strong> — provider <code>openai-codex</code> (Plus/Pro subscription via OpenClaw login)</span>
+          </label>
+        </div>
+        <div class="grid" id="llmProviderModelGrid">
+          <div id="llmProviderWrap">
             <label>LLM provider (required)</label>
             <select id="llmProvider"></select>
           </div>
@@ -2078,21 +2124,57 @@ function wizardHtml(defaults) {
             <select id="llmModel"></select>
           </div>
         </div>
+        <p class="muted hidden" id="llmOauthProviderNote">Provider is fixed to <code>openai-codex</code>. Pick a Codex model below (or enable manual selection).</p>
         <div style="margin-top:8px;">
           <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:#9cb0de;">
             <input id="llmModelManual" type="checkbox" style="width:auto; padding:0; margin:0;" />
             Choose model manually (advanced)
           </label>
         </div>
-        <div style="margin-top:12px;">
+        <div style="margin-top:12px;" id="llmApiKeyBlock">
           <label>LLM API key or token (required)</label>
           <input id="llmCredential" type="password" placeholder="Paste the credential for the selected provider/model" />
-          <p class="muted">This credential is written to OpenClaw model provider config so your agent can run. If you skip manual model selection, the installer will choose a safe provider default.</p>
-          <p class="muted" id="llmLoadState" aria-live="polite">Loading LLM provider catalog...</p>
-          <div id="llmLoadingHint" class="loading-hint" role="status" aria-live="polite">
-            <span class="spinner" aria-hidden="true"></span>
-            <span id="llmLoadingHintText">Fetching provider list...</span>
+          <p class="muted">Written to OpenClaw <code>config.env</code> for the selected provider. If you do not choose a model manually, the installer picks a safe default.</p>
+        </div>
+        <div style="margin-top:12px;" id="llmOauthBlock" class="hidden">
+          <p class="muted" style="margin-bottom:12px;">
+            OAuth here is fully guided. After you choose OAuth, we start OpenClaw login automatically. Use the sign-in button below, then complete ChatGPT in this browser. You should not need to copy any code.
+          </p>
+          <div class="oauth-guide">
+            <p class="muted" style="margin-top:0;">
+              <strong>Important:</strong> Complete the ChatGPT sign-in in this browser, then return to this tab. The wizard detects the result automatically.
+            </p>
+            <p class="muted" style="margin-top:4px;font-size:13px;color:#7a8ba8;">
+              <strong>Remote VPS?</strong> Forward port <code>1455</code> alongside the wizard port:
+              <code style="display:block;margin-top:4px;padding:4px 8px;background:#111827;border-radius:4px;font-size:12px;">ssh -L 17890:127.0.0.1:17890 -L 1455:127.0.0.1:1455 user@your-vps</code>
+            </p>
+            <ol>
+              <li class="oauth-step pending" id="oauthStepPrepare">Preparing ChatGPT sign-in...</li>
+              <li class="oauth-step pending" id="oauthStepOpen">Open ChatGPT sign-in in this browser.</li>
+              <li class="oauth-step pending" id="oauthStepComplete">Finish ChatGPT approval, then return here.</li>
+              <li class="oauth-step pending" id="oauthStepVerify">We detect completion automatically.</li>
+            </ol>
+            <div class="oauth-actions">
+              <a id="oauthOpenUrlBtn" class="secondary" href="#" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:10px 14px;border-radius:8px;background:#2d7dff;color:#fff;text-decoration:none;font-weight:600;opacity:.55;pointer-events:none;">Open ChatGPT sign-in</a>
+              <button type="button" id="oauthRetryBtn" class="secondary hidden">Try sign-in again</button>
+            </div>
+            <p id="oauthFlowStatus" class="muted" style="margin-top:8px;" aria-live="polite">Choose OAuth and wait a moment. We will prepare your sign-in automatically.</p>
+            <div id="oauthFallbackPaste" class="hidden" style="margin-top:12px;padding:12px;background:#111827;border:1px solid #334a87;border-radius:8px;">
+              <p class="muted" style="margin:0 0 8px;font-size:13px;color:#ffcc70;">
+                <strong>Redirect didn't reach us?</strong> Copy the full URL from the error page in your browser (it starts with <code>http://localhost:1455/auth/callback?code=…</code>) and paste it below.
+              </p>
+              <div style="display:flex;gap:8px;">
+                <input id="oauthFallbackUrlInput" type="text" placeholder="Paste the full localhost:1455/auth/callback?code=… URL here" style="flex:1;font-size:12px;padding:8px 10px;border-radius:6px;border:1px solid #334a87;background:#0a1224;color:#e0e8ff;">
+                <button type="button" id="oauthFallbackSubmitBtn" class="secondary" style="padding:8px 14px;white-space:nowrap;">Submit URL</button>
+              </div>
+              <p id="oauthFallbackError" class="muted hidden" style="margin:6px 0 0;font-size:12px;color:#ff6b6b;"></p>
+            </div>
           </div>
+        </div>
+        <p class="muted" id="llmLoadState" aria-live="polite">Loading LLM provider catalog...</p>
+        <div id="llmLoadingHint" class="loading-hint" role="status" aria-live="polite">
+          <span class="spinner" aria-hidden="true"></span>
+          <span id="llmLoadingHintText">Fetching provider list...</span>
         </div>
       </div>
       <div class="card" id="xCard">
@@ -2118,7 +2200,7 @@ function wizardHtml(defaults) {
             <input id="xAccessTokenMainSecret" type="password" autocomplete="off" />
           </div>
         </div>
-        <p class="muted">If you use X: create an app at <a href="https://developer.x.com" target="_blank" rel="noopener noreferrer">developer.x.com</a> with OAuth 1.0a Read and Write, and fill all four fields above (or leave all blank). Values are written to <code>openclaw.json</code> under the plugin <code>x</code> block.</p>
+        <p class="muted">If you use X: create an app at <a href="https://developer.x.com" target="_blank" rel="noopener noreferrer">developer.x.com</a> with OAuth 1.0a Read and Write, and fill all four fields above (or leave all blank). Values are written to <code>openclaw.json</code> at <code>plugins.entries.solana-trader.config.x</code> (consumer key/secret plus <code>profiles.main</code> and <code>profiles.solana-trader</code>, same tokens unless you set <code>X_ACCESS_TOKEN_SOLANA_TRADER</code> / <code>_SECRET</code>).</p>
       </div>
       <div class="card" id="startCard">
         <div class="grid">
@@ -2135,10 +2217,10 @@ function wizardHtml(defaults) {
         </div>
         <div style="margin-top:12px;">
           <label style="display:flex;align-items:center;gap:8px;">Referral code (optional)
-            <span class="info-dot" title="Included access: 24 hours for every new account. Add a valid referral code for an extra 24 hours. Refer others: when they complete at least one trade with the agent, you earn +8 hours per active referral. When your access window ends, you will need to stake or keep referring to continue.">i</span>
+            <span class="info-dot" title="Included access: 24 hours for every new account. Add a valid referral code for an extra 24 hours. Refer others: when they complete at least one trade with the agent, you earn +24 hours per active referral. When your access window ends, you will need to stake or keep referring to continue.">i</span>
           </label>
           <input id="referralCode" type="text" maxlength="16" autocomplete="off" placeholder="e.g. ABCD1234" />
-          <p class="muted">If you have a friend’s code, enter it here. The setup command below will include it for <code>traderclaw setup</code>. If the server rejects the code, clear this field or fix it and copy the updated command — or run <code>traderclaw setup</code> again and enter a valid code or leave referral blank when prompted.</p>
+          <p class="muted">Included access: 24 hours for every new account. Add a valid referral code for an extra 24 hours. Refer others: when they complete at least one trade with the agent, you earn +24 hours per active referral. When your access window ends, you will need to stake or keep referring to continue.</p>
         </div>
         <button id="start" disabled>Start Installation</button>
       </div>
@@ -2226,6 +2308,12 @@ function wizardHtml(defaults) {
       const llmModelEl = document.getElementById("llmModel");
       const llmModelManualEl = document.getElementById("llmModelManual");
       const llmCredentialEl = document.getElementById("llmCredential");
+      const llmAuthModeApiKey = document.getElementById("llmAuthModeApiKey");
+      const llmAuthModeOauth = document.getElementById("llmAuthModeOauth");
+      const llmProviderWrap = document.getElementById("llmProviderWrap");
+      const llmOauthProviderNote = document.getElementById("llmOauthProviderNote");
+      const llmApiKeyBlock = document.getElementById("llmApiKeyBlock");
+      const llmOauthBlock = document.getElementById("llmOauthBlock");
       const telegramTokenEl = document.getElementById("telegramToken");
       const llmLoadStateEl = document.getElementById("llmLoadState");
       const llmLoadingHintEl = document.getElementById("llmLoadingHint");
@@ -2252,14 +2340,317 @@ function wizardHtml(defaults) {
       let pollTimer = null;
       let pollIntervalMs = 1200;
       let installLocked = false;
+      let savedApiKeyProvider = "";
+      let oauthSessionId = null;
+      let oauthWizardLoginDone = false;
+      let oauthStartInFlight = false;
+      let oauthPollTimer = null;
+      let oauthOpenedInBrowser = false;
+      let oauthFlowStartedAtMs = 0;
+
+      const oauthOpenUrlBtn = document.getElementById("oauthOpenUrlBtn");
+      const oauthRetryBtn = document.getElementById("oauthRetryBtn");
+      const oauthFlowStatus = document.getElementById("oauthFlowStatus");
+      const oauthStepPrepare = document.getElementById("oauthStepPrepare");
+      const oauthStepOpen = document.getElementById("oauthStepOpen");
+      const oauthStepComplete = document.getElementById("oauthStepComplete");
+      const oauthStepVerify = document.getElementById("oauthStepVerify");
+      const oauthFallbackPaste = document.getElementById("oauthFallbackPaste");
+      const oauthFallbackUrlInput = document.getElementById("oauthFallbackUrlInput");
+      const oauthFallbackSubmitBtn = document.getElementById("oauthFallbackSubmitBtn");
+      const oauthFallbackError = document.getElementById("oauthFallbackError");
+      let oauthFallbackTimer = null;
+
+      function setOauthStep(stepEl, mode) {
+        if (!stepEl) return;
+        stepEl.classList.remove("pending", "active", "done", "error");
+        stepEl.classList.add(mode || "pending");
+      }
+
+      function setOauthStatus(text, isError = false, isSuccess = false) {
+        if (!oauthFlowStatus) return;
+        oauthFlowStatus.className = isError ? "err-banner" : isSuccess ? "ok-banner" : "muted";
+        oauthFlowStatus.textContent = text;
+      }
+
+      function setOauthOpenButton(url) {
+        if (!oauthOpenUrlBtn) return;
+        if (!url) {
+          oauthOpenUrlBtn.href = "#";
+          oauthOpenUrlBtn.style.opacity = ".55";
+          oauthOpenUrlBtn.style.pointerEvents = "none";
+          oauthOpenUrlBtn.setAttribute("aria-disabled", "true");
+          return;
+        }
+        oauthOpenUrlBtn.href = url;
+        oauthOpenUrlBtn.style.opacity = "1";
+        oauthOpenUrlBtn.style.pointerEvents = "auto";
+        oauthOpenUrlBtn.removeAttribute("aria-disabled");
+      }
+
+      function stopOauthPolling() {
+        if (oauthPollTimer) {
+          clearInterval(oauthPollTimer);
+          oauthPollTimer = null;
+        }
+      }
+
+      async function cancelOauthSession() {
+        stopOauthPolling();
+        oauthStartInFlight = false;
+        if (!oauthSessionId) {
+          try {
+            await fetch("/api/llm/oauth/cancel", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+          } catch {
+            /* ignore */
+          }
+          return;
+        }
+        try {
+          await fetch("/api/llm/oauth/cancel", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ sessionId: oauthSessionId }),
+          });
+        } catch {
+          /* ignore */
+        }
+        oauthSessionId = null;
+      }
+
+      function hideFallbackPaste() {
+        if (oauthFallbackPaste) oauthFallbackPaste.classList.add("hidden");
+        if (oauthFallbackUrlInput) oauthFallbackUrlInput.value = "";
+        if (oauthFallbackError) { oauthFallbackError.textContent = ""; oauthFallbackError.classList.add("hidden"); }
+        if (oauthFallbackTimer) { clearTimeout(oauthFallbackTimer); oauthFallbackTimer = null; }
+      }
+
+      function showFallbackPasteAfterDelay(ms) {
+        hideFallbackPaste();
+        oauthFallbackTimer = setTimeout(() => {
+          if (oauthFallbackPaste && oauthSessionId && oauthOpenedInBrowser && !oauthWizardLoginDone) {
+            oauthFallbackPaste.classList.remove("hidden");
+          }
+        }, ms);
+      }
+
+      function resetOauthWizardState() {
+        stopOauthPolling();
+        hideFallbackPaste();
+        oauthSessionId = null;
+        oauthWizardLoginDone = false;
+        oauthStartInFlight = false;
+        oauthOpenedInBrowser = false;
+        oauthFlowStartedAtMs = 0;
+        if (oauthRetryBtn) oauthRetryBtn.classList.add("hidden");
+        setOauthOpenButton("");
+        setOauthStep(oauthStepPrepare, "pending");
+        setOauthStep(oauthStepOpen, "pending");
+        setOauthStep(oauthStepComplete, "pending");
+        setOauthStep(oauthStepVerify, "pending");
+        setOauthStatus("Choose OAuth and wait a moment. We will prepare your sign-in automatically.");
+      }
+
+      (function initLlmAuthDefaults() {
+        const mode = ${JSON.stringify(defaults.llmAuthMode || "api_key")};
+        if (mode === "oauth") {
+          llmAuthModeOauth.checked = true;
+          llmAuthModeApiKey.checked = false;
+        }
+        applyLlmAuthModeUi();
+      })();
+
+      function isOauthMode() {
+        return llmAuthModeOauth && llmAuthModeOauth.checked;
+      }
+
+      function effectiveLlmProvider() {
+        return isOauthMode() ? "openai-codex" : llmProviderEl.value.trim();
+      }
+
+      function applyLlmAuthModeUi() {
+        if (!llmProviderWrap || !llmApiKeyBlock || !llmOauthBlock) return;
+        if (isOauthMode()) {
+          savedApiKeyProvider = llmProviderEl.value || savedApiKeyProvider;
+          llmProviderEl.value = "openai-codex";
+          llmProviderWrap.classList.add("hidden");
+          llmOauthProviderNote.classList.remove("hidden");
+          llmApiKeyBlock.classList.add("hidden");
+          llmOauthBlock.classList.remove("hidden");
+          if (!oauthWizardLoginDone && !oauthStartInFlight && !oauthSessionId) {
+            void startOauthGuidedFlow();
+          }
+        } else {
+          void cancelOauthSession();
+          resetOauthWizardState();
+          llmProviderWrap.classList.remove("hidden");
+          llmOauthProviderNote.classList.add("hidden");
+          llmApiKeyBlock.classList.remove("hidden");
+          llmOauthBlock.classList.add("hidden");
+          if (savedApiKeyProvider) {
+            llmProviderEl.value = savedApiKeyProvider;
+          }
+        }
+      }
+
+      function onLlmAuthModeChange() {
+        applyLlmAuthModeUi();
+        refreshModelOptions("");
+      }
 
       function hasRequiredInputs() {
-        return (
-          llmCatalogReady
-          && Boolean(llmProviderEl.value.trim())
-          && Boolean(llmCredentialEl.value.trim())
-          && Boolean(telegramTokenEl.value.trim())
-        );
+        if (!llmCatalogReady || !Boolean(telegramTokenEl.value.trim())) return false;
+        if (isOauthMode()) {
+          return oauthWizardLoginDone === true;
+        }
+        return Boolean(llmProviderEl.value.trim()) && Boolean(llmCredentialEl.value.trim());
+      }
+
+      async function pollOauthStatusOnce() {
+        if (!oauthSessionId || !isOauthMode()) return;
+        try {
+          const sessionId = oauthSessionId;
+          const res = await fetch("/api/llm/oauth/status?sessionId=" + encodeURIComponent(sessionId));
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            stopOauthPolling();
+            oauthStartInFlight = false;
+            if (data && data.error === "invalid_or_expired_session") {
+              setOauthStep(oauthStepPrepare, "done");
+              setOauthStep(oauthStepOpen, "error");
+              setOauthStep(oauthStepComplete, "error");
+              setOauthStep(oauthStepVerify, "error");
+              setOauthStatus(
+                "Automatic OAuth session expired. This flow requires the wizard and OpenClaw on the same machine and the same browser. Click Try sign-in again.",
+                true,
+              );
+            } else {
+              setOauthStatus((data && (data.message || data.error)) || "Could not read OAuth status.", true);
+            }
+            if (oauthRetryBtn) oauthRetryBtn.classList.remove("hidden");
+            updateStartButtonState();
+            return;
+          }
+          const state = typeof data.state === "string" ? data.state : "unknown";
+          if (state === "awaiting_browser_callback") {
+            setOauthStep(oauthStepPrepare, "done");
+            setOauthStep(oauthStepOpen, oauthOpenedInBrowser ? "done" : "active");
+            setOauthStep(oauthStepComplete, oauthOpenedInBrowser ? "active" : "pending");
+            setOauthStep(oauthStepVerify, oauthOpenedInBrowser ? "active" : "pending");
+            if (oauthOpenedInBrowser) {
+              const elapsed = oauthFlowStartedAtMs > 0 ? Math.floor((Date.now() - oauthFlowStartedAtMs) / 1000) : 0;
+              if (elapsed >= 90) {
+                setOauthStatus(
+                  "Still waiting for callback. Keep using this same browser on this same machine. If you opened OAuth on another computer, this automatic flow cannot complete.",
+                  true,
+                );
+                if (oauthRetryBtn) oauthRetryBtn.classList.remove("hidden");
+              } else {
+                setOauthStatus("Waiting for ChatGPT approval to finish. Return here after you continue.", false);
+              }
+            } else {
+              setOauthStatus("Step 2: click Open ChatGPT sign-in, then complete approval and return here.", false);
+            }
+            updateStartButtonState();
+            return;
+          }
+          stopOauthPolling();
+          oauthStartInFlight = false;
+          if (state === "succeeded") {
+            oauthWizardLoginDone = true;
+            oauthSessionId = null;
+            hideFallbackPaste();
+            setOauthStep(oauthStepPrepare, "done");
+            setOauthStep(oauthStepOpen, "done");
+            setOauthStep(oauthStepComplete, "done");
+            setOauthStep(oauthStepVerify, "done");
+            setOauthStatus(data.message || "ChatGPT is connected. You can start installation now.", false, true);
+            setOauthOpenButton("");
+            if (oauthRetryBtn) oauthRetryBtn.classList.add("hidden");
+            updateStartButtonState();
+            return;
+          }
+          const errorText = data.message || data.error || "OAuth login failed.";
+          setOauthStep(oauthStepPrepare, "done");
+          setOauthStep(oauthStepOpen, "error");
+          setOauthStep(oauthStepComplete, "error");
+          setOauthStep(oauthStepVerify, "error");
+          setOauthStatus(
+            errorText + " Automatic mode only works on the same machine and browser. Click Try sign-in again.",
+            true,
+          );
+          setOauthOpenButton("");
+          if (oauthRetryBtn) oauthRetryBtn.classList.remove("hidden");
+          updateStartButtonState();
+        } catch (err) {
+          stopOauthPolling();
+          oauthStartInFlight = false;
+          setOauthStep(oauthStepPrepare, "done");
+          setOauthStep(oauthStepOpen, "error");
+          setOauthStep(oauthStepComplete, "error");
+          setOauthStep(oauthStepVerify, "error");
+          setOauthStatus(err && err.message ? String(err.message) : "OAuth status request failed.", true);
+          if (oauthRetryBtn) oauthRetryBtn.classList.remove("hidden");
+          updateStartButtonState();
+        }
+      }
+
+      function beginOauthStatusPolling() {
+        stopOauthPolling();
+        oauthPollTimer = setInterval(() => {
+          void pollOauthStatusOnce();
+        }, 1500);
+        void pollOauthStatusOnce();
+      }
+
+      async function startOauthGuidedFlow() {
+        if (!isOauthMode() || oauthStartInFlight) return;
+        oauthStartInFlight = true;
+        oauthWizardLoginDone = false;
+        oauthOpenedInBrowser = false;
+        oauthFlowStartedAtMs = Date.now();
+        if (oauthRetryBtn) oauthRetryBtn.classList.add("hidden");
+        setOauthStep(oauthStepPrepare, "active");
+        setOauthStep(oauthStepOpen, "pending");
+        setOauthStep(oauthStepComplete, "pending");
+        setOauthStep(oauthStepVerify, "pending");
+        setOauthStatus("Preparing ChatGPT sign-in link...");
+        setOauthOpenButton("");
+        updateStartButtonState();
+        try {
+          const res = await fetch("/api/llm/oauth/start", { method: "POST" });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            oauthStartInFlight = false;
+            setOauthStep(oauthStepPrepare, "error");
+            setOauthStep(oauthStepOpen, "error");
+            setOauthStep(oauthStepComplete, "error");
+            setOauthStep(oauthStepVerify, "error");
+            setOauthStatus((data && (data.message || data.error)) || "Could not start OAuth sign-in.", true);
+            if (oauthRetryBtn) oauthRetryBtn.classList.remove("hidden");
+            updateStartButtonState();
+            return;
+          }
+          oauthSessionId = typeof data.sessionId === "string" ? data.sessionId : "";
+          const authUrl = typeof data.authUrl === "string" ? data.authUrl : "";
+          if (!oauthSessionId || !authUrl) {
+            oauthStartInFlight = false;
+            setOauthStep(oauthStepPrepare, "error");
+            setOauthStatus("OpenClaw did not return a valid sign-in URL. Try again.", true);
+            if (oauthRetryBtn) oauthRetryBtn.classList.remove("hidden");
+            return;
+          }
+          setOauthOpenButton(authUrl);
+          setOauthStep(oauthStepPrepare, "done");
+          setOauthStep(oauthStepOpen, "active");
+          setOauthStatus("Step 2: click Open ChatGPT sign-in and continue in this same browser.");
+          beginOauthStatusPolling();
+        } catch (err) {
+          oauthStartInFlight = false;
+          setOauthStep(oauthStepPrepare, "error");
+          setOauthStatus(err && err.message ? String(err.message) : "Could not start OAuth sign-in.", true);
+          if (oauthRetryBtn) oauthRetryBtn.classList.remove("hidden");
+        }
       }
 
       /** All-or-nothing: 0 or 4 non-empty X fields; partial is invalid. */
@@ -2346,7 +2737,7 @@ function wizardHtml(defaults) {
       }
 
       function refreshModelOptions(preferredModel) {
-        const provider = llmProviderEl.value;
+        const provider = effectiveLlmProvider();
         const providerEntry = (llmCatalog.providers || []).find((entry) => entry.id === provider);
         const modelItems = (providerEntry ? providerEntry.models : []).map((item) => ({ value: item.id, label: item.name + " (" + item.id + ")" }));
         if (modelItems.length === 0) {
@@ -2376,8 +2767,9 @@ function wizardHtml(defaults) {
             return;
           }
           setSelectOptions(llmProviderEl, providers, "${defaults.llmProvider}");
+          applyLlmAuthModeUi();
           refreshModelOptions("${defaults.llmModel}");
-          const catalogMsg = "Select your provider, paste your API key, and start installation. After setup, run \`openclaw models list\` to explore your live catalog.";
+          const catalogMsg = "Choose API key or Codex OAuth, then start installation. After setup, run \`openclaw models list\` for your live catalog.";
           setLlmCatalogReady(true, catalogMsg, false);
         } catch (err) {
           setLlmCatalogReady(false, "Failed to load LLM providers. Reload the page and try again.", true);
@@ -2431,10 +2823,14 @@ function wizardHtml(defaults) {
         manualEl.textContent = "";
         readyEl.textContent = "Starting installation...";
 
+        const oauth = isOauthMode();
         const payload = {
-          llmProvider: llmProviderEl.value.trim(),
+          llmAuthMode: oauth ? "oauth" : "api_key",
+          llmProvider: oauth ? "openai-codex" : llmProviderEl.value.trim(),
           llmModel: llmModelEl.value.trim(),
-          llmCredential: llmCredentialEl.value.trim(),
+          llmCredential: oauth ? "" : llmCredentialEl.value.trim(),
+          llmOAuthPaste: "",
+          llmOAuthSkipLogin: oauth ? true : false,
           apiKey: document.getElementById("apiKey").value.trim(),
           telegramToken: document.getElementById("telegramToken").value.trim(),
           referralCode: document.getElementById("referralCode").value.trim(),
@@ -2443,10 +2839,18 @@ function wizardHtml(defaults) {
           xAccessTokenMain: xAccessTokenMainEl.value.trim(),
           xAccessTokenMainSecret: xAccessTokenMainSecretEl.value.trim(),
         };
-        if (!payload.llmProvider || !payload.llmCredential) {
+        if (oauth) {
+          if (!oauthWizardLoginDone) {
+            stateEl.textContent = "blocked";
+            readyEl.textContent = "";
+            manualEl.textContent =
+              "Codex OAuth is not completed yet. Use the guided sign-in above in this same browser and wait for the green success message.";
+            return;
+          }
+        } else if (!payload.llmProvider || !payload.llmCredential) {
           stateEl.textContent = "blocked";
           readyEl.textContent = "";
-          manualEl.textContent = "LLM provider and credential are required before starting installation.";
+          manualEl.textContent = "LLM provider and API key are required before starting installation.";
           return;
         }
         if (!payload.telegramToken) {
@@ -2688,7 +3092,72 @@ function wizardHtml(defaults) {
         llmModelEl.disabled = !llmModelManualEl.checked;
         updateStartButtonState();
       });
+      llmAuthModeApiKey.addEventListener("change", onLlmAuthModeChange);
+      llmAuthModeOauth.addEventListener("change", onLlmAuthModeChange);
       llmCredentialEl.addEventListener("input", updateStartButtonState);
+      if (oauthOpenUrlBtn) {
+        oauthOpenUrlBtn.addEventListener("click", () => {
+          if (!oauthSessionId || oauthWizardLoginDone) return;
+          oauthOpenedInBrowser = true;
+          setOauthStep(oauthStepOpen, "done");
+          setOauthStep(oauthStepComplete, "active");
+          setOauthStep(oauthStepVerify, "active");
+          setOauthStatus("Complete ChatGPT approval in this browser, then return here. We detect completion automatically.");
+          showFallbackPasteAfterDelay(15_000);
+        });
+      }
+
+      if (oauthFallbackSubmitBtn) {
+        oauthFallbackSubmitBtn.addEventListener("click", async () => {
+          const raw = (oauthFallbackUrlInput && oauthFallbackUrlInput.value || "").trim();
+          if (!raw || !raw.includes("code=")) {
+            if (oauthFallbackError) {
+              oauthFallbackError.textContent = "Paste the full URL from the browser address bar. It must contain code=…";
+              oauthFallbackError.classList.remove("hidden");
+            }
+            return;
+          }
+          if (oauthFallbackError) oauthFallbackError.classList.add("hidden");
+          oauthFallbackSubmitBtn.disabled = true;
+          oauthFallbackSubmitBtn.textContent = "Submitting…";
+          try {
+            const res = await fetch("/api/llm/oauth/submit-callback-url", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ sessionId: oauthSessionId, callbackUrl: raw }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.ok) {
+              hideFallbackPaste();
+              setOauthStatus("Callback received! Waiting for OpenClaw to finish…", false);
+            } else {
+              if (oauthFallbackError) {
+                oauthFallbackError.textContent = data.message || data.error || "Could not submit the URL. Try again.";
+                oauthFallbackError.classList.remove("hidden");
+              }
+            }
+          } catch (err) {
+            if (oauthFallbackError) {
+              oauthFallbackError.textContent = err.message || "Request failed.";
+              oauthFallbackError.classList.remove("hidden");
+            }
+          } finally {
+            oauthFallbackSubmitBtn.disabled = false;
+            oauthFallbackSubmitBtn.textContent = "Submit URL";
+          }
+        });
+      }
+
+      if (oauthRetryBtn) {
+        oauthRetryBtn.addEventListener("click", async () => {
+          await cancelOauthSession();
+          resetOauthWizardState();
+          if (isOauthMode()) {
+            await startOauthGuidedFlow();
+          }
+        });
+      }
+
       telegramTokenEl.addEventListener("input", updateStartButtonState);
       xConsumerKeyEl.addEventListener("input", updateStartButtonState);
       xConsumerSecretEl.addEventListener("input", updateStartButtonState);
@@ -2710,7 +3179,8 @@ async function cmdInstall(args) {
   }
 
   const defaults = parseInstallWizardArgs(args);
-  const { createInstallerStepEngine, assertWizardXCredentials } = await import("./installer-step-engine.mjs");
+  const { createInstallerStepEngine, assertWizardXCredentials, spawnOpenClawCodexAuthLoginChild } =
+    await import("./installer-step-engine.mjs");
   const modeConfig = {
     pluginPackage: "solana-traderclaw",
     pluginId: "solana-trader",
@@ -2729,6 +3199,111 @@ async function cmdInstall(args) {
   };
   let running = false;
   let shuttingDown = false;
+
+  /** Guided Codex OAuth sessions keyed by sessionId. */
+  const oauthSessions = new Map();
+  const OPENAI_OAUTH_AUTHORIZE_RE = /https:\/\/auth\.openai\.com\/oauth\/authorize\S*/;
+  const oauthSessionTtlMs = 15 * 60 * 1000;
+
+  // Long-lived callback proxy on port 1455. Bound at wizard startup so
+  // Cursor/VSCode auto-forwards it to the user's laptop before they begin
+  // the OAuth flow. When ChatGPT redirects the browser to localhost:1455,
+  // this proxy catches the callback and feeds the code to the active
+  // openclaw child process.
+  let oauthCallbackProxy = null;
+
+  function findActiveOauthSession() {
+    for (const [, s] of oauthSessions) {
+      if (s.status === "awaiting_browser_callback" && s.child) return s;
+    }
+    return null;
+  }
+
+  function startCallbackProxy() {
+    if (oauthCallbackProxy) return;
+    try {
+      oauthCallbackProxy = createServer((cbReq, cbRes) => {
+        const s = findActiveOauthSession();
+        const fullUrl = `http://localhost:1455${cbReq.url}`;
+        if (s && cbReq.url && cbReq.url.includes("code=")) {
+          s.updatedAt = Date.now();
+          try {
+            if (s.child && s.child.stdin && !s.child.stdin.writableEnded && !s.child.stdin.destroyed) {
+              s.child.stdin.write(`${fullUrl}\n`, () => {
+                setTimeout(() => {
+                  try {
+                    if (s.child && s.child.stdin && !s.child.stdin.destroyed && !s.child.stdin.writableEnded) {
+                      s.child.stdin.end();
+                    }
+                  } catch { /* ignore */ }
+                }, 100);
+              });
+            }
+          } catch { /* ignore */ }
+          cbRes.statusCode = 200;
+          cbRes.setHeader("content-type", "text/html; charset=utf-8");
+          cbRes.end(`<html><body style="background:#0a0e1a;color:#78f0a9;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;"><h2>ChatGPT sign-in received!</h2><p style="color:#c5d7f5;font-size:16px;">You can close this tab and return to the installer wizard.</p></body></html>`);
+        } else {
+          cbRes.statusCode = 200;
+          cbRes.setHeader("content-type", "text/html; charset=utf-8");
+          cbRes.end(`<html><body style="background:#0a0e1a;color:#9cb0de;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;"><h2>TraderClaw OAuth Callback Listener</h2><p>Waiting for ChatGPT redirect. If you see this page, the callback proxy is working.</p></body></html>`);
+        }
+      });
+      oauthCallbackProxy.listen(1455, "127.0.0.1");
+      oauthCallbackProxy.on("error", () => {
+        oauthCallbackProxy = null;
+      });
+    } catch {
+      oauthCallbackProxy = null;
+    }
+  }
+
+  /**
+   * Release port 1455 so the OpenClaw CLI can bind its own callback server
+   * during `openclaw models auth login`. Returns a promise that resolves
+   * once the proxy is fully closed (or after a safety timeout).
+   */
+  function stopCallbackProxy() {
+    return new Promise((resolve) => {
+      if (!oauthCallbackProxy) { resolve(); return; }
+      const proxy = oauthCallbackProxy;
+      oauthCallbackProxy = null;
+      const safety = setTimeout(resolve, 2000);
+      proxy.close(() => { clearTimeout(safety); setTimeout(resolve, 150); });
+    });
+  }
+
+  function hasOpenaiCodexAuthTokens() {
+    try {
+      const authFile = join(homedir(), ".openclaw", "agents", "main", "agent", "auth-profiles.json");
+      const raw = readFileSync(authFile, "utf-8");
+      const data = JSON.parse(raw);
+      return data && typeof data === "object" && JSON.stringify(data).length > 20;
+    } catch {
+      return false;
+    }
+  }
+
+  function killOauthSession(sessionId, signal = "SIGTERM") {
+    const s = oauthSessions.get(sessionId);
+    if (!s) return;
+    try {
+      if (s.child) s.child.kill(signal);
+    } catch {
+      /* ignore */
+    }
+    oauthSessions.delete(sessionId);
+  }
+
+  function pruneExpiredOauthSessions() {
+    const now = Date.now();
+    for (const [id, s] of oauthSessions) {
+      const anchor = s.updatedAt || s.createdAt || now;
+      if (now - anchor > oauthSessionTtlMs) {
+        killOauthSession(id);
+      }
+    }
+  }
 
   const server = createServer(async (req, res) => {
     const respondJson = (code, payload) => {
@@ -2793,6 +3368,291 @@ async function cmdInstall(args) {
       return;
     }
 
+    if (req.method === "GET" && req.url.startsWith("/api/llm/oauth/status")) {
+      pruneExpiredOauthSessions();
+      let sessionId = "";
+      try {
+        const u = new URL(req.url, "http://127.0.0.1");
+        sessionId = String(u.searchParams.get("sessionId") || "").trim();
+      } catch {
+        sessionId = "";
+      }
+      if (!sessionId) {
+        respondJson(400, { ok: false, error: "session_id_required" });
+        return;
+      }
+      const s = oauthSessions.get(sessionId);
+      if (!s) {
+        respondJson(404, { ok: false, error: "invalid_or_expired_session", message: "OAuth session expired. Start sign-in again." });
+        return;
+      }
+      respondJson(200, {
+        ok: true,
+        state: s.status || "unknown",
+        message: s.message || "",
+        authUrl: s.authUrl || "",
+        exitCode: typeof s.exitCode === "number" ? s.exitCode : null,
+        detail: s.detail || "",
+      });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/llm/oauth/start") {
+      pruneExpiredOauthSessions();
+      if (running) {
+        respondJson(409, { ok: false, error: "install_in_progress" });
+        return;
+      }
+      if (!commandExists("openclaw")) {
+        respondJson(503, {
+          ok: false,
+          error: "openclaw_not_in_path",
+          message: "Install OpenClaw on this machine first (e.g. npm install -g openclaw), then try again.",
+        });
+        return;
+      }
+      for (const id of [...oauthSessions.keys()]) {
+        killOauthSession(id);
+      }
+
+      // Release port 1455 so the OpenClaw CLI can bind its own callback
+      // server directly. The previous approach relied on the wizard proxy
+      // catching the callback and forwarding the code via stdin, but
+      // `script` (PTY wrapper) does not reliably forward stdin to the
+      // inner process, causing tokens to never be saved.
+      await stopCallbackProxy();
+
+      const sessionId = randomUUID();
+      const child = spawnOpenClawCodexAuthLoginChild();
+
+      let combined = "";
+      let responded = false;
+      const urlTimeout = setTimeout(() => {
+        if (responded) return;
+        responded = true;
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          /* ignore */
+        }
+        oauthSessions.delete(sessionId);
+        startCallbackProxy();
+        respondJson(504, {
+          ok: false,
+          error: "oauth_url_timeout",
+          message:
+            "OpenClaw did not provide a ChatGPT sign-in URL in time. Try again.",
+        });
+      }, 45_000);
+
+      const trySendUrl = () => {
+        if (responded) return;
+        const m = combined.match(OPENAI_OAUTH_AUTHORIZE_RE);
+        if (!m || !m[0]) return;
+        clearTimeout(urlTimeout);
+        responded = true;
+        oauthSessions.set(sessionId, {
+          child,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          status: "awaiting_browser_callback",
+          authUrl: m[0],
+          message: "Sign in in this same browser. OpenClaw is waiting for callback...",
+          detail: "",
+          exitCode: null,
+          submitted: false,
+        });
+        respondJson(200, { ok: true, sessionId, authUrl: m[0] });
+      };
+
+      child.stdout?.on("data", (d) => {
+        combined += d.toString();
+        trySendUrl();
+      });
+      child.stderr?.on("data", (d) => {
+        combined += d.toString();
+        trySendUrl();
+      });
+      child.on("error", (err) => {
+        clearTimeout(urlTimeout);
+        startCallbackProxy();
+        if (responded) return;
+        responded = true;
+        oauthSessions.delete(sessionId);
+        respondJson(500, { ok: false, error: "spawn_failed", message: err.message });
+      });
+      child.on("close", (code) => {
+        clearTimeout(urlTimeout);
+        startCallbackProxy();
+        if (!responded) {
+          responded = true;
+          oauthSessions.delete(sessionId);
+          respondJson(500, {
+            ok: false,
+            error: "oauth_login_exited_early",
+            exitCode: code,
+            message:
+              "OpenClaw exited before showing a sign-in URL. Start OAuth again and keep the flow on this same machine/browser.",
+            detail: stripAnsi(combined).slice(-4000),
+          });
+          return;
+        }
+        const pending = oauthSessions.get(sessionId);
+        if (pending) {
+          pending.child = null;
+          pending.updatedAt = Date.now();
+          pending.exitCode = typeof code === "number" ? code : null;
+          pending.detail = stripAnsi(combined).slice(-4000);
+          if (code === 0 && hasOpenaiCodexAuthTokens()) {
+            pending.status = "succeeded";
+            pending.message = "ChatGPT OAuth completed successfully.";
+          } else if (code === 0) {
+            pending.status = "failed";
+            pending.message =
+              "OpenClaw exited OK but no auth tokens were saved. " +
+              "Run 'openclaw models auth login --provider openai-codex' in a terminal, " +
+              "then re-run the wizard with the already-logged-in option.";
+          } else {
+            pending.status = "failed";
+            pending.message =
+              "OpenClaw OAuth did not complete. Try again — make sure you continue in the same browser that opened the sign-in link.";
+          }
+        }
+      });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/llm/oauth/submit") {
+      const body = await parseJsonBody(req).catch(() => ({}));
+      const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+      const paste = typeof body.paste === "string" ? body.paste.trim() : "";
+      if (!sessionId || !oauthSessions.has(sessionId)) {
+        respondJson(400, { ok: false, error: "invalid_or_expired_session", message: "Click “Get ChatGPT sign-in link” again." });
+        return;
+      }
+      if (!paste) {
+        respondJson(400, { ok: false, error: "paste_required" });
+        return;
+      }
+      const s = oauthSessions.get(sessionId);
+      s.submitted = true;
+      const { child } = s;
+
+      await new Promise((resolve) => {
+        let settled = false;
+        let submitTimeout;
+        const finish = (httpCode, payload) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(submitTimeout);
+          oauthSessions.delete(sessionId);
+          respondJson(httpCode, payload);
+          resolve();
+        };
+
+        submitTimeout = setTimeout(() => {
+          killOauthSession(sessionId);
+          finish(504, {
+            ok: false,
+            error: "oauth_submit_timeout",
+            message: "Login did not finish in time. Try again or complete login in a normal terminal.",
+          });
+        }, 300_000);
+
+        child.once("close", (code) => {
+          if (code === 0) {
+            finish(200, { ok: true });
+          } else {
+            finish(500, {
+              ok: false,
+              error: "oauth_login_failed",
+              exitCode: code,
+              message: "OpenClaw rejected the pasted URL or code. Paste the full redirect URL from the browser address bar, or run login in a terminal.",
+            });
+          }
+        });
+
+        try {
+          const line = `${paste}\n`;
+          if (child.stdin?.writableEnded || child.stdin?.destroyed) {
+            killOauthSession(sessionId);
+            finish(500, { ok: false, error: "stdin_closed", message: "The login session closed before paste could be sent." });
+            return;
+          }
+          child.stdin.write(line, (err) => {
+            if (err) {
+              killOauthSession(sessionId);
+              finish(500, { ok: false, error: "stdin_write_failed", message: err?.message || String(err) });
+              return;
+            }
+            // End stdin so the PTY/readline layer forwards the line and the CLI can proceed (plain `script` often buffers otherwise).
+            setTimeout(() => {
+              try {
+                if (child.stdin && !child.stdin.destroyed && !child.stdin.writableEnded) {
+                  child.stdin.end();
+                }
+              } catch {
+                /* ignore */
+              }
+            }, 100);
+          });
+        } catch (err) {
+          killOauthSession(sessionId);
+          finish(500, { ok: false, error: "stdin_write_failed", message: err?.message || String(err) });
+        }
+      });
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/llm/oauth/submit-callback-url") {
+      const body = await parseJsonBody(req).catch(() => ({}));
+      const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+      const callbackUrl = typeof body.callbackUrl === "string" ? body.callbackUrl.trim() : "";
+      if (!callbackUrl || !callbackUrl.includes("code=")) {
+        respondJson(400, { ok: false, error: "invalid_url", message: "URL must contain a code= parameter." });
+        return;
+      }
+      const s = sessionId ? oauthSessions.get(sessionId) : findActiveOauthSession();
+      if (!s || !s.child) {
+        respondJson(404, { ok: false, error: "no_active_session", message: "No active OAuth session. Click Try sign-in again." });
+        return;
+      }
+      try {
+        if (s.child.stdin && !s.child.stdin.writableEnded && !s.child.stdin.destroyed) {
+          s.child.stdin.write(`${callbackUrl}\n`, () => {
+            setTimeout(() => {
+              try {
+                if (s.child && s.child.stdin && !s.child.stdin.destroyed && !s.child.stdin.writableEnded) {
+                  s.child.stdin.end();
+                }
+              } catch { /* ignore */ }
+            }, 100);
+          });
+          s.updatedAt = Date.now();
+          respondJson(200, { ok: true, message: "Callback URL submitted. Waiting for OpenClaw to complete…" });
+        } else {
+          respondJson(500, { ok: false, error: "stdin_closed", message: "OpenClaw process stdin is closed. Click Try sign-in again." });
+        }
+      } catch (err) {
+        respondJson(500, { ok: false, error: "write_error", message: err.message || "Failed to write to OpenClaw." });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && req.url === "/api/llm/oauth/cancel") {
+      const body = await parseJsonBody(req).catch(() => ({}));
+      const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+      if (sessionId && oauthSessions.has(sessionId)) {
+        killOauthSession(sessionId);
+      } else {
+        for (const id of [...oauthSessions.keys()]) {
+          killOauthSession(id);
+        }
+      }
+      respondJson(200, { ok: true });
+      return;
+    }
+
     if (req.method === "POST" && req.url === "/api/finish") {
       if (running || runtime.status !== "completed") {
         respondJson(409, { ok: false, error: "wizard_not_completed" });
@@ -2829,12 +3689,17 @@ async function cmdInstall(args) {
       }
 
       const body = await parseJsonBody(req).catch(() => ({}));
+      const rawLlmAuth = body.llmAuthMode != null ? body.llmAuthMode : defaults.llmAuthMode;
       const wizardOpts = {
         mode: "light",
         lane: defaults.lane,
+        llmAuthMode: rawLlmAuth === "oauth" ? "oauth" : "api_key",
         llmProvider: body.llmProvider || defaults.llmProvider,
         llmModel: body.llmModel || defaults.llmModel,
         llmCredential: body.llmCredential || defaults.llmCredential,
+        llmOAuthPaste: typeof body.llmOAuthPaste === "string" ? body.llmOAuthPaste.trim() : defaults.llmOAuthPaste,
+        llmOAuthSkipLogin:
+          typeof body.llmOAuthSkipLogin === "boolean" ? body.llmOAuthSkipLogin : defaults.llmOAuthSkipLogin === true,
         apiKey: body.apiKey || defaults.apiKey,
         orchestratorUrl: defaults.orchestratorUrl,
         gatewayBaseUrl: defaults.gatewayBaseUrl,
@@ -2868,9 +3733,12 @@ async function cmdInstall(args) {
         {
           mode: "light",
           lane: defaults.lane,
+          llmAuthMode: wizardOpts.llmAuthMode,
           llmProvider: body.llmProvider || defaults.llmProvider,
           llmModel: body.llmModel || defaults.llmModel,
           llmCredential: body.llmCredential || defaults.llmCredential,
+          llmOAuthPaste: wizardOpts.llmOAuthPaste,
+          llmOAuthSkipLogin: wizardOpts.llmOAuthSkipLogin,
           apiKey: body.apiKey || defaults.apiKey,
           orchestratorUrl: defaults.orchestratorUrl,
           gatewayBaseUrl: defaults.gatewayBaseUrl,
@@ -2940,12 +3808,21 @@ async function cmdInstall(args) {
     server.listen(defaults.port, "127.0.0.1", resolve);
   });
 
+  // Start the OAuth callback proxy on port 1455 early so Cursor/VSCode
+  // auto-forwards it to the user's laptop before the OAuth flow begins.
+  startCallbackProxy();
+  if (oauthCallbackProxy) {
+    printInfo(`OAuth callback proxy listening on http://127.0.0.1:1455`);
+  }
+
   const url = `http://127.0.0.1:${defaults.port}`;
   printSuccess(`Installer wizard is running at ${url}`);
   if (!openBrowser(url)) {
     printInfo(`Open this URL in your browser: ${url}`);
   }
   printInfo("Press Ctrl+C to stop the wizard server.");
+  printInfo(`If you are on a remote VPS, forward both ports from your local machine:`);
+  printInfo(`  ssh -L ${defaults.port}:127.0.0.1:${defaults.port} -L 1455:127.0.0.1:1455 <user>@<your-vps>`);
 }
 
 async function cmdTestSession(args) {
@@ -3202,6 +4079,7 @@ Commands:
   signup             Create a new account (alias for: setup --signup; run locally, not via the agent)
   precheck           Run environment checks (dry-run or allow-install)
   install            Launch installer flows (--wizard for localhost GUI)
+  repair-openclaw    Re-run npm install in the global openclaw package (fixes missing grammy / @buape/carbon; uses --ignore-scripts so @discordjs/opus does not require build tools)
   gateway            Gateway helpers (see subcommands below)
   login              Re-authenticate (uses refresh token when valid; full challenge only if needed)
   logout             Revoke current session and clear tokens
@@ -3237,6 +4115,15 @@ Config subcommands:
   config set <k> <v> Update a configuration value
   config reset       Remove plugin configuration
 
+Install wizard (traderclaw install --wizard):
+  --port                 Local port for the wizard (default 17890)
+  --llm-provider         e.g. openai, openai-codex, anthropic
+  --llm-model            e.g. openai/gpt-5.4 or openai-codex/gpt-5.4
+  --llm-api-key, --llm-token   API key for LLM (api_key mode)
+  --llm-auth api_key|oauth     OpenAI Platform key vs ChatGPT/Codex OAuth (openai-codex)
+  --llm-oauth-paste    Paste redirect URL or code for Codex OAuth (non-skip)
+  --llm-oauth-skip-login       Skip login when you already ran openclaw models auth login
+
 Examples:
   traderclaw signup
   traderclaw setup
@@ -3246,6 +4133,8 @@ Examples:
   traderclaw precheck --allow-install
   traderclaw install --wizard
   traderclaw install --wizard --lane quick-local
+  traderclaw install --wizard --llm-auth oauth --llm-provider openai-codex --llm-oauth-skip-login
+  traderclaw repair-openclaw
   traderclaw gateway ensure-persistent
   traderclaw setup --signup --user-id my_agent_001 --referral-code ABCD1234
   traderclaw setup --api-key oc_xxx --url https://api.traderclaw.ai
@@ -3260,6 +4149,18 @@ Examples:
   traderclaw test-session
   traderclaw test-session --wallet-private-key <base58_key>
 `);
+}
+
+async function cmdRepairOpenclaw() {
+  const { ensureOpenClawGlobalPackageDependencies } = await import("./installer-step-engine.mjs");
+  printInfo("Repairing global OpenClaw npm dependencies (fixes missing grammy, @buape/carbon, etc.)...");
+  const r = await ensureOpenClawGlobalPackageDependencies();
+  if (r.skipped) {
+    printError(`Could not find global OpenClaw package (${r.reason}). Install or upgrade: npm install -g openclaw@${OPENCLAW_VERSION}`);
+    process.exit(1);
+  }
+  printSuccess(`Dependencies refreshed under ${r.dir}`);
+  printInfo("Next: openclaw gateway restart");
 }
 
 async function main() {
@@ -3292,6 +4193,9 @@ async function main() {
       break;
     case "install":
       await cmdInstall(args.slice(1));
+      break;
+    case "repair-openclaw":
+      await cmdRepairOpenclaw();
       break;
     case "gateway":
       await cmdGateway(args.slice(1));
