@@ -909,6 +909,7 @@ const solanaTraderPlugin = {
           slippageBps: params.slippageBps,
           slPct: params.slPct,
           managementMode: params.managementMode,
+          requestedFrom: "AGENT_REQUEST",
         };
         const execAgentId =
           typeof params.agentId === "string" && params.agentId.trim().length > 0
@@ -968,6 +969,7 @@ const solanaTraderPlugin = {
           slippageBps: params.slippageBps,
           slPct: params.slPct,
           tpLevels: params.tpLevels,
+          requestedFrom: "AGENT_REQUEST",
         };
         if (params.side === "buy") {
           body.sizeSol = params.sizeSol;

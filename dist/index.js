@@ -1528,7 +1528,8 @@ ${notes}
           symbol: params.symbol,
           slippageBps: params.slippageBps,
           slPct: params.slPct,
-          managementMode: params.managementMode
+          managementMode: params.managementMode,
+          requestedFrom: "AGENT_REQUEST"
         };
         const execAgentId = typeof params.agentId === "string" && params.agentId.trim().length > 0 ? params.agentId.trim() : config.agentId && String(config.agentId).trim().length > 0 ? String(config.agentId).trim() : void 0;
         if (execAgentId) body.agentId = execAgentId;
@@ -1580,7 +1581,8 @@ ${notes}
           symbol: params.symbol,
           slippageBps: params.slippageBps,
           slPct: params.slPct,
-          tpLevels: params.tpLevels
+          tpLevels: params.tpLevels,
+          requestedFrom: "AGENT_REQUEST"
         };
         if (params.side === "buy") {
           body.sizeSol = params.sizeSol;
