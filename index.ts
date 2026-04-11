@@ -1123,24 +1123,9 @@ const solanaTraderPlugin = {
     // SAFETY TOOLS
     // =========================================================================
 
-    api.registerTool({
-      name: "solana_killswitch",
-      description: "Toggle the emergency kill switch. When enabled, ALL trade execution is blocked. Use in emergencies: repeated losses, unusual market behavior, or security concerns.",
-      parameters: Type.Object({
-        enabled: Type.Boolean({ description: "true to activate (block all trades), false to deactivate" }),
-        mode: Type.Optional(
-          Type.Union([Type.Literal("TRADES_ONLY"), Type.Literal("TRADES_AND_STREAMS")], {
-            description: "TRADES_ONLY blocks execution; TRADES_AND_STREAMS blocks everything",
-          }),
-        ),
-      }),
-      execute: wrapExecute("solana_killswitch", async (_id, params) =>
-        post("/api/killswitch", {
-          enabled: params.enabled,
-          mode: params.mode,
-        }),
-      ),
-    });
+    // solana_killswitch (POST toggle) intentionally removed — only the user can
+    // activate or deactivate the kill switch via the dashboard. The agent may
+    // only read its status via solana_killswitch_status below.
 
     api.registerTool({
       name: "solana_killswitch_status",
