@@ -1361,33 +1361,6 @@ const solanaTraderPlugin = {
       ),
     });
 
-    api.registerTool({
-      name: "solana_wallet_token_balance",
-      description: "Get the on-chain SPL token balance (uiAmount — source of truth) for a specific mint in your trading wallet. Returns the token amount, decimals, and USD value estimate. Use to verify actual holdings when position balances seem inconsistent.",
-      parameters: Type.Object({
-        tokenAddress: Type.String({ description: "Solana token mint address to check balance for" }),
-      }),
-      execute: wrapExecute("solana_wallet_token_balance", async (_id, params) =>
-        post("/api/wallet/token-balance", { tokenAddress: params.tokenAddress }),
-      ),
-    });
-
-    api.registerTool({
-      name: "solana_sweep_dead_tokens",
-      description: "Sell 100% of open positions where unrealizedReturnPct ≤ -maxLossPct to cut losses and reclaim SOL. NOT a dust/rent sweeper — this sells actual positions that are down beyond recovery. Use in dead_money_sweep cron or manual loss-cutting.",
-      parameters: Type.Object({
-        maxLossPct: Type.Optional(Type.Number({ description: "Maximum loss percentage threshold — positions down more than this % are sold (default: 80)" })),
-        slippageBps: Type.Optional(Type.Number({ description: "Slippage in basis points for the sell orders (default: server default)" })),
-        dryRun: Type.Optional(Type.Boolean({ description: "If true, return positions that would be sold without executing. Default: false" })),
-      }),
-      execute: wrapExecute("solana_sweep_dead_tokens", async (_id, params) =>
-        post("/api/wallet/sweep-dead-tokens", {
-          maxLossPct: params.maxLossPct,
-          slippageBps: params.slippageBps,
-          dryRun: params.dryRun,
-        }),
-      ),
-    });
 
     api.registerTool({
       name: "solana_trades",
