@@ -15,7 +15,7 @@ await build({
   target: "node22",
   bundle: true,
   splitting: true,
-  external: ["openclaw/plugin-sdk", "@sinclair/typebox", "ws"],
+  external: ["openclaw/plugin-sdk", "@sinclair/typebox", "@kayba_ai/tracing", "ws"],
 });
 
 console.log("Build complete → dist/");

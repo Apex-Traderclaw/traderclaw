@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import kayba, { SpanType } from "@kayba_ai/tracing";
 import { orchestratorRequest } from "./src/http-client.js";
 import { SessionManager } from "./src/session-manager.js";
 import { AlphaBuffer } from "./src/alpha-buffer.js";
@@ -70,6 +71,10 @@ interface PluginConfig {
   dailyLogRetentionDays?: number;
   xConfig?: XConfig;
   beta?: { xPosting?: boolean };
+  /** Kayba tracing API key. Falls back to KAYBA_API_KEY env var. */
+  kaybaApiKey?: string;
+  /** Kayba folder name for organizing traces. Defaults to "traderclaw". */
+  kaybaFolder?: string;
 }
 
 function parseConfig(raw: unknown): PluginConfig {
@@ -107,6 +112,8 @@ function parseConfig(raw: unknown): PluginConfig {
     ? (obj.beta as Record<string, unknown>)
     : {};
   const beta = { xPosting: betaRaw.xPosting === true };
+  const kaybaApiKey = typeof obj.kaybaApiKey === "string" ? obj.kaybaApiKey : undefined;
+  const kaybaFolder = typeof obj.kaybaFolder === "string" ? obj.kaybaFolder : "traderclaw";
   return {
     orchestratorUrl,
     walletId,
@@ -129,6 +136,8 @@ function parseConfig(raw: unknown): PluginConfig {
     dailyLogRetentionDays,
     xConfig,
     beta,
+    kaybaApiKey,
+    kaybaFolder,
   };
 }
 
@@ -226,6 +235,20 @@ const solanaTraderPlugin = {
         "[solana-trader] apiKey or refreshToken is required. Tell the user to run on their machine: traderclaw setup --signup (or traderclaw signup) for a new account, or traderclaw setup / traderclaw login if they already have an API key. The agent cannot sign up or edit credentials.",
       );
       return;
+    }
+
+    // ── Kayba tracing ──────────────────────────────────────────────────
+    const kaybaKey = config.kaybaApiKey || process.env.KAYBA_API_KEY || "";
+    if (kaybaKey) {
+      try {
+        kayba.configure({
+          apiKey: kaybaKey,
+          folder: config.kaybaFolder || "traderclaw",
+        });
+        api.logger.info("[solana-trader] Kayba tracing enabled");
+      } catch (err) {
+        api.logger.warn(`[solana-trader] Kayba tracing init failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
 
     const dataDir = config.dataDir || path.join(process.cwd(), ".traderclaw-v1-data");
@@ -434,12 +457,25 @@ const solanaTraderPlugin = {
     const wrapExecute = (sourceName: string, fn: (_id: string, params: Record<string, unknown>) => Promise<unknown>) =>
       async (toolCallId: string, params: Record<string, unknown>) => {
         const toolName = sourceName;
-        try {
-          const result = await fn(toolCallId, params ?? {});
-          return json(JSON.parse(renderToolEnvelope(normalizeToolSuccess(result, toolName))));
-        } catch (err) {
-          return json(JSON.parse(renderToolEnvelope(normalizeToolError(err, toolName))));
+        const run = async () => {
+          try {
+            const result = await fn(toolCallId, params ?? {});
+            return json(JSON.parse(renderToolEnvelope(normalizeToolSuccess(result, toolName))));
+          } catch (err) {
+            return json(JSON.parse(renderToolEnvelope(normalizeToolError(err, toolName))));
+          }
+        };
+
+        // If Kayba tracing is configured, wrap the tool call in a trace.
+        if (kayba.isConfigured()) {
+          const traced = kayba.trace(run, {
+            name: toolName,
+            spanType: SpanType.TOOL,
+            attributes: { "tool.params": JSON.stringify(params ?? {}) },
+          });
+          return traced();
         }
+        return run();
       };
 
     const workspaceRoot = resolveWorkspaceRoot(config.workspaceDir);

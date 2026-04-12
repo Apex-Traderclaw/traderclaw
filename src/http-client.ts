@@ -1,3 +1,5 @@
+import kayba, { SpanType } from "@kayba_ai/tracing";
+
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export interface OrchestratorRequestOptions {
@@ -15,8 +17,27 @@ export interface OrchestratorRequestOptions {
 export async function orchestratorRequest(
   opts: OrchestratorRequestOptions,
 ): Promise<unknown> {
-  const result = await doRequest(opts);
-  return result;
+  if (!kayba.isConfigured()) {
+    return doRequest(opts);
+  }
+
+  const span = kayba.startSpan({
+    name: `HTTP ${opts.method} ${opts.path}`,
+    spanType: SpanType.TOOL,
+    inputs: { method: opts.method, path: opts.path },
+  });
+
+  try {
+    const result = await doRequest(opts);
+    span.end({ outputs: { status: "ok" }, status: "OK" });
+    return result;
+  } catch (err) {
+    span.end({
+      outputs: { error: err instanceof Error ? err.message : String(err) },
+      status: "ERROR",
+    });
+    throw err;
+  }
 }
 
 async function doRequest(
