@@ -1120,23 +1120,6 @@ const solanaTraderPlugin = {
     });
 
     // =========================================================================
-    // SAFETY TOOLS
-    // =========================================================================
-
-    // solana_killswitch (POST toggle) intentionally removed — only the user can
-    // activate or deactivate the kill switch via the dashboard. The agent may
-    // only read its status via solana_killswitch_status below.
-
-    api.registerTool({
-      name: "solana_killswitch_status",
-      description: "Check the current kill switch state — whether it's enabled and in what mode.",
-      parameters: Type.Object({}),
-      execute: wrapExecute("solana_killswitch_status", async () =>
-        get(`/api/killswitch/status?walletId=${walletId}`),
-      ),
-    });
-
-    // =========================================================================
     // WALLET TOOLS
     // =========================================================================
 
