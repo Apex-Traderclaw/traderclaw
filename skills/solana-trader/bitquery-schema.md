@@ -2,10 +2,102 @@
 
 ## Overview
 
-This skill covers the Bitquery v2 EAP (Early Access Program) GraphQL schema for Solana, specifically the two trade cubes and their differences. Use this before writing or reviewing any query in `bitQuery.js`.
+This skill covers the Bitquery v2 EAP (Early Access Program) GraphQL schema for Solana, specifically the two trade cubes and their differences. Use it when calling any Bitquery tool, reading query results, or recovering from a failed query.
 
 **Endpoint:** `https://streaming.bitquery.io/graphql` (HTTP and WebSocket)
 **Auth header:** `Authorization: Bearer <BITQUERY_API_KEY>`
+
+---
+
+## CRITICAL: Catalog Failure Is NOT a Dead End
+
+**You have two separate Bitquery tools:**
+
+| Tool | What it does |
+|---|---|
+| `solana_bitquery_catalog` | Runs a pre-built template by path (e.g. `pumpFunHoldersRisk.first100Buyers`) |
+| `solana_bitquery_query` | Runs **any raw GraphQL you write** against the same endpoint |
+
+When `solana_bitquery_catalog` fails, **do not stop**. You can always write the query yourself and call `solana_bitquery_query` instead. The schema rules in this file give you everything needed to do that correctly.
+
+---
+
+## Recovery Protocol — Step by Step
+
+When a Bitquery call returns an error, follow this decision tree:
+
+```
+1. Read the error code and message from the tool response.
+2. Classify the error (see table below).
+3. If SCHEMA error → apply the fix from "Common Schema Errors → Fix Map" below
+                   → call solana_bitquery_query with corrected GraphQL.
+4. If OPERATIONAL error → retry with backoff (max 2 retries) or skip this data.
+5. If AUTH error → report to user; do not retry.
+```
+
+### Error Classification
+
+| Response indicator | Class | Action |
+|---|---|---|
+| `code: "BITQUERY_QUERY_FAILED"` + message contains `Cannot query field` | SCHEMA | Fix the field/cube in your query (see Fix Map) |
+| `code: "BITQUERY_QUERY_FAILED"` + message contains `Unknown argument` | SCHEMA | Remove unsupported argument (e.g. `groupBy`) |
+| `code: "BITQUERY_QUERY_FAILED"` + message contains `Variable ... is never used` | SCHEMA | Remove the undeclared variable from the query signature |
+| `code: "BITQUERY_QUERY_FAILED"` + message contains `Argument ... has invalid value` | SCHEMA | Fix the WHERE filter shape (wrong cube or wrong field path) |
+| `code: "BITQUERY_QUERY_FAILED"` + message contains `context deadline exceeded` or `aborted` | OPERATIONAL — TIMEOUT | Add `Block: { Time: { since: $since } }` to WHERE; retry once |
+| `code: "BITQUERY_QUERY_FAILED"` + HTTP 429 | OPERATIONAL — RATE LIMIT | Wait 5s and retry once; if still failing, skip and note |
+| `code: "BITQUERY_QUERY_FAILED"` + HTTP 500 | OPERATIONAL — SERVER | Retry once after 3s; if still failing, skip this data point |
+| `code: "BITQUERY_API_KEY_MISSING"` | AUTH | Report to user — no retry possible |
+| Response `ok: false` + no `errors[]` and no HTTP status | NETWORK | Retry once; if failing, skip |
+| Response `ok: true`, `data` present but all arrays are empty | NOT AN ERROR | The query is valid — the token/time window has no data |
+
+### Writing a Custom Query to Replace a Failed Catalog Call
+
+1. Call `solana_bitquery_templates` to find the closest existing template and read its operation text as a starting point.
+2. Read the error message. Match it to the Fix Map table below.
+3. Apply the fix (change cube, fix field path, remove bad argument, etc.).
+4. Call `solana_bitquery_query` with:
+   - `query`: your corrected GraphQL string
+   - `variables`: the same variables you were going to pass
+
+**Example — catalog call fails with "Cannot query field `Currency` on DEXTrades":**
+```
+// Original catalog call (fails):
+solana_bitquery_catalog({ templatePath: "pumpFunTradesLiquidity.latestTradesByToken", variables: { token: "...", limit: 10 } })
+
+// Error: Cannot query field "Currency" on type "Solana_DEXTrade_Fields_Trade"
+// Fix: switch cube from DEXTrades → DEXTradeByTokens (Trade.Currency is valid there)
+
+// Recovery call:
+solana_bitquery_query({
+  query: `query LatestTradesByToken($token: String!, $limit: Int!) {
+    Solana {
+      DEXTradeByTokens(
+        where: { Trade: { Currency: { MintAddress: { is: $token } } } }
+        orderBy: { descending: Block_Time }
+        limit: { count: $limit }
+      ) {
+        Block { Time }
+        Trade { PriceInUSD Amount AmountInUSD Side { Type } }
+      }
+    }
+  }`,
+  variables: { token: "...", limit: 10 }
+})
+```
+
+### When to Give Up vs When to Recover
+
+**Always attempt recovery (1 retry with a corrected query):**
+- Any SCHEMA error — you have the knowledge to fix it from this file.
+- TIMEOUT — add a `since` filter and retry.
+
+**Skip and continue without this data point:**
+- Two consecutive failures on the same query path.
+- AUTH errors.
+- The data is supplementary (not required for the trade decision).
+
+**Block the trade:**
+- FRESH token analysis fails for `first100Buyers` AND `devHoldings` after recovery attempts — risk is unquantifiable.
 
 ---
 
