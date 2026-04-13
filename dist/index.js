@@ -1219,7 +1219,15 @@ var solanaTraderPlugin = {
         const rc = state.regimeCanary;
         lines.push("## Regime Canary", "", `- **Regime:** ${rc.regime || "unknown"}`, `- **Detected At:** ${rc.detectedAt || "unknown"}`, "");
       }
-      const structuredKeys = /* @__PURE__ */ new Set(["tier", "walletId", "mode", "strategyVersion", "regime", "maxPositions", "maxPositionSizeSol", "defenseMode", "killSwitchActive", "watchlist", "permanentLearnings", "regimeCanary"]);
+      if (state.preferences && typeof state.preferences === "object") {
+        const prefs = state.preferences;
+        const prefLines = [];
+        for (const [pk, pv] of Object.entries(prefs)) {
+          prefLines.push(`- **${pk}:** ${formatStateValue(pv)}`);
+        }
+        if (prefLines.length > 0) lines.push("## User Preferences (override defaults)", "", ...prefLines, "");
+      }
+      const structuredKeys = /* @__PURE__ */ new Set(["tier", "walletId", "mode", "strategyVersion", "regime", "maxPositions", "maxPositionSizeSol", "defenseMode", "killSwitchActive", "watchlist", "permanentLearnings", "regimeCanary", "preferences"]);
       const summaryKeys = /* @__PURE__ */ new Set(["lastCycleSummary"]);
       const otherKeys = Object.keys(state).filter((k) => !structuredKeys.has(k) && !volatileStateKeys.has(k));
       const summaryRendered = [];
