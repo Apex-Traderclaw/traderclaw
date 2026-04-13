@@ -1,11 +1,151 @@
-# Bitquery v2 EAP GraphQL Schema Reference
+# SKILL: Bitquery v2 EAP GraphQL Schema Reference
 
 ## Overview
 
-This is the Bitquery v2 EAP (Early Access Program) GraphQL schema reference for Solana. Use this before writing any custom raw GraphQL query via `solana_bitquery_query`.
+This skill covers the Bitquery v2 EAP (Early Access Program) GraphQL schema for Solana, specifically the two trade cubes and their differences. Use it when calling any Bitquery tool, reading query results, or recovering from a failed query.
 
 **Endpoint:** `https://streaming.bitquery.io/graphql` (HTTP and WebSocket)
 **Auth header:** `Authorization: Bearer <BITQUERY_API_KEY>`
+
+---
+
+## CRITICAL: Catalog Failure Is NOT a Dead End
+
+**You have two separate Bitquery tools:**
+
+| Tool | What it does |
+|---|---|
+| `solana_bitquery_catalog` | Runs a pre-built template by path (e.g. `pumpFunHoldersRisk.first100Buyers`) |
+| `solana_bitquery_query` | Runs **any raw GraphQL you write** against the same endpoint |
+
+When `solana_bitquery_catalog` fails, **do not stop**. You can always write the query yourself and call `solana_bitquery_query` instead. The schema rules in this file give you everything needed to do that correctly.
+
+---
+
+## Recovery Protocol — Step by Step
+
+When a Bitquery call returns an error, follow this decision tree:
+
+```
+1. Read the error code and message from the tool response.
+2. MEMORY CHECK FIRST: search for prior fixes before writing new ones.
+   → solana_memory_search({ query: "bitquery_fix_applied <template_path_or_error_snippet>", limit: 3 })
+   → If a matching fix exists, apply it directly — skip to step 6.
+3. Classify the error (see table below).
+4. If SCHEMA error → apply the fix from "Common Schema Errors → Fix Map" below
+                   → call solana_bitquery_query with corrected GraphQL.
+5. If OPERATIONAL error → retry with backoff (max 2 retries) or skip this data.
+6. If AUTH error → report to user; do not retry.
+7. MEMORY WRITE: after any recovery attempt, record the result:
+   → Success: solana_memory_write with tag "bitquery_fix_applied"
+   → Failure: solana_memory_write with tag "bitquery_recovery_failed"
+   → Repeated failure on same template: solana_memory_write with tag "bitquery_template_broken"
+```
+
+### Memory Integration for Recovery
+
+**Search before recovering** — always check if you've fixed this error before:
+```
+solana_memory_search({ query: "bitquery_fix_applied", limit: 5 })
+```
+Prior fixes contain the exact corrected query and variables that worked. Reusing them is faster and more reliable than re-deriving the fix.
+
+**Write after recovering** — record every fix attempt:
+```
+// Successful fix:
+solana_memory_write({
+  content: "Bitquery fix: <template_path> failed with '<error_message>'. Fixed by switching cube from DEXTrades to DEXTradeByTokens. Working query: <corrected_query>. Variables: <variables>.",
+  tags: ["bitquery_fix_applied"]
+})
+
+// Failed recovery:
+solana_memory_write({
+  content: "Bitquery recovery failed: <template_path> error '<error_message>'. Tried: <what_was_attempted>. Result: still failing.",
+  tags: ["bitquery_recovery_failed"]
+})
+
+// Template consistently broken (2+ failures):
+solana_memory_write({
+  content: "Bitquery template broken: <template_path> consistently fails with '<error_pattern>'. Recommend using solana_bitquery_query with custom GraphQL instead.",
+  tags: ["bitquery_template_broken"]
+})
+```
+
+This memory loop prevents the agent from re-deriving the same fix every session and creates a growing knowledge base of working query patterns.
+
+### Error Classification
+
+| Response indicator | Class | Action |
+|---|---|---|
+| `code: "BITQUERY_QUERY_FAILED"` + message contains `Cannot query field` | SCHEMA | Fix the field/cube in your query (see Fix Map) |
+| `code: "BITQUERY_QUERY_FAILED"` + message contains `Unknown argument` | SCHEMA | Remove unsupported argument (e.g. `groupBy`) |
+| `code: "BITQUERY_QUERY_FAILED"` + message contains `Variable ... is never used` | SCHEMA | Remove the undeclared variable from the query signature |
+| `code: "BITQUERY_QUERY_FAILED"` + message contains `Argument ... has invalid value` | SCHEMA | Fix the WHERE filter shape (wrong cube or wrong field path) |
+| `code: "BITQUERY_QUERY_FAILED"` + message contains `context deadline exceeded` or `aborted` | OPERATIONAL — TIMEOUT | Add `Block: { Time: { since: $since } }` to WHERE; retry once |
+| `code: "BITQUERY_QUERY_FAILED"` + HTTP 429 | OPERATIONAL — RATE LIMIT | Wait 5s and retry once; if still failing, skip and note |
+| `code: "BITQUERY_QUERY_FAILED"` + HTTP 500 | OPERATIONAL — SERVER | Retry once after 3s; if still failing, skip this data point |
+| `code: "BITQUERY_API_KEY_MISSING"` | AUTH | Report to user — no retry possible |
+| Response `ok: false` + no `errors[]` and no HTTP status | NETWORK | Retry once; if failing, skip |
+| Response `ok: true`, `data` present but all arrays are empty | NOT AN ERROR | The query is valid — the token/time window has no data |
+
+### Writing a Custom Query to Replace a Failed Catalog Call
+
+1. Call `solana_bitquery_templates` to find the closest existing template and read its operation text as a starting point.
+2. Read the error message. Match it to the Fix Map table below.
+3. Apply the fix (change cube, fix field path, remove bad argument, etc.).
+4. Call `solana_bitquery_query` with:
+   - `query`: your corrected GraphQL string
+   - `variables`: the same variables you were going to pass
+
+**Example — catalog call fails with "Cannot query field `Currency` on DEXTrades":**
+```
+// Original catalog call (fails):
+solana_bitquery_catalog({ templatePath: "pumpFunTradesLiquidity.latestTradesByToken", variables: { token: "...", limit: 10 } })
+
+// Error: Cannot query field "Currency" on type "Solana_DEXTrade_Fields_Trade"
+// Fix: switch cube from DEXTrades → DEXTradeByTokens (Trade.Currency is valid there)
+
+// Recovery call:
+solana_bitquery_query({
+  query: `query LatestTradesByToken($token: String!, $limit: Int!) {
+    Solana {
+      DEXTradeByTokens(
+        where: { Trade: { Currency: { MintAddress: { is: $token } } } }
+        orderBy: { descending: Block_Time }
+        limit: { count: $limit }
+      ) {
+        Block { Time }
+        Trade { PriceInUSD Amount AmountInUSD Side { Type } }
+      }
+    }
+  }`,
+  variables: { token: "...", limit: 10 }
+})
+```
+
+### When to Give Up vs When to Recover
+
+**Always attempt recovery (1 retry with a corrected query):**
+- Any SCHEMA error — you have the knowledge to fix it from this file.
+- TIMEOUT — add a `since` filter and retry.
+
+**Skip and continue without this data point:**
+- Two consecutive failures on the same query path.
+- AUTH errors.
+- The data is supplementary (not required for the trade decision).
+
+**Block the trade:**
+- FRESH token analysis fails for `first100Buyers` AND `devHoldings` after recovery attempts — risk is unquantifiable.
+
+---
+
+## Catalog vs Live Schema — Why 400s Happen
+
+A query path being registered in `OPENCLAW_QUERY_TEMPLATES` (e.g. `pumpFunHoldersRisk.first100Buyers`) only means the **path string** resolves to a GraphQL operation. It does **not** guarantee the operation is schema-valid.
+
+When `runCatalogQuery` returns `ok: false` with HTTP 400 (or HTTP 200 with `errors[]`), the stored GraphQL text has a schema violation. Fix it in `SpyFly/Contexts/openClawAPI/bitQuery.js`.
+
+The most common root causes are using `DEXTrades`-only fields (`Trade.Currency`, `Trade.Buyer`, `Trade.PriceInUSD`, `Trade.Side`, `Trade.AmountInUSD`) on the wrong cube, or using `groupBy` on `DEXTradeByTokens`.
 
 ---
 
@@ -43,11 +183,11 @@ DEXTrades(...) {
 ```
 
 **WHERE filters in DEXTrades:**
-- Filter by Dex: `Trade: { Dex: { ProtocolName: { includes: "pump" } } }`
-- Filter by token (buy side): `Trade: { Buy: { Currency: { MintAddress: { is: $token } } } }`
-- Filter by signer: `Transaction: { Signer: { is: $wallet } }`
-- `Trade: { Currency: { MintAddress: ... } }` — **INVALID on DEXTrades**
-- `Trade: { Buyer: { is: $wallet } }` — **INVALID on DEXTrades**
+- Filter by Dex: `Trade: { Dex: { ProtocolName: { includes: "pump" } } }` ✓
+- Filter by token (buy side): `Trade: { Buy: { Currency: { MintAddress: { is: $token } } } }` ✓
+- Filter by signer: `Transaction: { Signer: { is: $wallet } }` ✓
+- `Trade: { Currency: { MintAddress: ... } }` ✗ — **invalid on DEXTrades**
+- `Trade: { Buyer: { is: $wallet } }` ✗ — **invalid on DEXTrades** — use `Transaction: { Signer: { is: $wallet } }`
 
 **Aggregate keys for DEXTrades:**
 - `sum(of: Trade_Buy_AmountInUSD)` — buy-side USD volume
@@ -79,17 +219,29 @@ DEXTradeByTokens(...) {
 ```
 
 **WHERE filters in DEXTradeByTokens:**
-- Filter by token: `Trade: { Currency: { MintAddress: { is: $token } } }`
-- Filter by side: `Trade: { Side: { Type: { is: buy } } }`
-- Filter by Dex: `Trade: { Dex: { ProtocolName: { includes: "pump" } } }`
+- Filter by token: `Trade: { Currency: { MintAddress: { is: $token } } }` ✓
+- Filter by side: `Trade: { Side: { Type: { is: buy } } }` ✓
+- Filter by Dex: `Trade: { Dex: { ProtocolName: { includes: "pump" } } }` ✓
 
 **Aggregate keys for DEXTradeByTokens:**
-- `sum(of: Trade_Side_AmountInUSD)` — total USD volume (NOT `Trade_AmountInUSD`)
+- `sum(of: Trade_Side_AmountInUSD)` — total USD volume (use this, NOT `Trade_AmountInUSD`)
 - `sum(of: Trade_Amount)` — native token amount
-- `count(distinct: Transaction_Signer)` — unique traders (NOT `Trade_Buyer`)
+- `count(distinct: Transaction_Signer)` — unique traders (use this, NOT `Trade_Buyer`)
 - `count(distinct: Transaction_Signer, if: {Trade: {Side: {Type: {is: buy}}}})` — unique buyers
-- `groupBy` is NOT supported; use time-bounded aggregate windows instead
-- If `groupBy` is removed, also remove unused variables (e.g. `$intervalSeconds`) from the operation signature
+- `groupBy` is **not supported** on this cube in our current v2 endpoint profile
+- If `groupBy` is removed from a query, remove now-unused variables (e.g. `$intervalSeconds`) from the operation signature and `variableShape` too.
+
+**OHLC without groupBy:** return raw time-series rows (limit 500) and compute candles client-side:
+```graphql
+DEXTradeByTokens(
+  where: {Block: {Time: {since: $since}}, Trade: {Currency: {MintAddress: {is: $token}}}}
+  orderBy: {ascending: Block_Time}
+  limit: {count: 500}
+) {
+  Block { Time }
+  Trade { PriceInUSD Amount AmountInUSD }
+}
+```
 
 ---
 
@@ -150,12 +302,16 @@ BalanceUpdates(
 - `PostBalance` requires aggregation modifier: `PostBalance(maximum: Block_Slot)` to get the latest balance
 - `limitBy` key: use `BalanceUpdate_Account_Token_Owner` (not `BalanceUpdate_Address`)
 - WHERE path: `BalanceUpdate: { Account: { Token: { Owner: { is: $wallet } } } }`
+- For lists of wallets: `Account: { Token: { Owner: { in: $holders } } }`
+- `orderBy` on balance alias: use `BalanceUpdate_balance_maximum` (not `"balance"`)
 
 ---
 
 ## TokenSupplyUpdates — Currency Metadata Fields
 
 In `TokenSupplyUpdates`, the currency metadata field is `Uri` (camel-case), not `URI`.
+
+Use:
 
 ```graphql
 TokenSupplyUpdates(
@@ -172,9 +328,12 @@ TokenSupplyUpdates(
 }
 ```
 
+Avoid:
+- `Currency { ... URI }` ✗ (unknown field)
+
 ---
 
-## Common Schema Errors and Fix Map
+## Common Schema Errors → Fix Map
 
 | Error message | Root cause | Fix |
 |---|---|---|
@@ -183,16 +342,19 @@ TokenSupplyUpdates(
 | `Cannot query field "PriceInUSD" on type "Solana_DEXTrade_Fields_Trade"` | Using `Trade.PriceInUSD` on `DEXTrades` | Use `Trade.Buy.PriceInUSD` or `Trade.Sell.PriceInUSD` |
 | `Cannot query field "AmountInUSD" on type "Solana_DEXTrade_Fields_Trade"` | Using `Trade.AmountInUSD` on `DEXTrades` | Use `Trade.Buy.Amount` or switch to `DEXTradeByTokens` |
 | `Cannot query field "Buyer" on type "Solana_DEXTrade_Fields_Trade"` | Using `Trade.Buyer` on `DEXTrades` | Use `Trade.Buy.Account.Address` for output; `Transaction.Signer` for WHERE |
+| `In field "Trade": In field "Buyer": Unknown field` | `Trade: { Buyer: { is: $wallet } }` in WHERE on DEXTrades | Use `Transaction: { Signer: { is: $wallet } }` |
 | `Cannot query field "Address" on type "Solana_BalanceUpdate"` | Using `BalanceUpdate.Address` | Use `BalanceUpdate.Account.Token.Owner` (SPL) or `BalanceUpdate.Account.Owner` (SOL) |
-| `Cannot query field "URI"` | Using uppercase `URI` in `TokenSupplyUpdate.Currency` | Use `Uri` |
-| `Unknown field` in `Instruction.Accounts.Address` | Using direct `Accounts.Address` in `Instructions.where` | Use `Accounts: { includes: { Address: { is: $token } } }` |
-| `Unknown argument "groupBy"` on `DEXTradeByTokens` | Attempting interval grouping | Remove `groupBy`; use aggregate windows over `Block.Time` ranges |
-| `Variable "$intervalSeconds" is never used` | Leftover variable after removing groupBy | Remove from query args and `variableShape` |
-| `Unexpected metric name or alias to order balance` | Ordering by non-existent alias | Order by concrete metric name (e.g. `BalanceUpdate_balance_maximum`) |
-| `Variable "$minCap" of type "Float!"` type mismatch | Comparator input type mismatch | Use `String` vars for `PostBalanceInUSD` filters |
-| `This operation was aborted` | Query exceeded timeout | Increase `options.timeoutMs` (e.g. 120000) and/or reduce scan window/limit |
+| `Cannot query field "URI" on type "Solana_TokenSupplyUpdate_Fields_TokenSupplyUpdate_Currency"` | Using uppercase `URI` in `TokenSupplyUpdate.Currency` | Use `Uri` |
+| `In field "Instruction" -> "Accounts" -> "Address": Unknown field` | Using direct `Accounts.Address` in `Instructions.where` | Use `Accounts: { includes: { Address: { is: $token } } }` |
+| `Unknown argument "groupBy" on field "DEXTradeByTokens" of type "Solana"` | Attempting interval grouping on `DEXTradeByTokens` | Remove `groupBy`; return raw rows and build candles client-side |
+| `Variable "$intervalSeconds" is never used in operation ...` | Query signature still includes interval variable after removing groupBy | Remove `$intervalSeconds` from query args and `variableShape` |
+| `Variable "$wallet" is never used in operation ...` | Variable declared in operation but no field references it | Remove `$wallet` from query args and `variableShape` |
+| `Unexpected metric name or alias to order balance ...` | Ordering by non-existent alias like `"balance"` | Order by concrete metric name returned by engine (e.g. `BalanceUpdate_balance_maximum`) |
+| `Variable "$minCap" of type "Float!" used ... expecting type "String"` | Comparator input type mismatch in token supply filters | Use `String` vars for `PostBalanceInUSD` bound filters in this endpoint profile |
+| `This operation was aborted` / `context deadline exceeded` | Query exceeded request timeout budget — often an unbounded Instructions scan | Add `Block: { Time: { since: $since } }` to the WHERE clause; increase `options.timeoutMs` if needed |
 | `Field "Trade_Buyer" not found` | Aggregate `count(distinct: Trade_Buyer)` | Use `count(distinct: Transaction_Signer)` |
-| `Field "Trade_AmountInUSD" not found` (DEXTradeByTokens) | Wrong aggregate key | Use `Trade_Side_AmountInUSD` |
+| `Field "Trade_AmountInUSD" not found` (in DEXTradeByTokens) | Wrong aggregate key | Use `Trade_Side_AmountInUSD` |
+| `calculate(expression: ...)` not recognized | Unsupported computed field expression | Remove `calculate`; compute derived values client-side instead |
 
 ---
 
@@ -225,15 +387,19 @@ DEXPools(
 
 ---
 
-## Instructions Cube — Account Filters
+## Instructions Cube — Account Filters (Important)
 
-For `Solana.Instructions`, account matching in `where.Instruction.Accounts` must use `includes`, not direct `Address` equality.
+For `Solana.Instructions`, account matching in `where.Instruction.Accounts` must use
+`includes`, not direct `Address` equality.
+
+Use:
 
 ```graphql
 Instructions(
   where: {
+    Block: { Time: { since: $since } }
     Instruction: {
-      Program: { Name: { includes: "pump" } }
+      Program: { Name: { includes: "pump" }, Method: { includes: "create" } }
       Accounts: { includes: { Address: { is: $token } } }
     }
     Transaction: { Result: { Success: true } }
@@ -246,8 +412,13 @@ Instructions(
 ```
 
 Avoid:
-- `Accounts: { Address: { is: $token } }` (invalid shape)
-- Duplicate keys in one input object — combine into one: `Program: { Name: ..., Method: ... }`
+- `Accounts: { Address: { is: $token } }` ✗ (invalid shape)
+
+Also avoid duplicate keys in one input object:
+- `Program: { Name: ... }` and a second `Program: { Method: ... }` in the same object is **invalid** — GraphQL only keeps the last key.
+- Combine into one: `Program: { Name: ..., Method: ... }` ✓
+
+**Always add a `Block.Time.since` filter to Instructions queries** — unbounded Instructions scans (especially with ascending orderBy to find creation events) time out consistently.
 
 ---
 
@@ -257,7 +428,38 @@ Avoid:
 - **DEX filter:** `Trade: { Dex: { ProtocolName: { includes: "pump" } } }`
 - **PumpSwap filter:** `Trade: { Dex: { ProtocolName: { includes: "pumpswap" } } }`
 - **Migration detection:** `Instructions` cube with `Program: { Method: { includes: "migrate" } }`
-- **Bonding curve progress:** Requires `DEXPools` with `Base.PostAmountInUSD`
+- **Bonding curve progress:** Requires `DEXPools` with `Base.PostAmountInUSD` — exact threshold formula requires live testing
+- **First buyers:** Use `DEXTrades` with `Trade: { Buy: { Currency: { MintAddress: { is: $token } } } }` and `orderBy: { ascending: Block_Time }` — output buyer address as `Trade.Buy.Account.Address`
+
+### Token Creation — Correct Method Filter
+
+Filtering Instructions by `Name: {includes: "pump"}` alone returns **all** pump.fun interactions (buys, sells, fees). To target **only new token launches**, filter by the exact program address **and** method:
+
+```graphql
+Instruction: {
+  Program: {
+    Address: {is: "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"}
+    Method: {is: "create_v2"}
+  }
+}
+```
+
+In the result, `Accounts[0].Address` is the **token mint** and `Transaction.Signer` is the **dev wallet**. Not all pump.fun mints use the `pump` vanity suffix — do not filter by address suffix.
+
+Known pump.fun method values (live-verified, 30-day sample of 2000 instructions):
+| Method | Meaning |
+|---|---|
+| `create_v2` | New token launch — **use this for new token detection** |
+| `CreateEvent` | CPI event emitted alongside `create_v2` (single account, less data) |
+| `buy` / `buy_exact_sol_in` / `buy_exact_quote_in` | Buy trades |
+| `sell` | Sell trade |
+| `BuyEvent` / `SellEvent` / `TradeEvent` | CPI event logs for trades |
+| `collect_creator_fee` / `CollectCreatorFeeEvent` | Creator fee collection |
+| `extend_account` / `ExtendAccountEvent` | Account reallocation |
+| `close_user_volume_accumulator` | Volume accumulator housekeeping |
+| `sync_user_volume_accumulator` / `init_user_volume_accumulator` | Volume accumulator lifecycle |
+
+**"Mayhem Mode" does not exist on-chain.** No instruction with `mayhem` in the method name has ever appeared in the pump.fun program. The three catalog templates for it (`trackMayhemModeRealtime`, `currentMayhemModeStatus`, `historicalMayhemModeStatus`) have been removed.
 
 ---
 
@@ -279,8 +481,8 @@ subscription PumpFunTrades($token: String) {
       Block { Time }
       Transaction { Signature }
       Trade {
-        Buy { Currency { MintAddress Symbol } PriceInUSD }
-        Sell { Currency { MintAddress Symbol } PriceInUSD }
+        Buy { Currency { MintAddress Symbol } PriceInUSD Amount }
+        Sell { Currency { MintAddress Symbol } }
       }
     }
   }
