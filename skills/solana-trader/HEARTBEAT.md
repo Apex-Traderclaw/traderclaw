@@ -215,6 +215,8 @@ HARDENED range: +100–300%. DEGEN range: +200–500%. `percent` = price increas
 
 **Pre-trade journal FIRST** — call `solana_memory_write` with tag `pre_trade_rationale` BEFORE executing. Also call `solana_decision_log` to record the decision with confidence, sizing rationale, and risk factors.
 
+**Source attribution (mandatory):** The `pre_trade_rationale` memory entry MUST include `source: "<how you found this token>"` — one of: `alpha_signal:<source_name>`, `scan_launches`, `scan_hot_pairs`, `bitquery_subscription`, `manual`, `watchlist`. This is required for source trust scoring and strategy evolution to correlate wins/losses with discovery channels.
+
 **Prior history check (mandatory):**
 ```
 solana_memory_by_token({ tokenAddress: "CA" })
@@ -308,22 +310,31 @@ Execute exits via `solana_trade_execute` with `side: "sell"`.
 
 Partial exits → "🔴 PARTIAL EXIT (50%): SYMBOL (CA)"
 
-**Post-exit mandatory actions:**
+**Post-exit mandatory actions (ALL required — skipping any is a critical violation):**
 
 1. Call `solana_trade_review` for each closed position.
 
-2. Label the outcome for intelligence lab learning:
+2. **LABEL THE OUTCOME — CRITICAL, DO NOT SKIP:**
 ```
 solana_candidate_label_outcome({ id: "CA", outcome: "win|loss|skip|dead_money", pnlPct: X.XX, holdingHours: H })
 ```
-This is how the intelligence lab learns. Every exit MUST be labeled.
+The intelligence lab CANNOT learn without labeled outcomes. An unlabeled exit is wasted data. If you skip this call, the entire learning pipeline is broken — strategy evolution, model evaluation, and replay all depend on labeled candidates.
 
-3. Unsubscribe from Bitquery stream for the exited token:
+3. **LEARNING ENTRY — REQUIRED after every loss or dead_money exit:**
+```
+solana_memory_write({
+  content: "LEARNING ENTRY: LRN-YYYYMMDD-NNN\nPriority: P2\nArea: <area_tag>\nWHAT HAPPENED: <1 sentence>\nWHY IT WENT WRONG: <root cause>\nEVIDENCE: token CA, entry price, exit price, hold time\nSUGGESTED ADJUSTMENT: <what to change>",
+  tags: ["learning_entry", "learning_entry_<area>"]
+})
+```
+Losses without learning entries are the #1 reason the strategy fails to evolve. Check `refs/review-learning.md` for the full entry format and area tags.
+
+4. Unsubscribe from Bitquery stream for the exited token:
 ```
 solana_bitquery_unsubscribe({ subscriptionId: "<id>" })
 ```
 
-4. If this was an alpha-sourced trade, check and record source accuracy:
+5. If this was an alpha-sourced trade, check and record source accuracy:
 ```
 solana_alpha_history({ tokenAddress: "CA", limit: 5 })
 ```
@@ -338,6 +349,11 @@ Log the source's accuracy via `solana_memory_write` with tag `source_reputation`
 - `solana_decision_log` for any significant decisions made this cycle
 - `solana_team_bulletin_post` with tag `position_update` — post current portfolio state
 - `solana_context_snapshot_write` — write portfolio world-view for bootstrap injection
+
+**Self-check before completing Step 8:**
+- Did you exit any positions this cycle? If yes: did you call `solana_candidate_label_outcome` for EACH exit? If not, go back and call it now.
+- Did any exit result in a loss or dead_money? If yes: did you write a `learning_entry` via `solana_memory_write`? If not, write one now.
+- Did you execute any trades this cycle? If yes: does each `pre_trade_rationale` include `source:` attribution? If not, write a correction entry now.
 
 Do NOT skip the last three. They are not optional memory — they feed the bootstrap digest that loads into your next session.
 

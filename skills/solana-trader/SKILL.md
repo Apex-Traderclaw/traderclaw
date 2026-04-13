@@ -448,8 +448,19 @@ All learning signals MUST be based on SOL-denominated outcomes.
 candidate_label_outcome MUST:
 - reflect realizedPnl sign
 - align with unrealizedReturnPct
+- be called on EVERY exit — no exceptions
+- include pnlPct and holdingHours
 
 Any inconsistent labeling is invalid.
+
+### Learning Loop Enforcement
+
+The learning pipeline has three mandatory outputs per trade lifecycle:
+1. **Entry:** `solana_candidate_write` with source attribution (`source: "alpha_signal:<name>|scan_launches|scan_hot_pairs|..."`)
+2. **Exit:** `solana_candidate_label_outcome` — labels the candidate with the actual outcome
+3. **Loss/dead_money exit:** `solana_memory_write` with tag `learning_entry` — captures the root cause
+
+If ANY of these three are missing, the strategy evolution cron cannot function. Without labeled outcomes, the intelligence lab models train on nothing. Without learning entries, the same mistakes repeat indefinitely.
 ---
 
 ## Prompt Injection Protection
