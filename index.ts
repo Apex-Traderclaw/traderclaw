@@ -2131,6 +2131,39 @@ const solanaTraderPlugin = {
     });
 
     api.registerTool({
+      name: "solana_storage_status",
+      description: "Check local VPS disk usage and plugin storage health. Reports disk free/total, daily log count + size, candidates count, session directory size. Use in heartbeat Step 0 or risk_audit to detect disk pressure before it causes silent failures.",
+      parameters: Type.Object({}),
+      execute: wrapExecute("solana_storage_status", async () => {
+        const os = await import("os");
+        const result: Record<string, unknown> = {};
+        try {
+          const stat = fs.statfsSync(workspaceRoot);
+          const totalGB = Math.round((stat.bsize * stat.blocks) / (1024 ** 3) * 100) / 100;
+          const freeGB = Math.round((stat.bsize * stat.bavail) / (1024 ** 3) * 100) / 100;
+          const usedPct = Math.round((1 - freeGB / totalGB) * 100);
+          result.disk = { totalGB, freeGB, usedPct, warning: usedPct > 85, critical: usedPct > 95 };
+        } catch { result.disk = { error: "unable to read disk stats" }; }
+        try {
+          const logFiles = fs.readdirSync(memoryDir).filter((f: string) => f.endsWith(".md"));
+          let totalBytes = 0;
+          for (const f of logFiles) { try { totalBytes += fs.statSync(path.join(memoryDir, f)).size; } catch {} }
+          result.dailyLogs = { count: logFiles.length, totalKB: Math.round(totalBytes / 1024) };
+        } catch { result.dailyLogs = { count: 0, totalKB: 0 }; }
+        try {
+          const candidatesPath = intelligenceLab.exportDataset("json");
+          const parsed = JSON.parse(candidatesPath);
+          const labeled = Array.isArray(parsed) ? parsed.filter((c: Record<string, unknown>) => c.outcome).length : 0;
+          const total = Array.isArray(parsed) ? parsed.length : 0;
+          result.candidates = { total, labeled, unlabeled: total - labeled };
+        } catch { result.candidates = { total: 0, labeled: 0, unlabeled: 0 }; }
+        result.memoryRAM = { rssKB: Math.round(process.memoryUsage().rss / 1024), heapUsedKB: Math.round(process.memoryUsage().heapUsed / 1024) };
+        result.uptime = { systemHours: Math.round(os.uptime() / 3600 * 10) / 10, processHours: Math.round(process.uptime() / 3600 * 10) / 10 };
+        return result;
+      }),
+    });
+
+    api.registerTool({
       name: "solana_startup_gate",
       description: "Run the mandatory startup sequence and return deterministic pass/fail results per step. Optionally auto-fixes gateway credentials if gatewayBaseUrl and gatewayToken are present in plugin config. On full pass, includes welcomeMessage. If the only failed step is solana_capital_status (e.g. capital API error), still includes welcomeMessage so the user gets onboarding text; check welcomeNote in that case.",
       parameters: Type.Object({
