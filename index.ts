@@ -1941,6 +1941,30 @@ const solanaTraderPlugin = {
         startupGateState = { ok: allOk, ts: Date.now(), steps };
         const k = (config.apiKey && String(config.apiKey).trim()) || null;
 
+        if (allOk || capitalOnly) {
+          try {
+            const effectiveAgentId = config.agentId || "main";
+            const stateFilePath = path.join(stateDir, `${effectiveAgentId}.json`);
+            const existing = readJsonFile(stateFilePath) as { state?: Record<string, unknown> } | null;
+            const existingState = existing?.state && typeof existing.state === "object" ? existing.state : {};
+            const alphaStep = steps.find((s) => s.step === "solana_alpha_subscribe" && s.ok);
+            const tier = (alphaStep?.details as Record<string, unknown> | undefined)?.tier;
+            const seedFields: Record<string, unknown> = {};
+            if (!existingState.walletId && walletId) seedFields.walletId = walletId;
+            if (!existingState.tier && tier) seedFields.tier = tier;
+            if (!existingState.mode) seedFields.mode = "HARDENED";
+            if (!existingState.strategyVersion) seedFields.strategyVersion = "1.0.0";
+            if (Object.keys(seedFields).length > 0) {
+              const merged = { ...existingState, ...seedFields };
+              writeJsonFile(stateFilePath, { agentId: effectiveAgentId, state: merged, updatedAt: new Date().toISOString() });
+              writeMemoryMd(effectiveAgentId, merged);
+              api.logger.info(`[solana-trader] Seeded identity fields into state: ${Object.keys(seedFields).join(", ")}`);
+            }
+          } catch (seedErr) {
+            api.logger.warn(`[solana-trader] Failed to seed identity fields: ${seedErr instanceof Error ? seedErr.message : String(seedErr)}`);
+          }
+        }
+
         return {
           ok: allOk,
           ts: Date.now(),
