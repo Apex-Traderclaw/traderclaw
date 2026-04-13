@@ -501,6 +501,36 @@ const solanaTraderPlugin = {
       return entries.length;
     };
 
+    const volatileStateKeys = new Set(["lastHeartbeat", "lastHeartbeatAt"]);
+
+    const renderSummaryBullets = (key: string, val: unknown): string[] => {
+      if (key === "lastCycleSummary" && val && typeof val === "object") {
+        const s = val as Record<string, unknown>;
+        const bullets: string[] = ["## Last Cycle Summary", ""];
+        if (s.capitalSol !== undefined) bullets.push(`- **Capital SOL:** ${s.capitalSol}`);
+        if (s.openPositions !== undefined) bullets.push(`- **Open Positions:** ${s.openPositions}`);
+        if (s.signalsProcessed !== undefined) bullets.push(`- **Signals Processed:** ${s.signalsProcessed}`);
+        if (s.topWatch) bullets.push(`- **Top Watch:** ${s.topWatch}`);
+        if (s.xApiStatus) bullets.push(`- **X API Status:** ${s.xApiStatus}`);
+        if (s.bitqueryStatus) bullets.push(`- **Bitquery Status:** ${s.bitqueryStatus}`);
+        const rendered = Object.keys(s).filter((k) => !["capitalSol", "openPositions", "signalsProcessed", "topWatch", "xApiStatus", "bitqueryStatus"].includes(k));
+        for (const rk of rendered.slice(0, 5)) {
+          const rv = s[rk];
+          const disp = typeof rv === "object" ? JSON.stringify(rv) : String(rv);
+          bullets.push(`- **${rk}:** ${disp.length > 120 ? disp.slice(0, 120) + "…" : disp}`);
+        }
+        bullets.push("");
+        return bullets;
+      }
+      return [];
+    };
+
+    const formatStateValue = (val: unknown): string => {
+      if (val === null || val === undefined) return String(val);
+      if (typeof val === "object") return JSON.stringify(val);
+      return String(val);
+    };
+
     const generateMemoryMd = (aid: string, stateObj: unknown): string => {
       const lines: string[] = [
         `# ${aid} — Durable Memory`,
@@ -519,7 +549,7 @@ const solanaTraderPlugin = {
       if (state.walletId) identity.push(`- **Wallet:** ${state.walletId}`);
       if (state.mode) identity.push(`- **Mode:** ${state.mode}`);
       if (state.strategyVersion) identity.push(`- **Strategy Version:** ${state.strategyVersion}`);
-      if (state.regime) identity.push(`- **Regime:** ${state.regime}`);
+      if (state.regime) identity.push(`- **Regime:** ${formatStateValue(state.regime)}`);
       if (state.maxPositions) identity.push(`- **Max Positions:** ${state.maxPositions}`);
       if (state.maxPositionSizeSol) identity.push(`- **Max Position Size:** ${state.maxPositionSizeSol} SOL`);
       if (identity.length > 0) {
@@ -545,13 +575,24 @@ const solanaTraderPlugin = {
         const rc = state.regimeCanary as Record<string, unknown>;
         lines.push("## Regime Canary", "", `- **Regime:** ${rc.regime || "unknown"}`, `- **Detected At:** ${rc.detectedAt || "unknown"}`, "");
       }
-      const excludeKeys = new Set(["tier", "walletId", "mode", "strategyVersion", "regime", "maxPositions", "maxPositionSizeSol", "defenseMode", "killSwitchActive", "watchlist", "permanentLearnings", "regimeCanary"]);
-      const otherKeys = Object.keys(state).filter((k) => !excludeKeys.has(k));
-      if (otherKeys.length > 0) {
+      const structuredKeys = new Set(["tier", "walletId", "mode", "strategyVersion", "regime", "maxPositions", "maxPositionSizeSol", "defenseMode", "killSwitchActive", "watchlist", "permanentLearnings", "regimeCanary"]);
+      const summaryKeys = new Set(["lastCycleSummary"]);
+      const otherKeys = Object.keys(state).filter((k) => !structuredKeys.has(k) && !volatileStateKeys.has(k));
+      const summaryRendered: string[] = [];
+      const remainingKeys: string[] = [];
+      for (const key of otherKeys) {
+        if (summaryKeys.has(key)) {
+          summaryRendered.push(...renderSummaryBullets(key, state[key]));
+        } else {
+          remainingKeys.push(key);
+        }
+      }
+      if (summaryRendered.length > 0) lines.push(...summaryRendered);
+      if (remainingKeys.length > 0) {
         lines.push("## Other State Keys", "");
-        for (const key of otherKeys.slice(0, 30)) {
+        for (const key of remainingKeys.slice(0, 30)) {
           const val = state[key];
-          const display = typeof val === "object" ? JSON.stringify(val) : String(val);
+          const display = formatStateValue(val);
           lines.push(`- **${key}:** ${display.length > 200 ? display.slice(0, 200) + "…" : display}`);
         }
         lines.push("");
