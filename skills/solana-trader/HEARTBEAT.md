@@ -12,6 +12,22 @@ Read MEMORY.md (auto-loaded). If empty or missing wallet/tier/strategy → run M
 2. **Daily log** (`memory/YYYY-MM-DD.md`, auto-loaded): what already happened today — don't repeat work
 3. **Server-side memory** — call `solana_memory_search` for: `"source_reputation"`, `"strategy_drift_warning"`, `"pre_trade_rationale"`, `"meta_rotation"`
 
+## User Preferences Override (apply before any other step)
+
+If MEMORY.md contains a **User Preferences** section, those values override the defaults in this document for this entire session. No exceptions.
+
+| Preference key | What it overrides |
+|---|---|
+| `volumeMinUsd` | Minimum 24h volume filter in STEP 1 SCAN and alpha_scan cron (default: 50000) |
+| `marketCapMinUsd` | Minimum market cap filter (default: 10000) |
+| `maxPositionSizeSol` | Maximum position size in SOL (overrides entitlement cap if lower) |
+| `scanMode` | `"conservative"` / `"standard"` / `"aggressive"` — adjusts confidence thresholds |
+| `slPct` | Default stop-loss % for new positions (default: 20 HARDENED, 40 DEGEN) |
+| `minConfidence` | Minimum confidence score to enter a trade (default: 0.65) |
+| `narrativeFilter` | Comma-separated narrative clusters to focus on (e.g. `"AI,Gaming"`) |
+
+Apply these immediately. Treat them as if the user said them at the start of this session. They are durable — they persist until the user explicitly changes them.
+
 ---
 
 ## STEP 0: INTERRUPT CHECK
