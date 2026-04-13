@@ -28,12 +28,50 @@ When a Bitquery call returns an error, follow this decision tree:
 
 ```
 1. Read the error code and message from the tool response.
-2. Classify the error (see table below).
-3. If SCHEMA error → apply the fix from "Common Schema Errors → Fix Map" below
+2. MEMORY CHECK FIRST: search for prior fixes before writing new ones.
+   → solana_memory_search({ query: "bitquery_fix_applied <template_path_or_error_snippet>", limit: 3 })
+   → If a matching fix exists, apply it directly — skip to step 6.
+3. Classify the error (see table below).
+4. If SCHEMA error → apply the fix from "Common Schema Errors → Fix Map" below
                    → call solana_bitquery_query with corrected GraphQL.
-4. If OPERATIONAL error → retry with backoff (max 2 retries) or skip this data.
-5. If AUTH error → report to user; do not retry.
+5. If OPERATIONAL error → retry with backoff (max 2 retries) or skip this data.
+6. If AUTH error → report to user; do not retry.
+7. MEMORY WRITE: after any recovery attempt, record the result:
+   → Success: solana_memory_write with tag "bitquery_fix_applied"
+   → Failure: solana_memory_write with tag "bitquery_recovery_failed"
+   → Repeated failure on same template: solana_memory_write with tag "bitquery_template_broken"
 ```
+
+### Memory Integration for Recovery
+
+**Search before recovering** — always check if you've fixed this error before:
+```
+solana_memory_search({ query: "bitquery_fix_applied", limit: 5 })
+```
+Prior fixes contain the exact corrected query and variables that worked. Reusing them is faster and more reliable than re-deriving the fix.
+
+**Write after recovering** — record every fix attempt:
+```
+// Successful fix:
+solana_memory_write({
+  content: "Bitquery fix: <template_path> failed with '<error_message>'. Fixed by switching cube from DEXTrades to DEXTradeByTokens. Working query: <corrected_query>. Variables: <variables>.",
+  tags: ["bitquery_fix_applied"]
+})
+
+// Failed recovery:
+solana_memory_write({
+  content: "Bitquery recovery failed: <template_path> error '<error_message>'. Tried: <what_was_attempted>. Result: still failing.",
+  tags: ["bitquery_recovery_failed"]
+})
+
+// Template consistently broken (2+ failures):
+solana_memory_write({
+  content: "Bitquery template broken: <template_path> consistently fails with '<error_pattern>'. Recommend using solana_bitquery_query with custom GraphQL instead.",
+  tags: ["bitquery_template_broken"]
+})
+```
+
+This memory loop prevents the agent from re-deriving the same fix every session and creates a growing knowledge base of working query patterns.
 
 ### Error Classification
 

@@ -69,6 +69,16 @@ Used by Steps 0, 5.5, 8.5, 9.
 | `strategy_evolution` | Strategy evolution reasoning log (Step 9) |
 | `discovery_filter_evolution` | Discovery filter parameter updates (Step 9) |
 
+## Bitquery Recovery Tags
+
+Used when Bitquery API calls fail and the agent applies recovery procedures.
+
+| Tag | Purpose |
+|---|---|
+| `bitquery_fix_applied` | Successful Bitquery recovery — records error class, fix applied, and working query/variables |
+| `bitquery_recovery_failed` | Recovery attempt failed — records error class, what was tried, and why it didn't work |
+| `bitquery_template_broken` | Template identified as consistently broken — records template path, error pattern, suggested replacement |
+
 ## System Tags
 
 | Tag | Purpose |
@@ -88,3 +98,4 @@ Used by Steps 0, 5.5, 8.5, 9.
 | `coordinated_shill_detected` | Coordinated shill campaign detected |
 | `website_analyzed` | Website legitimacy analysis result |
 | `alpha_source_model` | Personal alpha source trust model |
+| `memory_trim` | Memory trim cron results |
