@@ -2215,11 +2215,11 @@ function wizardHtml(defaults) {
         </div>
         <div style="margin-top:12px;" id="llmOauthBlock" class="hidden">
           <p class="muted" style="margin-bottom:12px;">
-            OAuth here is fully guided. After you choose OAuth, we start OpenClaw login automatically. Use the sign-in button below, then complete ChatGPT in this browser. You should not need to copy any code.
+            OAuth here is fully guided. After you choose OAuth, we start OpenClaw login automatically. Use the sign-in button below, then complete ChatGPT in this browser. If the redirect does not land automatically, you will be asked to paste the callback URL.
           </p>
           <div class="oauth-guide">
             <p class="muted" style="margin-top:0;">
-              <strong>Important:</strong> Complete the ChatGPT sign-in in this browser, then return to this tab. The wizard detects the result automatically.
+              <strong>Important:</strong> Complete the ChatGPT sign-in in this browser, then return to this tab. If the redirect does not finish on its own, paste the callback URL using the box below.
             </p>
             <p class="muted" style="margin-top:4px;font-size:13px;color:#7a8ba8;">
               <strong>Remote VPS?</strong> Forward port <code>1455</code> alongside the wizard port:
@@ -2229,13 +2229,13 @@ function wizardHtml(defaults) {
               <li class="oauth-step pending" id="oauthStepPrepare">Preparing ChatGPT sign-in...</li>
               <li class="oauth-step pending" id="oauthStepOpen">Open ChatGPT sign-in in this browser.</li>
               <li class="oauth-step pending" id="oauthStepComplete">Finish ChatGPT approval, then return here.</li>
-              <li class="oauth-step pending" id="oauthStepVerify">We detect completion automatically.</li>
+              <li class="oauth-step pending" id="oauthStepVerify">If the redirect does not complete, paste the callback URL below.</li>
             </ol>
             <div class="oauth-actions">
               <a id="oauthOpenUrlBtn" class="secondary" href="#" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:10px 14px;border-radius:8px;background:#2d7dff;color:#fff;text-decoration:none;font-weight:600;opacity:.55;pointer-events:none;">Open ChatGPT sign-in</a>
               <button type="button" id="oauthRetryBtn" class="secondary hidden">Try sign-in again</button>
             </div>
-            <p id="oauthFlowStatus" class="muted" style="margin-top:8px;" aria-live="polite">Choose OAuth and wait a moment. We will prepare your sign-in automatically.</p>
+            <p id="oauthFlowStatus" class="muted" style="margin-top:8px;" aria-live="polite">Choose OAuth and wait a moment. We will prepare your sign-in link.</p>
             <div id="oauthFallbackPaste" class="hidden" style="margin-top:12px;padding:12px;background:#111827;border:1px solid #334a87;border-radius:8px;">
               <p class="muted" style="margin:0 0 8px;font-size:13px;color:#ffcc70;">
                 <strong>Redirect didn't reach us?</strong> Copy the full URL from the error page in your browser (it starts with <code>http://localhost:1455/auth/callback?code=…</code>) and paste it below.
@@ -2525,7 +2525,7 @@ function wizardHtml(defaults) {
         setOauthStep(oauthStepOpen, "pending");
         setOauthStep(oauthStepComplete, "pending");
         setOauthStep(oauthStepVerify, "pending");
-        setOauthStatus("Choose OAuth and wait a moment. We will prepare your sign-in automatically.");
+        setOauthStatus("Choose OAuth and wait a moment. We will prepare your sign-in link.");
       }
 
       (function initLlmAuthDefaults() {
@@ -2598,7 +2598,7 @@ function wizardHtml(defaults) {
               setOauthStep(oauthStepComplete, "error");
               setOauthStep(oauthStepVerify, "error");
               setOauthStatus(
-                "Automatic OAuth session expired. This flow requires the wizard and OpenClaw on the same machine and the same browser. Click Try sign-in again.",
+                "OAuth session expired. This flow requires the wizard and OpenClaw on the same machine and browser. Click Try sign-in again.",
                 true,
               );
             } else {
@@ -2618,7 +2618,7 @@ function wizardHtml(defaults) {
               const elapsed = oauthFlowStartedAtMs > 0 ? Math.floor((Date.now() - oauthFlowStartedAtMs) / 1000) : 0;
               if (elapsed >= 90) {
                 setOauthStatus(
-                  "Still waiting for callback. Keep using this same browser on this same machine. If you opened OAuth on another computer, this automatic flow cannot complete.",
+                  "Still waiting for the callback. Make sure you are using this same browser and the 1455 port is forwarded (ssh -L 1455:127.0.0.1:1455). If the redirect does not land, paste the localhost:1455/auth/callback?… URL using the box below.",
                   true,
                 );
                 if (oauthRetryBtn) oauthRetryBtn.classList.remove("hidden");
@@ -2653,7 +2653,7 @@ function wizardHtml(defaults) {
           setOauthStep(oauthStepComplete, "error");
           setOauthStep(oauthStepVerify, "error");
           setOauthStatus(
-            errorText + " Automatic mode only works on the same machine and browser. Click Try sign-in again.",
+            errorText + " Make sure you are using the same browser and the 1455 port is forwarded. Click Try sign-in again.",
             true,
           );
           setOauthOpenButton("");
@@ -3179,7 +3179,7 @@ function wizardHtml(defaults) {
           setOauthStep(oauthStepOpen, "done");
           setOauthStep(oauthStepComplete, "active");
           setOauthStep(oauthStepVerify, "active");
-          setOauthStatus("Complete ChatGPT approval in this browser, then return here. We detect completion automatically.");
+          setOauthStatus("After approval, return here. If the tab does not finish, paste the localhost:1455/auth/callback?… URL using the box below.");
           showFallbackPasteAfterDelay(15_000);
         });
       }
