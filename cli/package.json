@@ -1,6 +1,6 @@
 {
   "name": "traderclaw-cli",
-  "version": "1.0.85",
+  "version": "1.0.86",
   "description": "Global TraderClaw CLI (install --wizard, setup, precheck). Installs solana-traderclaw as a dependency for OpenClaw plugin files.",
   "type": "module",
   "bin": {
@@ -17,7 +17,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "solana-traderclaw": "^1.0.85"
+    "solana-traderclaw": "^1.0.86"
   },
   "keywords": [
     "traderclaw",
