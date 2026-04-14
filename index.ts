@@ -1502,6 +1502,46 @@ const solanaTraderPlugin = {
     });
 
     // =========================================================================
+    // REFERRAL TOOLS
+    // =========================================================================
+
+    api.registerTool({
+      name: "solana_referral_profile",
+      description:
+        "Read your TraderClaw referral profile: your current referral code (null if not set), access window, tier, and earnings metadata. " +
+        "Call this when the user asks about their referral code, when ACCESS_LIMIT_REACHED is received, or to check whether a code has already been created. " +
+        "This endpoint remains accessible even after the runtime access window has expired — use it to help the user set up a referral code so they can regain access by referring others. " +
+        "If referralCode is null, prompt the user to choose a custom 4–16 alphanumeric code and call solana_referral_set_code with their input.",
+      parameters: Type.Object({}),
+      execute: wrapExecute("solana_referral_profile", async () => get("/api/referral/me")),
+    });
+
+    api.registerTool({
+      name: "solana_referral_set_code",
+      description:
+        "Set or update your custom TraderClaw referral code. The code must be 4–16 alphanumeric characters; it is stored normalized to UPPERCASE. " +
+        "IMPORTANT: You must ask the user to provide the code — never invent or guess one. Suggest that the code be memorable (e.g. their username, brand, or handle). " +
+        "Once set, anyone who signs up using this code grants you +8 hours of access per active referral. " +
+        "This endpoint remains accessible even after the runtime access window has expired, so the user can always create or update their referral code. " +
+        "After setting the code, confirm the saved value from the response and share it with the user so they can start referring others. " +
+        "Expected errors (check ok=false + errorCode): " +
+        "REFERRAL_CODE_TAKEN — that exact code is already used by another account; ask the user to choose a different one. " +
+        "VALIDATION_ERROR — code does not meet the 4–16 alphanumeric rule; tell the user which constraint was violated. " +
+        "AUTH_ERROR — session expired; user must re-authenticate before setting the code.",
+      parameters: Type.Object({
+        referralCode: Type.String({
+          description:
+            "Custom referral code chosen by the user. Must be 4–16 alphanumeric characters (letters and digits only). Will be stored as UPPERCASE.",
+          minLength: 4,
+          maxLength: 16,
+        }),
+      }),
+      execute: wrapExecute("solana_referral_set_code", async (_id, params) =>
+        put("/api/referral/code", { referralCode: String(params.referralCode).trim().toUpperCase() }),
+      ),
+    });
+
+    // =========================================================================
     // BITQUERY INTELLIGENCE TOOLS
     // =========================================================================
 

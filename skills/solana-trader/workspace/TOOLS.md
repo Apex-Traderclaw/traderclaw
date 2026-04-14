@@ -13,7 +13,7 @@ Things like:
 - Rate limit observations
 - Anything environment-specific
 
-## Tool Inventory (101 tools — 98 Solana + 3 X read-only)
+## Tool Inventory (103 tools — 100 Solana + 3 X read-only)
 
 Every tool has a mandatory trigger — when the trigger condition is met, you MUST call the tool. "Cron-only" tools are called during cron jobs, not the heartbeat fast loop.
 
@@ -91,6 +91,12 @@ Every tool has a mandatory trigger — when the trigger condition is met, you MU
 | `solana_entitlement_plans` | Available monthly plans | When user asks about upgrade options |
 | `solana_entitlement_purchase` | Buy a plan | When user explicitly requests purchase |
 | `solana_entitlement_upgrade` | Upgrade account tier | When user explicitly requests upgrade |
+
+### Referral (2)
+| Tool | Purpose | When to Call |
+|---|---|---|
+| `solana_referral_profile` | Read referral code and access window | On ACCESS_LIMIT_REACHED; when user asks about their referral code or access status |
+| `solana_referral_set_code` | Set or update custom referral code (user must supply the code) | When referral code is null and user wants to start referring others; when user asks to create or change their code |
 
 ### Alpha Signals (5)
 | Tool | Purpose | When to Call |
