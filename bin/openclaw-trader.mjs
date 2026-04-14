@@ -748,6 +748,12 @@ async function establishSession(orchestratorUrl, pluginConfig, walletPrivateKeyI
   }
 
   pluginConfig.refreshToken = tokens.refreshToken;
+  // If the server returned a recovery secret alongside the session (e.g. for existing accounts
+  // that completed a wallet-proof challenge), store it so the gateway can re-authenticate via
+  // recover-secret when the refresh token expires — without needing TRADERCLAW_WALLET_PRIVATE_KEY.
+  if (tokens.recoverySecret) {
+    pluginConfig.recoverySecret = tokens.recoverySecret;
+  }
   printSuccess("  Session established");
   printInfo(`  Tier: ${tokens.session?.tier || "unknown"}`);
   printInfo(`  Scopes: ${(tokens.session?.scopes || []).join(", ")}`);
