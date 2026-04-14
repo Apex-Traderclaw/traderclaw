@@ -214,6 +214,79 @@ async function confirm(question) {
   return answer.toLowerCase() === "y" || answer.toLowerCase() === "yes";
 }
 
+/**
+ * Prompt for the wallet private key with hidden input (no echo) when running in a TTY.
+ * Falls back to a visible prompt with a warning if raw mode is unavailable.
+ * Returns an empty string if the user presses Enter with no input.
+ */
+async function promptWalletPrivateKeyHidden() {
+  const isTTY = process.stdin.isTTY && process.stdout.isTTY;
+  if (!isTTY) return "";
+
+  print("  Your trading wallet private key is required to prove ownership of the linked wallet.");
+  print("  It is used only to sign a one-time challenge locally — it is NEVER sent to any server");
+  print("  and is NEVER written to openclaw.json or any file.");
+  print("  For automation, use --wallet-private-key or the TRADERCLAW_WALLET_PRIVATE_KEY env var instead.\n");
+
+  return new Promise((resolve) => {
+    let input = "";
+    let rawEnabled = false;
+
+    const cleanup = () => {
+      try {
+        if (rawEnabled && process.stdin.isTTY) {
+          process.stdin.setRawMode(false);
+        }
+      } catch {
+        // ignore
+      }
+      process.stdin.pause();
+      process.stdin.removeAllListeners("data");
+      process.stdin.removeAllListeners("end");
+    };
+
+    try {
+      process.stdin.setRawMode(true);
+      rawEnabled = true;
+    } catch {
+      // raw mode unavailable — fall through to visible prompt
+    }
+
+    if (rawEnabled) {
+      process.stdout.write("  Wallet private key (hidden, press Enter when done): ");
+      process.stdin.resume();
+      process.stdin.setEncoding("utf8");
+
+      process.stdin.on("data", (ch) => {
+        if (ch === "\r" || ch === "\n") {
+          process.stdout.write("\n");
+          cleanup();
+          resolve(input.trim());
+        } else if (ch === "\u0003") {
+          // Ctrl-C
+          process.stdout.write("\n");
+          cleanup();
+          resolve("");
+        } else if (ch === "\u007f" || ch === "\b") {
+          // backspace
+          if (input.length > 0) input = input.slice(0, -1);
+        } else {
+          input += ch;
+        }
+      });
+
+      process.stdin.once("end", () => {
+        cleanup();
+        resolve(input.trim());
+      });
+    } else {
+      // Raw mode unavailable; warn and fall back to visible prompt.
+      printWarn("  Note: terminal does not support hidden input — key will be visible as you type.");
+      prompt("  Wallet private key", "").then((val) => resolve(val.trim()));
+    }
+  });
+}
+
 async function httpRequest(url, opts = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), opts.timeout ?? 10000);
@@ -640,10 +713,14 @@ async function establishSession(orchestratorUrl, pluginConfig, walletPrivateKeyI
 
   if (challenge.walletProofRequired) {
     printWarn("  Wallet proof required — this account already has a wallet.");
-    const walletPrivateKey = getRuntimeWalletPrivateKey(walletPrivateKeyInput);
+    let walletPrivateKey = getRuntimeWalletPrivateKey(walletPrivateKeyInput);
+    if (!walletPrivateKey) {
+      walletPrivateKey = await promptWalletPrivateKeyHidden();
+    }
     if (!walletPrivateKey) {
       printError(`  Wallet private key not available. Cannot prove wallet ownership.`);
       printError(`  Provide it via --wallet-private-key or env ${WALLET_PRIVATE_KEY_ENV} for local signing.`);
+      printError(`  If running interactively (TTY), you will be prompted automatically when proof is required.`);
       printSessionTroubleshootingHint();
       throw new Error("Wallet proof required but no private key configured.");
     }
@@ -4091,7 +4168,11 @@ Setup options:
   --api-key, -k      API key (skip interactive prompt)
   --url, -u          Orchestrator URL (skip interactive prompt)
   --user-id          External user ID for signup
-  --wallet-private-key  Optional base58 private key for wallet proof flow (runtime only, never saved)
+  --wallet-private-key  Base58 private key for wallet proof (runtime only, never saved to disk).
+                        Optional: when omitted in a TTY session, traderclaw will prompt for it
+                        interactively with hidden input if the server requires wallet proof.
+                        Required when running non-interactively (scripts, CI) — use env
+                        TRADERCLAW_WALLET_PRIVATE_KEY for cleaner shell history.
   --gateway-base-url, -g  Gateway public HTTPS URL for orchestrator callbacks
   --gateway-token, -t     Gateway bearer token (defaults to API key)
   --telegram-recipient    Telegram @username or chat id (aliases: --forward-telegram-chat-id, --telegram-chat-id)
@@ -4107,7 +4188,8 @@ Gateway subcommands:
   gateway ensure-persistent   Linux: enable loginctl linger and systemd --user unit for OpenClaw gateway
 
 Login options:
-  --wallet-private-key <k>  Base58 key for wallet proof when the server requires it (runtime only)
+  --wallet-private-key <k>  Base58 key for wallet proof (runtime only, never saved). Optional in a
+                            TTY session — traderclaw will prompt with hidden input if proof is needed.
   --force-reauth       Clear refresh token and run full API challenge (use after logout or to rotate session)
 
 Config subcommands:

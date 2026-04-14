@@ -2214,21 +2214,38 @@ export class InstallerStepEngine {
   }
 
   buildSetupHandoff() {
-    const args = ["setup", "--url", this.options.orchestratorUrl || "https://api.traderclaw.ai"];
-    if (this.options.lane !== "event-driven") {
-      args.push("--skip-gateway-registration");
+    // Shell-safe single-quote wrapper: wraps value in '…' and escapes any embedded single quotes.
+    const shQuote = (v) => `'${String(v).replace(/'/g, "'\\''")}'`;
+
+    const cliName = this.modeConfig.cliName;
+    const orchestratorUrl = this.options.orchestratorUrl || "https://api.traderclaw.ai";
+    const apiKey = String(this.options.apiKey || "").trim();
+
+    // Build args in the user-facing convention:
+    //   traderclaw setup --api-key '…' --url '…' [--gateway-base-url '…'] [--skip-gateway-registration] [--referral-code '…']
+    const parts = [cliName, "setup"];
+
+    if (apiKey) {
+      parts.push("--api-key", shQuote(apiKey));
     }
+
+    parts.push("--url", shQuote(orchestratorUrl));
+
     const gatewayBaseUrl = this.options.gatewayBaseUrl || this.state.detected.funnelUrl || "";
     if (this.options.lane === "event-driven" && gatewayBaseUrl) {
-      args.push("--gateway-base-url", gatewayBaseUrl);
+      parts.push("--gateway-base-url", shQuote(gatewayBaseUrl));
+    }
+
+    if (this.options.lane !== "event-driven") {
+      parts.push("--skip-gateway-registration");
     }
 
     const ref = String(this.options.referralCode || "").trim();
     if (ref) {
-      args.push("--referral-code", ref);
+      parts.push("--referral-code", shQuote(ref));
     }
 
-    const command = [this.modeConfig.cliName, ...args].join(" ");
+    const command = parts.join(" ");
     const docs =
       "https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-auth-errors-or-the-agent-logged-out";
     return {
@@ -2236,11 +2253,13 @@ export class InstallerStepEngine {
       command,
       title: "Ready to launch your agentic trading desk",
       message:
-        "Core install is complete. Final setup is intentionally handed off to your VPS shell so sensitive wallet prompts stay private. " +
-        "After setup, if the bot reports wallet proof / session errors: configure TRADERCLAW_WALLET_PRIVATE_KEY for the OpenClaw gateway service (systemd), not only in SSH — see " +
+        "Core install is complete. Run the command below in your VPS shell to complete authentication. " +
+        "The wallet private key is intentionally omitted — if your account has a linked wallet, traderclaw setup will prompt for it securely in the terminal (hidden input, key is never saved or sent). " +
+        "For automation or non-interactive environments use --wallet-private-key or the TRADERCLAW_WALLET_PRIVATE_KEY env var instead. " +
+        "After setup, configure TRADERCLAW_WALLET_PRIVATE_KEY for the OpenClaw gateway service (systemd) so the bot can sign challenges at runtime — not only in your SSH session. See " +
         docs,
       hint:
-        "Run the command in terminal, answer setup prompts, then restart gateway. If Telegram startup checks all fail, open the troubleshooting link in the message above.",
+        "Run the command in your terminal. If wallet proof is required, you will be prompted for the private key with hidden input. Then restart the gateway.",
       restartCommand: "openclaw gateway restart",
     };
   }
