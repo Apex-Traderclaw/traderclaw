@@ -17,17 +17,14 @@ import {
   AlphaStreamManager
 } from "./chunk-3YPZOXWE.js";
 import {
+  BitqueryStreamManager
+} from "./chunk-VR5WP5S4.js";
+import {
   orchestratorRequest
 } from "./chunk-NDPVVAV7.js";
 import {
   IntelligenceLab
 } from "./chunk-FBS5FGW2.js";
-import {
-  scrubUntrustedText
-} from "./chunk-AI6MTHUN.js";
-import {
-  readRecoverySecretFromDisk
-} from "./chunk-SBYHSJLU.js";
 import {
   generateBulletinDigest,
   generateDecisionDigest,
@@ -35,6 +32,12 @@ import {
   resolveMemoryDir,
   resolveWorkspaceRoot
 } from "./chunk-JO3BXAUQ.js";
+import {
+  scrubUntrustedText
+} from "./chunk-AI6MTHUN.js";
+import {
+  readRecoverySecretFromDisk
+} from "./chunk-SBYHSJLU.js";
 
 // index.ts
 import { Type } from "@sinclair/typebox";
@@ -2205,6 +2208,16 @@ ${notes}
         })
       )
     });
+    const bitqueryStreamManager = new BitqueryStreamManager({
+      wsUrl: orchestratorUrl.replace(/^http/, "ws").replace(/\/$/, "") + "/ws",
+      walletId,
+      getAccessToken: () => sessionManager.getAccessToken(),
+      logger: {
+        info: (msg) => api.logger.info(`[solana-trader] ${msg}`),
+        warn: (msg) => api.logger.warn(`[solana-trader] ${msg}`),
+        error: (msg) => api.logger.error(`[solana-trader] ${msg}`)
+      }
+    });
     api.registerTool({
       name: "solana_bitquery_subscribe",
       description: "Subscribe to a managed real-time Bitquery data stream. The orchestrator manages the WebSocket connection and broadcasts events. Available templates: realtimeTokenPricesSolana, ohlc1s, dexPoolLiquidityChanges, pumpFunTokenCreation, pumpFunTrades, pumpSwapTrades, raydiumNewPools. Returns a subscriptionId for tracking. Pass agentId to enable event-to-agent forwarding \u2014 orchestrator delivers each event to your Gateway via /v1/responses in addition to normal WS delivery. Subscriptions expire after 24h and emit subscription_expiring/subscription_expired events. See websocket-streaming.md in the solana-trader skill for the full message contract and usage patterns.",
@@ -2215,18 +2228,13 @@ ${notes}
         subscriberType: Type.Optional(Type.Union([Type.Literal("agent"), Type.Literal("client")], { description: "Subscriber type. Inferred as 'agent' when agentId is present. Defaults to 'client'." }))
       }),
       execute: wrapExecute("solana_bitquery_subscribe", async (_id, params) => {
-        const body = {
-          templateKey: params.templateKey,
-          variables: params.variables || {}
-        };
         const effectiveAgentId = params.agentId || config.agentId;
-        if (effectiveAgentId) {
-          body.agentId = effectiveAgentId;
-          body.subscriberType = params.subscriberType || "agent";
-        } else if (params.subscriberType) {
-          body.subscriberType = params.subscriberType;
-        }
-        return post("/api/bitquery/subscribe", body);
+        return bitqueryStreamManager.subscribe({
+          templateKey: params.templateKey,
+          variables: params.variables || {},
+          agentId: effectiveAgentId,
+          subscriberType: params.subscriberType || (effectiveAgentId ? "agent" : void 0)
+        });
       })
     });
     api.registerTool({
@@ -2237,9 +2245,7 @@ ${notes}
       }),
       execute: wrapExecute(
         "solana_bitquery_unsubscribe",
-        async (_id, params) => post("/api/bitquery/unsubscribe", {
-          subscriptionId: params.subscriptionId
-        })
+        async (_id, params) => bitqueryStreamManager.unsubscribe(params.subscriptionId)
       )
     });
     api.registerTool({
