@@ -3337,7 +3337,7 @@ const solanaTraderPlugin = {
         const stateFile = path.join(stateDir, `${bootAgentId}.json`);
         const stateData = readJsonFile(stateFile) as { state?: Record<string, unknown> } | null;
         if (stateData) {
-          const stateMd = generateStateMd(stateData.state || null);
+          const stateMd = generateMemoryMd(bootAgentId, stateData.state || null);
           context.bootstrapFiles.push({
             name: `${bootAgentId}-state.md`,
             path: `state/${bootAgentId}-state.md`,
@@ -3567,7 +3567,7 @@ const solanaTraderPlugin = {
             const stateFile = path.join(stateDir, `${assembleAgentId}.json`);
             const stateData = readJsonFile(stateFile) as { state?: Record<string, unknown> } | null;
             if (stateData?.state) {
-              lines.push(generateStateMd(stateData.state));
+              lines.push(generateMemoryMd(assembleAgentId, stateData.state));
             }
           } catch {}
 
