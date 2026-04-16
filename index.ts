@@ -448,7 +448,7 @@ const solanaTraderPlugin = {
     const logsDir = path.join(dataDir, "logs");
     const sharedLogsDir = path.join(logsDir, "shared");
     const memoryDir = resolveMemoryDir(workspaceRoot);
-    const memoryMdPath = path.join(workspaceRoot, "STATE.md");
+    const memoryMdPath = path.join(workspaceRoot, "MEMORY.md");
 
     const intelligenceLab = new IntelligenceLab(workspaceRoot);
 
