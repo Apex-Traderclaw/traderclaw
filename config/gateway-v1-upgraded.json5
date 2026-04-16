@@ -22,7 +22,20 @@
       keepLines: 2000
     },
     jobs: [
+<<<<<<< feat/cron-jobs-upgrade
       // ── Alpha Scanning ──────────────────────────────────────────────
+=======
+      // ── Strategy & Learning ───────────────────────────────────────
+      {
+        id: "strategy-evolution",
+        schedule: "0 */4 * * *",
+        agentId: "main",
+        sessionTarget: "isolated",
+        delivery: { mode: "none" },
+        message: "CRON_JOB: strategy_evolution\n\nStep 1: Call solana_journal_summary to get aggregate performance stats (win rate, avg PnL, trade count). If fewer than 10 closed trades since the last strategy evolution, skip weight updates but still run pattern detection.\n\nStep 2: Call solana_memory_search for 'strategy_evolution' — find last 3 evolution cycle results. Call solana_memory_search for 'strategy_drift_warning' — find drift warnings since last evolution. Call solana_memory_search for 'pre_trade_rationale' — recent decision patterns.\n\nStep 3: Run Recurring Pattern Detection — search for learning_entry tags, group by area, check linked chains (3+ = confirmed pattern), investigate drift warnings.\n\nStep 4: Call solana_strategy_state to read current feature weights.\n\nStep 5: Call solana_trades to get recent closed trades. Apply ADL checks (direction consistency, weight velocity, reversion check).\n\nStep 6: Compute proposed weight changes. Score each with VFM (Frequency + Failure Reduction + Self-Cost). Only apply changes scoring >= 3/5.\n\nStep 7: Verify guardrails: maxDeltaOk, sumWeightsOk, minTradesOk, floorCapOk. If all pass, call solana_strategy_update with incremented version.\n\nStep 8: Run Named Pattern Recognition — search for winning trade clusters, catalog new patterns, evolve existing ones.\n\nStep 9: Evaluate discovery filter performance. Log all results via solana_memory_write with tags: strategy_evolution, vfm_scorecard, pattern_detection, named_pattern.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        enabled: true
+      },
+>>>>>>> main
       {
         id: "alpha-scan",
         schedule: "0 */3 * * *",

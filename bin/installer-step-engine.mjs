@@ -10,6 +10,9 @@ import { getLinuxGatewayPersistenceSnapshot } from "./gateway-persistence-linux.
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 
+/** Pinned openclaw platform version — bump deliberately after testing, never use "latest". */
+export const OPENCLAW_VERSION = "2026.4.9";
+
 /** Directory containing solana-traderclaw (openclaw.plugin.json) — works for plugin layout or traderclaw-cli + dependency. */
 const PLUGIN_PACKAGE_ROOT = resolvePluginPackageRoot(import.meta.url);
 
@@ -357,7 +360,7 @@ function gatewayTimeoutRemediation() {
     "- Check RAM: openclaw gateway requires >=512MB free (>=2GB total recommended)",
     "- Check disk: df -h ~/.openclaw",
     "- Try: openclaw config validate && openclaw gateway doctor || true",
-    "- If config schema error appears, run: npm install -g openclaw@latest",
+    `- If config schema error appears, run: npm install -g openclaw@${OPENCLAW_VERSION}`,
     "Once the gateway shows 'running' in status, click Start Installation again.",
   ].join("\n");
 }
@@ -380,7 +383,7 @@ function gatewayConfigValidationRemediation() {
     "The first `openclaw config validate` in this installer runs before plugins install; validation must be re-run once plugin schemas are registered — that is why this can appear only at gateway.",
     "On the VPS, try in order:",
     "1) openclaw --version",
-    "2) npm install -g openclaw@latest",
+    `2) npm install -g openclaw@${OPENCLAW_VERSION}`,
     "3) openclaw config validate",
     "4) openclaw plugins doctor",
     "5) cp ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.bak.$(date +%s) || true",
@@ -400,6 +403,14 @@ function isOpenClawConfigSchemaFailure(text) {
 function runCommandWithEvents(cmd, args = [], opts = {}) {
   return new Promise((resolve, reject) => {
     const { onEvent, ...spawnOpts } = opts;
+    const isNpm = /(?:^|[\\/])npm(?:\.cmd)?$/.test(cmd) || cmd === "npm";
+    if (isNpm && !spawnOpts.env?.NODE_OPTIONS?.includes("max-old-space-size")) {
+      spawnOpts.env = {
+        ...process.env,
+        ...spawnOpts.env,
+        NODE_OPTIONS: [spawnOpts.env?.NODE_OPTIONS || process.env.NODE_OPTIONS || "", "--max-old-space-size=512"].filter(Boolean).join(" "),
+      };
+    }
     const child = spawn(cmd, args, {
       stdio: "pipe",
       shell: true,
@@ -427,19 +438,71 @@ function runCommandWithEvents(cmd, args = [], opts = {}) {
       const urls = [...new Set([...extractUrls(stdout), ...extractUrls(stderr)])];
       if (code === 0) resolve({ stdout, stderr, code, urls });
       else {
+        const isOom = code === 137 || (stderr || stdout || "").includes("Killed");
         const raw = (stderr || "").trim();
         const tailLines = raw.split("\n").filter((l) => l.length > 0).slice(-40).join("\n");
         const stderrPreview = tailLines.length > 8000 ? tailLines.slice(-8000) : tailLines;
-        const err = new Error(stderrPreview ? `command failed with exit code ${code}: ${stderrPreview}` : `command failed with exit code ${code}`);
+        const prefix = isOom
+          ? `Out of memory (exit 137 / SIGKILL): the host killed '${cmd}' — try a machine with ≥1 GB free RAM, or reduce concurrency with npm_config_maxsockets=2`
+          : `command failed with exit code ${code}`;
+        const err = new Error(stderrPreview ? `${prefix}: ${stderrPreview}` : prefix);
         err.code = code;
         err.stdout = stdout;
         err.stderr = stderr;
         err.urls = urls;
+        err.oom = isOom;
         reject(err);
       }
     });
     child.on("error", reject);
   });
+}
+
+function getGlobalOpenClawPackageDir() {
+  const root = getCommandOutput("npm root -g");
+  if (!root) return null;
+  const dir = join(root.trim(), "openclaw");
+  return existsSync(join(dir, "package.json")) ? dir : null;
+}
+
+/**
+ * Re-run `npm install` inside the global OpenClaw package tree. Some hosts end up with an
+ * incomplete `node_modules` after `npm install -g` (hoisting, optional deps, or interrupted
+ * installs). OpenClaw then fails at runtime with `Cannot find module 'grammy'` while loading
+ * config. Installing from the package directory restores declared dependencies.
+ *
+ * `--ignore-scripts` avoids OpenClaw's postinstall (and nested installs) failing on hosts without
+ * a C toolchain: e.g. `@discordjs/opus` has no prebuild for Node 22 and falls back to `node-gyp`
+ * (`make` not found). Skipping scripts still installs declared JS deps (e.g. `grammy`). Users who
+ * need native/voice features can install build-essential and re-run `npm install` without
+ * `--ignore-scripts` in the global openclaw directory.
+ *
+ * We still run `npm install grammy @buape/carbon --no-save` with `--ignore-scripts` as a safety net.
+ */
+/** Runs `npm install` in the global `openclaw` package directory (fixes missing `grammy` etc.). */
+export async function ensureOpenClawGlobalPackageDependencies() {
+  const dir = getGlobalOpenClawPackageDir();
+  if (!dir) {
+    return { skipped: true, reason: "global_openclaw_dir_not_found" };
+  }
+  const registry = "https://registry.npmjs.org/";
+  const installFlags = ["install", "--omit=dev", "--ignore-scripts", "--registry", registry];
+  await runCommandWithEvents("npm", installFlags, { cwd: dir, shell: false });
+  await runCommandWithEvents(
+    "npm",
+    [
+      "install",
+      "--omit=dev",
+      "--no-save",
+      "--ignore-scripts",
+      "--registry",
+      registry,
+      "grammy",
+      "@buape/carbon",
+    ],
+    { cwd: dir, shell: false },
+  );
+  return { repaired: true, dir };
 }
 
 /**
@@ -451,11 +514,11 @@ function runCommandWithEvents(cmd, args = [], opts = {}) {
 async function installOpenClawPlatform() {
   const hadOpenclaw = commandExists("openclaw");
   const previousVersion = hadOpenclaw ? getCommandOutput("openclaw --version") : null;
-  await runCommandWithEvents("npm", ["install", "-g", "--registry", "https://registry.npmjs.org/", "openclaw@latest"]);
+  await runCommandWithEvents("npm", ["install", "-g", "--ignore-scripts", "--registry", "https://registry.npmjs.org/", `openclaw@${OPENCLAW_VERSION}`]);
   const available = commandExists("openclaw");
   const version = available ? getCommandOutput("openclaw --version") : null;
   if (!available) {
-    throw new Error("npm install -g openclaw@latest finished but `openclaw` is not available on PATH");
+    throw new Error(`npm install -g openclaw@${OPENCLAW_VERSION} finished but \`openclaw\` is not available on PATH`);
   }
   return {
     alreadyInstalled: hadOpenclaw,
@@ -488,7 +551,7 @@ function isNpmFilesystemPackageSpec(spec) {
  * IMPORTANT: run with `{ shell: false }` — `spawn(..., { shell: true })` can drop argv on Unix and npm then mis-resolves the package name.
  */
 function npmGlobalInstallArgs(spec, { force = false } = {}) {
-  const args = ["install", "-g"];
+  const args = ["install", "-g", "--ignore-scripts"];
   if (force) args.push("--force");
   if (!isNpmFilesystemPackageSpec(spec)) {
     args.push("--registry", "https://registry.npmjs.org/");
@@ -1070,7 +1133,7 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
     if (typeof console !== "undefined") {
       console.warn(
         "[traderclaw] QMD binary not found. Memory engine will fall back to SQLite (no vector search, no temporal decay, no MMR).\n" +
-        "Install QMD:  bun install -g @tobilu/qmd\n" +
+        "Install QMD:  npm install -g @tobilu/qmd\n" +
         "Then restart the gateway:  openclaw gateway restart"
       );
     }
@@ -1587,6 +1650,137 @@ function configureOpenClawLlmProvider({ provider, model, credential }, configPat
   return { configPath, provider, model };
 }
 
+/**
+ * Sets only `agents.defaults.model.primary` (OAuth / subscription paths where credentials live in OpenClaw auth profiles).
+ * Does not write API keys into config.env.
+ */
+function configureOpenClawLlmModelPrimaryOnly({ provider, model }, configPath = CONFIG_FILE) {
+  if (!provider || !model) {
+    throw new Error("LLM provider and model are required.");
+  }
+  if (!model.startsWith(`${provider}/`)) {
+    throw new Error(`Selected model '${model}' does not match provider '${provider}'.`);
+  }
+
+  let config = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch {
+    config = {};
+  }
+
+  if (!config.agents) config.agents = {};
+  if (!config.agents.defaults) config.agents.defaults = {};
+  ensureAgentsDefaultsSchemaCompat(config);
+  if (!config.agents.defaults.model || typeof config.agents.defaults.model !== "object") {
+    config.agents.defaults.model = {};
+  }
+  config.agents.defaults.model.primary = model;
+
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  return { configPath, provider, model };
+}
+
+/**
+ * Spawns `openclaw models auth login --provider openai-codex` with a pseudo-TTY when possible.
+ * The CLI often exits immediately when stdin/stdout are plain pipes (no TTY). On Unix, `script(1)`
+ * allocates a PTY so the same flow works as in an interactive terminal.
+ */
+export function spawnOpenClawCodexAuthLoginChild() {
+  const argv = ["models", "auth", "login", "--provider", "openai-codex"];
+  if (process.platform === "win32") {
+    return spawn("openclaw", argv, { stdio: ["pipe", "pipe", "pipe"], shell: false });
+  }
+  if (commandExists("unbuffer")) {
+    return spawn("unbuffer", ["openclaw", ...argv], { stdio: ["pipe", "pipe", "pipe"], shell: false });
+  }
+  if (commandExists("script")) {
+    const cmdline = "openclaw models auth login --provider openai-codex";
+    // --return propagates the inner command's exit code (util-linux 2.38+).
+    // Without it, script may exit 0 even if openclaw fails.
+    return spawn("script", ["--return", "-q", "-c", cmdline, "/dev/null"], {
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: false,
+    });
+  }
+  return spawn("openclaw", argv, { stdio: ["pipe", "pipe", "pipe"], shell: false });
+}
+
+/**
+ * Runs `openclaw models auth login --provider openai-codex` and feeds the pasted redirect URL or code on stdin
+ * when the CLI prompts (with a timed fallback for non-interactive / SSH).
+ */
+function runOpenClawCodexOAuthLogin(paste, emitLog) {
+  return new Promise((resolve, reject) => {
+    const child = spawnOpenClawCodexAuthLoginChild();
+
+    let stdout = "";
+    let stderr = "";
+    let pasteSent = false;
+
+    const sendPaste = () => {
+      if (pasteSent) return;
+      const p = String(paste || "").trim();
+      if (!p) return;
+      pasteSent = true;
+      try {
+        child.stdin.write(`${p}\n`);
+      } catch {
+        // ignore
+      }
+    };
+
+    let fallbackTimer = setTimeout(() => sendPaste(), 9000);
+
+    const onChunk = (chunk) => {
+      const combined = (stdout + stderr).toLowerCase();
+      const c = typeof chunk === "string" ? chunk : chunk.toString();
+      if (!pasteSent && /paste|authorization|redirect|callback/i.test(combined) && c.length > 0) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = setTimeout(() => sendPaste(), 400);
+      }
+    };
+
+    child.stdout?.on("data", (d) => {
+      const t = d.toString();
+      stdout += t;
+      const urls = extractUrls(t);
+      emitLog("info", t, urls);
+      onChunk(t);
+    });
+
+    child.stderr?.on("data", (d) => {
+      const t = d.toString();
+      stderr += t;
+      const urls = extractUrls(t);
+      emitLog("warn", t, urls);
+      onChunk(t);
+    });
+
+    child.on("close", (code) => {
+      clearTimeout(fallbackTimer);
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      const detail = `${stderr}\n${stdout}`.trim();
+      const err = new Error(
+        detail || `openclaw models auth login failed with exit code ${code}. Try running the same command in a normal shell, then re-run the wizard with "already logged in" checked.`,
+      );
+      err.code = code;
+      err.stdout = stdout;
+      err.stderr = stderr;
+      reject(err);
+    });
+
+    child.on("error", (e) => {
+      clearTimeout(fallbackTimer);
+      reject(e);
+    });
+  });
+}
+
 function verifyInstallation(modeConfig, apiKey) {
   const gatewayFile = join(CONFIG_DIR, "gateway", modeConfig.gatewayConfig);
   let llmConfigured = false;
@@ -1648,6 +1842,11 @@ function verifyInstallation(modeConfig, apiKey) {
       ok: heartbeatInWorkspace,
       note: heartbeatInWorkspace ? workspaceRoot : `expected ${join(workspaceRoot, "HEARTBEAT.md")}`,
     },
+    {
+      label: "QMD memory engine (vector search)",
+      ok: commandExists("qmd"),
+      note: "not installed — memory uses keyword search only. Install: npm install -g @tobilu/qmd",
+    },
   ];
 }
 
@@ -1670,9 +1869,12 @@ export class InstallerStepEngine {
     this.modeConfig = modeConfig;
     this.options = {
       lane: normalizeLane(options.lane),
+      llmAuthMode: options.llmAuthMode === "oauth" ? "oauth" : "api_key",
       llmProvider: options.llmProvider || "",
       llmModel: options.llmModel || "",
       llmCredential: options.llmCredential || "",
+      llmOAuthPaste: typeof options.llmOAuthPaste === "string" ? options.llmOAuthPaste.trim() : "",
+      llmOAuthSkipLogin: options.llmOAuthSkipLogin === true,
       apiKey: options.apiKey || "",
       orchestratorUrl: options.orchestratorUrl || "https://api.traderclaw.ai",
       gatewayBaseUrl: options.gatewayBaseUrl || "",
@@ -1949,13 +2151,90 @@ export class InstallerStepEngine {
     const provider = String(this.options.llmProvider || "").trim();
     const requestedModel = String(this.options.llmModel || "").trim();
     const credential = String(this.options.llmCredential || "").trim();
-    if (!provider || !credential) {
+    const authMode = this.options.llmAuthMode === "oauth" ? "oauth" : "api_key";
+
+    if (!provider) {
       throw new Error(
-        "Missing required LLM settings. Select provider and provide credential in the wizard before starting installation.",
+        "Missing required LLM settings. Select provider in the wizard before starting installation.",
       );
     }
     if (!commandExists("openclaw")) {
       throw new Error("OpenClaw is not available yet. Install step must complete before LLM configuration.");
+    }
+
+    if (authMode === "oauth") {
+      if (provider !== "openai-codex") {
+        throw new Error("OAuth mode requires LLM provider openai-codex (ChatGPT / Codex subscription).");
+      }
+      const skipLogin = this.options.llmOAuthSkipLogin === true;
+      const oauthPaste = String(this.options.llmOAuthPaste || "").trim();
+      if (!skipLogin && !oauthPaste) {
+        throw new Error(
+          "Codex OAuth requires a pasted authorization code or redirect URL, or enable skip if you already ran openclaw models auth login on this host.",
+        );
+      }
+      if (!skipLogin) {
+        try {
+          await runOpenClawCodexOAuthLogin(oauthPaste, (level, text, urls) =>
+            this.emitLog("configure_llm", level, text, urls || []),
+          );
+        } catch (err) {
+          const tail = `${err?.stderr || ""}\n${err?.stdout || ""}\n${err?.message || ""}`.trim();
+          throw new Error(
+            `${tail}\n\nIf OAuth cannot complete from the wizard, run in a shell: openclaw models auth login --provider openai-codex — then re-run the wizard with "already logged in" checked.`,
+          );
+        }
+      }
+
+      const authFile = join(homedir(), ".openclaw", "agents", "main", "agent", "auth-profiles.json");
+      let hasAuth = false;
+      try {
+        hasAuth = readFileSync(authFile, "utf-8").length > 20;
+      } catch { /* file missing */ }
+      if (!hasAuth) {
+        throw new Error(
+          "No OAuth credentials found at " + authFile + ". " +
+          "The wizard OAuth flow did not save tokens (the callback may not have reached the OpenClaw CLI). " +
+          "Run 'openclaw models auth login --provider openai-codex' in a terminal, " +
+          "then re-run the wizard with the 'already logged in' option.",
+        );
+      }
+
+      const selection = resolveLlmModelSelection(provider, requestedModel);
+      for (const msg of selection.warnings) {
+        this.emitLog("configure_llm", "warn", msg);
+      }
+      const model = selection.model;
+
+      const saved = configureOpenClawLlmModelPrimaryOnly({ provider, model });
+      this.emitLog(
+        "configure_llm",
+        "info",
+        `Configured OpenClaw model primary=${model} (Codex OAuth; credentials in OpenClaw auth profiles, not OPENAI_API_KEY).`,
+      );
+
+      await runCommandWithEvents("openclaw", ["config", "validate"], {
+        onEvent: (evt) => this.emitLog("configure_llm", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
+      });
+
+      try {
+        await runCommandWithEvents("openclaw", ["models", "status", "--check", "--probe-provider", provider], {
+          onEvent: (evt) => this.emitLog("configure_llm", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
+        });
+      } catch (err) {
+        const details = `${err?.stderr || ""}\n${err?.stdout || ""}\n${err?.message || ""}`.trim();
+        throw new Error(
+          `LLM provider validation failed for '${provider}'. Check OAuth login and model, then retry.\n${details}`,
+        );
+      }
+
+      return { configured: true, provider, model, configPath: saved.configPath, authMode: "oauth" };
+    }
+
+    if (!credential) {
+      throw new Error(
+        "Missing required LLM settings. Paste your API key or token in the wizard before starting installation.",
+      );
     }
 
     const selection = resolveLlmModelSelection(provider, requestedModel);
@@ -1982,25 +2261,42 @@ export class InstallerStepEngine {
       );
     }
 
-    return { configured: true, provider, model, configPath: saved.configPath };
+    return { configured: true, provider, model, configPath: saved.configPath, authMode: "api_key" };
   }
 
   buildSetupHandoff() {
-    const args = ["setup", "--url", this.options.orchestratorUrl || "https://api.traderclaw.ai"];
-    if (this.options.lane !== "event-driven") {
-      args.push("--skip-gateway-registration");
+    // Shell-safe single-quote wrapper: wraps value in '…' and escapes any embedded single quotes.
+    const shQuote = (v) => `'${String(v).replace(/'/g, "'\\''")}'`;
+
+    const cliName = this.modeConfig.cliName;
+    const orchestratorUrl = this.options.orchestratorUrl || "https://api.traderclaw.ai";
+    const apiKey = String(this.options.apiKey || "").trim();
+
+    // Build args in the user-facing convention:
+    //   traderclaw setup --api-key '…' --url '…' [--gateway-base-url '…'] [--skip-gateway-registration] [--referral-code '…']
+    const parts = [cliName, "setup"];
+
+    if (apiKey) {
+      parts.push("--api-key", shQuote(apiKey));
     }
+
+    parts.push("--url", shQuote(orchestratorUrl));
+
     const gatewayBaseUrl = this.options.gatewayBaseUrl || this.state.detected.funnelUrl || "";
     if (this.options.lane === "event-driven" && gatewayBaseUrl) {
-      args.push("--gateway-base-url", gatewayBaseUrl);
+      parts.push("--gateway-base-url", shQuote(gatewayBaseUrl));
+    }
+
+    if (this.options.lane !== "event-driven") {
+      parts.push("--skip-gateway-registration");
     }
 
     const ref = String(this.options.referralCode || "").trim();
     if (ref) {
-      args.push("--referral-code", ref);
+      parts.push("--referral-code", shQuote(ref));
     }
 
-    const command = [this.modeConfig.cliName, ...args].join(" ");
+    const command = parts.join(" ");
     const docs =
       "https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-auth-errors-or-the-agent-logged-out";
     return {
@@ -2008,11 +2304,13 @@ export class InstallerStepEngine {
       command,
       title: "Ready to launch your agentic trading desk",
       message:
-        "Core install is complete. Final setup is intentionally handed off to your VPS shell so sensitive wallet prompts stay private. " +
-        "After setup, if the bot reports wallet proof / session errors: configure TRADERCLAW_WALLET_PRIVATE_KEY for the OpenClaw gateway service (systemd), not only in SSH — see " +
+        "Core install is complete. Run the command below in your VPS shell to complete authentication. " +
+        "The wallet private key is intentionally omitted — if your account has a linked wallet, traderclaw setup will prompt for it securely in the terminal (hidden input, key is never saved or sent). " +
+        "For automation or non-interactive environments use --wallet-private-key or the TRADERCLAW_WALLET_PRIVATE_KEY env var instead. " +
+        "After setup, configure TRADERCLAW_WALLET_PRIVATE_KEY for the OpenClaw gateway service (systemd) so the bot can sign challenges at runtime — not only in your SSH session. See " +
         docs,
       hint:
-        "Run the command in terminal, answer setup prompts, then restart gateway. If Telegram startup checks all fail, open the troubleshooting link in the message above.",
+        "Run the command in your terminal. If wallet proof is required, you will be prompted for the private key with hidden input. Then restart the gateway.",
       restartCommand: "openclaw gateway restart",
     };
   }
@@ -2038,6 +2336,35 @@ export class InstallerStepEngine {
             this.modeConfig,
             (evt) => this.emitLog("install_plugin_package", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
           ));
+        await this.runStep("openclaw_global_deps", "Ensuring OpenClaw global package dependencies", async () =>
+          ensureOpenClawGlobalPackageDependencies(),
+        );
+        await this.runStep("install_qmd", "Installing QMD memory engine (vector search)", async () => {
+          if (commandExists("qmd")) {
+            const ver = getCommandOutput("qmd --version");
+            this.emitLog("install_qmd", "info", `QMD already installed: ${ver}`);
+            return { alreadyInstalled: true, version: ver };
+          }
+          this.emitLog("install_qmd", "info", "Installing @tobilu/qmd globally for vector search memory...");
+          try {
+            await runCommandWithEvents("npm", ["install", "-g", "--ignore-scripts", "--registry", "https://registry.npmjs.org/", "@tobilu/qmd"], {
+              onEvent: (evt) => this.emitLog("install_qmd", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
+            });
+          } catch (err) {
+            this.emitLog(
+              "install_qmd",
+              "warn",
+              `QMD install failed (non-fatal): ${err?.message || err}. Memory will use keyword search only. You can install manually later: npm install -g @tobilu/qmd`,
+            );
+            return { installed: false, error: err?.message || String(err) };
+          }
+          const available = commandExists("qmd");
+          const ver = available ? getCommandOutput("qmd --version") : null;
+          if (!available) {
+            this.emitLog("install_qmd", "warn", "QMD installed but not on PATH. Memory will use keyword search only.");
+          }
+          return { installed: available, version: ver };
+        });
         await this.runStep(
           "activate_openclaw_plugin",
           "Installing and enabling TraderClaw inside OpenClaw",
@@ -2145,6 +2472,17 @@ export class InstallerStepEngine {
           this.emitLog("gateway_scheduling", "warn", "Removed legacy 'cron.jobs' from openclaw.json to keep config validation compatible.");
         }
         this.emitLog("gateway_scheduling", "info", `Webhook hooks: ${result.hooksConfigured}`);
+        if (!result.qmdAvailable) {
+          this.emitLog(
+            "gateway_scheduling",
+            "warn",
+            "QMD binary not found — memory will use SQLite keyword search only (no vector search, no temporal decay, no MMR). " +
+            "Vector search makes the agent's memory significantly more effective. " +
+            "Install: npm install -g @tobilu/qmd — then restart the gateway: openclaw gateway restart",
+          );
+        } else {
+          this.emitLog("gateway_scheduling", "info", `QMD memory engine: ${result.qmdVersion || "installed"}`);
+        }
         const restart = await restartGateway();
         return { ...result, restart };
       });

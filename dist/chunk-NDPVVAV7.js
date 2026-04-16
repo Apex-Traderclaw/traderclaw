@@ -49,7 +49,10 @@ async function doRequest(opts, isRetry = false) {
       return doRequest({ ...opts, accessToken: newToken }, true);
     }
     if (!res.ok) {
-      const errMsg = data && typeof data === "object" && "error" in data ? data.error : `HTTP ${res.status}: ${text.slice(0, 200)}`;
+      const errBody = data && typeof data === "object" && !Array.isArray(data) ? data : null;
+      const errCode = typeof errBody?.code === "string" ? errBody.code : null;
+      const errText = typeof errBody?.message === "string" ? errBody.message : typeof errBody?.error === "string" ? errBody.error : `HTTP ${res.status}: ${text.slice(0, 200)}`;
+      const errMsg = errCode ? `${errCode}: ${errText}` : errText;
       throw new Error(errMsg);
     }
     return data;

@@ -1,6 +1,6 @@
 import {
   SessionManager
-} from "./chunk-PZCY6BQK.js";
+} from "./chunk-VVEKPKW3.js";
 import {
   looksLikeTelegramChatId,
   resolveTelegramRecipientToChatId
@@ -9,7 +9,7 @@ import {
   normalizeToolError,
   normalizeToolSuccess,
   renderToolEnvelope
-} from "./chunk-Q5AWKXY3.js";
+} from "./chunk-4G64IVJO.js";
 import {
   AlphaBuffer
 } from "./chunk-3UQIQJPQ.js";
@@ -17,25 +17,27 @@ import {
   AlphaStreamManager
 } from "./chunk-3YPZOXWE.js";
 import {
+  BitqueryStreamManager
+} from "./chunk-VR5WP5S4.js";
+import {
   orchestratorRequest
-} from "./chunk-PIZZXNMQ.js";
+} from "./chunk-NDPVVAV7.js";
 import {
   IntelligenceLab
-} from "./chunk-C24QA3MQ.js";
+} from "./chunk-FBS5FGW2.js";
+import {
+  generateBulletinDigest,
+  generateDecisionDigest,
+  generateEntitlementsDigest,
+  resolveMemoryDir,
+  resolveWorkspaceRoot
+} from "./chunk-JO3BXAUQ.js";
 import {
   scrubUntrustedText
 } from "./chunk-AI6MTHUN.js";
 import {
   readRecoverySecretFromDisk
 } from "./chunk-SBYHSJLU.js";
-import {
-  generateBulletinDigest,
-  generateDecisionDigest,
-  generateEntitlementsDigest,
-  generateStateMd,
-  resolveMemoryDir,
-  resolveWorkspaceRoot
-} from "./chunk-JO3BXAUQ.js";
 
 // index.ts
 import { Type } from "@sinclair/typebox";
@@ -1142,6 +1144,33 @@ var solanaTraderPlugin = {
       fs.writeFileSync(filePath, entries.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf-8");
       return entries.length;
     };
+    const volatileStateKeys = /* @__PURE__ */ new Set(["lastHeartbeat", "lastHeartbeatAt"]);
+    const renderSummaryBullets = (key, val) => {
+      if (key === "lastCycleSummary" && val && typeof val === "object") {
+        const s = val;
+        const bullets = ["## Last Cycle Summary", ""];
+        if (s.capitalSol !== void 0) bullets.push(`- **Capital SOL:** ${s.capitalSol}`);
+        if (s.openPositions !== void 0) bullets.push(`- **Open Positions:** ${s.openPositions}`);
+        if (s.signalsProcessed !== void 0) bullets.push(`- **Signals Processed:** ${s.signalsProcessed}`);
+        if (s.topWatch) bullets.push(`- **Top Watch:** ${s.topWatch}`);
+        if (s.xApiStatus) bullets.push(`- **X API Status:** ${s.xApiStatus}`);
+        if (s.bitqueryStatus) bullets.push(`- **Bitquery Status:** ${s.bitqueryStatus}`);
+        const rendered = Object.keys(s).filter((k) => !["capitalSol", "openPositions", "signalsProcessed", "topWatch", "xApiStatus", "bitqueryStatus"].includes(k));
+        for (const rk of rendered.slice(0, 5)) {
+          const rv = s[rk];
+          const disp = typeof rv === "object" ? JSON.stringify(rv) : String(rv);
+          bullets.push(`- **${rk}:** ${disp.length > 120 ? disp.slice(0, 120) + "\u2026" : disp}`);
+        }
+        bullets.push("");
+        return bullets;
+      }
+      return [];
+    };
+    const formatStateValue = (val) => {
+      if (val === null || val === void 0) return String(val);
+      if (typeof val === "object") return JSON.stringify(val);
+      return String(val);
+    };
     const generateMemoryMd = (aid, stateObj) => {
       const lines = [
         `# ${aid} \u2014 Durable Memory`,
@@ -1160,7 +1189,7 @@ var solanaTraderPlugin = {
       if (state.walletId) identity.push(`- **Wallet:** ${state.walletId}`);
       if (state.mode) identity.push(`- **Mode:** ${state.mode}`);
       if (state.strategyVersion) identity.push(`- **Strategy Version:** ${state.strategyVersion}`);
-      if (state.regime) identity.push(`- **Regime:** ${state.regime}`);
+      if (state.regime) identity.push(`- **Regime:** ${formatStateValue(state.regime)}`);
       if (state.maxPositions) identity.push(`- **Max Positions:** ${state.maxPositions}`);
       if (state.maxPositionSizeSol) identity.push(`- **Max Position Size:** ${state.maxPositionSizeSol} SOL`);
       if (identity.length > 0) {
@@ -1192,13 +1221,32 @@ var solanaTraderPlugin = {
         const rc = state.regimeCanary;
         lines.push("## Regime Canary", "", `- **Regime:** ${rc.regime || "unknown"}`, `- **Detected At:** ${rc.detectedAt || "unknown"}`, "");
       }
-      const excludeKeys = /* @__PURE__ */ new Set(["tier", "walletId", "mode", "strategyVersion", "regime", "maxPositions", "maxPositionSizeSol", "defenseMode", "killSwitchActive", "watchlist", "permanentLearnings", "regimeCanary"]);
-      const otherKeys = Object.keys(state).filter((k) => !excludeKeys.has(k));
-      if (otherKeys.length > 0) {
+      if (state.preferences && typeof state.preferences === "object") {
+        const prefs = state.preferences;
+        const prefLines = [];
+        for (const [pk, pv] of Object.entries(prefs)) {
+          prefLines.push(`- **${pk}:** ${formatStateValue(pv)}`);
+        }
+        if (prefLines.length > 0) lines.push("## User Preferences (override defaults)", "", ...prefLines, "");
+      }
+      const structuredKeys = /* @__PURE__ */ new Set(["tier", "walletId", "mode", "strategyVersion", "regime", "maxPositions", "maxPositionSizeSol", "defenseMode", "killSwitchActive", "watchlist", "permanentLearnings", "regimeCanary", "preferences"]);
+      const summaryKeys = /* @__PURE__ */ new Set(["lastCycleSummary"]);
+      const otherKeys = Object.keys(state).filter((k) => !structuredKeys.has(k) && !volatileStateKeys.has(k));
+      const summaryRendered = [];
+      const remainingKeys = [];
+      for (const key of otherKeys) {
+        if (summaryKeys.has(key)) {
+          summaryRendered.push(...renderSummaryBullets(key, state[key]));
+        } else {
+          remainingKeys.push(key);
+        }
+      }
+      if (summaryRendered.length > 0) lines.push(...summaryRendered);
+      if (remainingKeys.length > 0) {
         lines.push("## Other State Keys", "");
-        for (const key of otherKeys.slice(0, 30)) {
+        for (const key of remainingKeys.slice(0, 30)) {
           const val = state[key];
-          const display = typeof val === "object" ? JSON.stringify(val) : String(val);
+          const display = formatStateValue(val);
           lines.push(`- **${key}:** ${display.length > 200 ? display.slice(0, 200) + "\u2026" : display}`);
         }
         lines.push("");
@@ -1528,7 +1576,8 @@ ${notes}
           symbol: params.symbol,
           slippageBps: params.slippageBps,
           slPct: params.slPct,
-          managementMode: params.managementMode
+          managementMode: params.managementMode,
+          requestedFrom: "AGENT_REQUEST"
         };
         const execAgentId = typeof params.agentId === "string" && params.agentId.trim().length > 0 ? params.agentId.trim() : config.agentId && String(config.agentId).trim().length > 0 ? String(config.agentId).trim() : void 0;
         if (execAgentId) body.agentId = execAgentId;
@@ -1580,7 +1629,8 @@ ${notes}
           symbol: params.symbol,
           slippageBps: params.slippageBps,
           slPct: params.slPct,
-          tpLevels: params.tpLevels
+          tpLevels: params.tpLevels,
+          requestedFrom: "AGENT_REQUEST"
         };
         if (params.side === "buy") {
           body.sizeSol = params.sizeSol;
@@ -1717,34 +1767,6 @@ ${notes}
           strategyVersion: params.strategyVersion,
           mode: params.mode
         })
-      )
-    });
-    api.registerTool({
-      name: "solana_killswitch",
-      description: "Toggle the emergency kill switch. When enabled, ALL trade execution is blocked. Use in emergencies: repeated losses, unusual market behavior, or security concerns.",
-      parameters: Type.Object({
-        enabled: Type.Boolean({ description: "true to activate (block all trades), false to deactivate" }),
-        mode: Type.Optional(
-          Type.Union([Type.Literal("TRADES_ONLY"), Type.Literal("TRADES_AND_STREAMS")], {
-            description: "TRADES_ONLY blocks execution; TRADES_AND_STREAMS blocks everything"
-          })
-        )
-      }),
-      execute: wrapExecute(
-        "solana_killswitch",
-        async (_id, params) => post("/api/killswitch", {
-          enabled: params.enabled,
-          mode: params.mode
-        })
-      )
-    });
-    api.registerTool({
-      name: "solana_killswitch_status",
-      description: "Check the current kill switch state \u2014 whether it's enabled and in what mode.",
-      parameters: Type.Object({}),
-      execute: wrapExecute(
-        "solana_killswitch_status",
-        async () => get(`/api/killswitch/status?walletId=${walletId}`)
       )
     });
     api.registerTool({
@@ -1972,34 +1994,6 @@ ${notes}
       )
     });
     api.registerTool({
-      name: "solana_wallet_token_balance",
-      description: "Get the on-chain SPL token balance (uiAmount \u2014 source of truth) for a specific mint in your trading wallet. Returns the token amount, decimals, and USD value estimate. Use to verify actual holdings when position balances seem inconsistent.",
-      parameters: Type.Object({
-        tokenAddress: Type.String({ description: "Solana token mint address to check balance for" })
-      }),
-      execute: wrapExecute(
-        "solana_wallet_token_balance",
-        async (_id, params) => post("/api/wallet/token-balance", { tokenAddress: params.tokenAddress })
-      )
-    });
-    api.registerTool({
-      name: "solana_sweep_dead_tokens",
-      description: "Sell 100% of open positions where unrealizedReturnPct \u2264 -maxLossPct to cut losses and reclaim SOL. NOT a dust/rent sweeper \u2014 this sells actual positions that are down beyond recovery. Use in dead_money_sweep cron or manual loss-cutting.",
-      parameters: Type.Object({
-        maxLossPct: Type.Optional(Type.Number({ description: "Maximum loss percentage threshold \u2014 positions down more than this % are sold (default: 80)" })),
-        slippageBps: Type.Optional(Type.Number({ description: "Slippage in basis points for the sell orders (default: server default)" })),
-        dryRun: Type.Optional(Type.Boolean({ description: "If true, return positions that would be sold without executing. Default: false" }))
-      }),
-      execute: wrapExecute(
-        "solana_sweep_dead_tokens",
-        async (_id, params) => post("/api/wallet/sweep-dead-tokens", {
-          maxLossPct: params.maxLossPct,
-          slippageBps: params.slippageBps,
-          dryRun: params.dryRun
-        })
-      )
-    });
-    api.registerTool({
       name: "solana_trades",
       description: "List your trade history with pagination. Returns executed trades with details like token, side, size, PnL, and timestamp.",
       parameters: Type.Object({
@@ -2079,6 +2073,27 @@ ${notes}
         async (_id, params) => post("/api/entitlements/upgrade", {
           targetTier: params.targetTier
         })
+      )
+    });
+    api.registerTool({
+      name: "solana_referral_profile",
+      description: "Read your TraderClaw referral profile: your current referral code (null if not set), access window, tier, and earnings metadata. Call this when the user asks about their referral code, when ACCESS_LIMIT_REACHED is received, or to check whether a code has already been created. This endpoint remains accessible even after the runtime access window has expired \u2014 use it to help the user set up a referral code so they can regain access by referring others. If referralCode is null, prompt the user to choose a custom 4\u201316 alphanumeric code and call solana_referral_set_code with their input.",
+      parameters: Type.Object({}),
+      execute: wrapExecute("solana_referral_profile", async () => get("/api/referral/me"))
+    });
+    api.registerTool({
+      name: "solana_referral_set_code",
+      description: "Set or update your custom TraderClaw referral code. The code must be 4\u201316 alphanumeric characters; it is stored normalized to UPPERCASE. IMPORTANT: You must ask the user to provide the code \u2014 never invent or guess one. Suggest that the code be memorable (e.g. their username, brand, or handle). Once set, anyone who signs up using this code grants you +8 hours of access per active referral. This endpoint remains accessible even after the runtime access window has expired, so the user can always create or update their referral code. After setting the code, confirm the saved value from the response and share it with the user so they can start referring others. Expected errors (check ok=false + errorCode): REFERRAL_CODE_TAKEN \u2014 that exact code is already used by another account; ask the user to choose a different one. VALIDATION_ERROR \u2014 code does not meet the 4\u201316 alphanumeric rule; tell the user which constraint was violated. AUTH_ERROR \u2014 session expired; user must re-authenticate before setting the code.",
+      parameters: Type.Object({
+        referralCode: Type.String({
+          description: "Custom referral code chosen by the user. Must be 4\u201316 alphanumeric characters (letters and digits only). Will be stored as UPPERCASE.",
+          minLength: 4,
+          maxLength: 16
+        })
+      }),
+      execute: wrapExecute(
+        "solana_referral_set_code",
+        async (_id, params) => put("/api/referral/code", { referralCode: String(params.referralCode).trim().toUpperCase() })
       )
     });
     api.registerTool({
@@ -2193,6 +2208,16 @@ ${notes}
         })
       )
     });
+    const bitqueryStreamManager = new BitqueryStreamManager({
+      wsUrl: orchestratorUrl.replace(/^http/, "ws").replace(/\/$/, "") + "/ws",
+      walletId,
+      getAccessToken: () => sessionManager.getAccessToken(),
+      logger: {
+        info: (msg) => api.logger.info(`[solana-trader] ${msg}`),
+        warn: (msg) => api.logger.warn(`[solana-trader] ${msg}`),
+        error: (msg) => api.logger.error(`[solana-trader] ${msg}`)
+      }
+    });
     api.registerTool({
       name: "solana_bitquery_subscribe",
       description: "Subscribe to a managed real-time Bitquery data stream. The orchestrator manages the WebSocket connection and broadcasts events. Available templates: realtimeTokenPricesSolana, ohlc1s, dexPoolLiquidityChanges, pumpFunTokenCreation, pumpFunTrades, pumpSwapTrades, raydiumNewPools. Returns a subscriptionId for tracking. Pass agentId to enable event-to-agent forwarding \u2014 orchestrator delivers each event to your Gateway via /v1/responses in addition to normal WS delivery. Subscriptions expire after 24h and emit subscription_expiring/subscription_expired events. See websocket-streaming.md in the solana-trader skill for the full message contract and usage patterns.",
@@ -2203,18 +2228,13 @@ ${notes}
         subscriberType: Type.Optional(Type.Union([Type.Literal("agent"), Type.Literal("client")], { description: "Subscriber type. Inferred as 'agent' when agentId is present. Defaults to 'client'." }))
       }),
       execute: wrapExecute("solana_bitquery_subscribe", async (_id, params) => {
-        const body = {
-          templateKey: params.templateKey,
-          variables: params.variables || {}
-        };
         const effectiveAgentId = params.agentId || config.agentId;
-        if (effectiveAgentId) {
-          body.agentId = effectiveAgentId;
-          body.subscriberType = params.subscriberType || "agent";
-        } else if (params.subscriberType) {
-          body.subscriberType = params.subscriberType;
-        }
-        return post("/api/bitquery/subscribe", body);
+        return bitqueryStreamManager.subscribe({
+          templateKey: params.templateKey,
+          variables: params.variables || {},
+          agentId: effectiveAgentId,
+          subscriberType: params.subscriberType || (effectiveAgentId ? "agent" : void 0)
+        });
       })
     });
     api.registerTool({
@@ -2225,9 +2245,7 @@ ${notes}
       }),
       execute: wrapExecute(
         "solana_bitquery_unsubscribe",
-        async (_id, params) => post("/api/bitquery/unsubscribe", {
-          subscriptionId: params.subscriptionId
-        })
+        async (_id, params) => bitqueryStreamManager.unsubscribe(params.subscriptionId)
       )
     });
     api.registerTool({
@@ -2466,6 +2484,29 @@ ${notes}
         const capitalOnly = failed === 1 && steps.find((s) => !s.ok)?.step === "solana_capital_status";
         startupGateState = { ok: allOk, ts: Date.now(), steps };
         const k = config.apiKey && String(config.apiKey).trim() || null;
+        if (allOk || capitalOnly) {
+          try {
+            const effectiveAgentId = config.agentId || "main";
+            const stateFilePath = path.join(stateDir, `${effectiveAgentId}.json`);
+            const existing = readJsonFile(stateFilePath);
+            const existingState = existing?.state && typeof existing.state === "object" ? existing.state : {};
+            const alphaStep = steps.find((s) => s.step === "solana_alpha_subscribe" && s.ok);
+            const tier = alphaStep?.details?.tier;
+            const seedFields = {};
+            if (!existingState.walletId && walletId) seedFields.walletId = walletId;
+            if (!existingState.tier && tier) seedFields.tier = tier;
+            if (!existingState.mode) seedFields.mode = "HARDENED";
+            if (!existingState.strategyVersion) seedFields.strategyVersion = "1.0.0";
+            if (Object.keys(seedFields).length > 0) {
+              const merged = { ...existingState, ...seedFields };
+              writeJsonFile(stateFilePath, { agentId: effectiveAgentId, state: merged, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
+              writeMemoryMd(effectiveAgentId, merged);
+              api.logger.info(`[solana-trader] Seeded identity fields into state: ${Object.keys(seedFields).join(", ")}`);
+            }
+          } catch (seedErr) {
+            api.logger.warn(`[solana-trader] Failed to seed identity fields: ${seedErr instanceof Error ? seedErr.message : String(seedErr)}`);
+          }
+        }
         return {
           ok: allOk,
           ts: Date.now(),
@@ -2614,6 +2655,49 @@ ${notes}
       description: "Check orchestrator system health \u2014 uptime, connected services, database status, execution mode, and upstream API connectivity.",
       parameters: Type.Object({}),
       execute: wrapExecute("solana_system_status", async () => get("/api/system/status"))
+    });
+    api.registerTool({
+      name: "solana_storage_status",
+      description: "Check local VPS disk usage and plugin storage health. Reports disk free/total, daily log count + size, candidates count, session directory size. Use in heartbeat Step 0 or risk_audit to detect disk pressure before it causes silent failures.",
+      parameters: Type.Object({}),
+      execute: wrapExecute("solana_storage_status", async () => {
+        const os = await import("os");
+        const result = {};
+        try {
+          const stat = fs.statfsSync(workspaceRoot);
+          const totalGB = Math.round(stat.bsize * stat.blocks / 1024 ** 3 * 100) / 100;
+          const freeGB = Math.round(stat.bsize * stat.bavail / 1024 ** 3 * 100) / 100;
+          const usedPct = Math.round((1 - freeGB / totalGB) * 100);
+          result.disk = { totalGB, freeGB, usedPct, warning: usedPct > 85, critical: usedPct > 95 };
+        } catch {
+          result.disk = { error: "unable to read disk stats" };
+        }
+        try {
+          const logFiles = fs.readdirSync(memoryDir).filter((f) => f.endsWith(".md"));
+          let totalBytes = 0;
+          for (const f of logFiles) {
+            try {
+              totalBytes += fs.statSync(path.join(memoryDir, f)).size;
+            } catch {
+            }
+          }
+          result.dailyLogs = { count: logFiles.length, totalKB: Math.round(totalBytes / 1024) };
+        } catch {
+          result.dailyLogs = { count: 0, totalKB: 0 };
+        }
+        try {
+          const candidatesPath = intelligenceLab.exportDataset("json");
+          const parsed = JSON.parse(candidatesPath);
+          const labeled = Array.isArray(parsed) ? parsed.filter((c) => c.outcome).length : 0;
+          const total = Array.isArray(parsed) ? parsed.length : 0;
+          result.candidates = { total, labeled, unlabeled: total - labeled };
+        } catch {
+          result.candidates = { total: 0, labeled: 0, unlabeled: 0 };
+        }
+        result.memoryRAM = { rssKB: Math.round(process.memoryUsage().rss / 1024), heapUsedKB: Math.round(process.memoryUsage().heapUsed / 1024) };
+        result.uptime = { systemHours: Math.round(os.uptime() / 3600 * 10) / 10, processHours: Math.round(process.uptime() / 3600 * 10) / 10 };
+        return result;
+      })
     });
     api.registerTool({
       name: "solana_startup_gate",
@@ -3826,7 +3910,7 @@ ${String(params.summary)}
         const stateFile = path.join(stateDir, `${bootAgentId}.json`);
         const stateData = readJsonFile(stateFile);
         if (stateData) {
-          const stateMd = generateStateMd(stateData.state || null);
+          const stateMd = generateMemoryMd(bootAgentId, stateData.state || null);
           context.bootstrapFiles.push({
             name: `${bootAgentId}-state.md`,
             path: `state/${bootAgentId}-state.md`,
@@ -4045,7 +4129,7 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
             const stateFile = path.join(stateDir, `${assembleAgentId}.json`);
             const stateData = readJsonFile(stateFile);
             if (stateData?.state) {
-              lines.push(generateStateMd(stateData.state));
+              lines.push(generateMemoryMd(assembleAgentId, stateData.state));
             }
           } catch {
           }

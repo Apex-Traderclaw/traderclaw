@@ -348,7 +348,6 @@ Pay-as-you-go or Basic tier is required for the read-only social intel tools.
 ### Safety
 | Tool | Description |
 |------|-------------|
-| `solana_killswitch` | Toggle emergency kill switch |
 | `solana_killswitch_status` | Check kill switch state |
 
 ### Wallet
