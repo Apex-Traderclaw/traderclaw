@@ -1117,6 +1117,22 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   }
   config.agents.defaults.heartbeat = { ...defaultHeartbeat };
 
+  if (!config.agents.defaults.memorySearch || typeof config.agents.defaults.memorySearch !== "object") {
+    config.agents.defaults.memorySearch = {
+      provider: "openai",
+      model: "text-embedding-3-small",
+      query: {
+        hybrid: true,
+        mmr: { enabled: true, lambda: 0.5 },
+        temporalDecay: { enabled: true, halfLifeDays: 14 },
+      },
+    };
+  }
+
+  if (!config.agents.defaults.contextPruning || typeof config.agents.defaults.contextPruning !== "object") {
+    config.agents.defaults.contextPruning = { cacheTtl: "1h" };
+  }
+
   ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
