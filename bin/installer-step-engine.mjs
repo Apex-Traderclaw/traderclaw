@@ -1019,9 +1019,9 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
     prompt: heartbeatPrompt,
   };
 
-  const v1Agents = [{ id: "main", default: true, heartbeat: { ...defaultHeartbeat } }];
+  const v1Agents = [{ id: "main", default: true, identity: { name: "AgentZERO" }, heartbeat: { ...defaultHeartbeat } }];
   const v2Agents = [
-    { id: "cto", default: true, heartbeat: { ...defaultHeartbeat } },
+    { id: "cto", default: true, identity: { name: "AgentZERO" }, heartbeat: { ...defaultHeartbeat } },
     { id: "execution-specialist", heartbeat: { ...defaultHeartbeat } },
     { id: "alpha-signal-analyst", heartbeat: { ...defaultHeartbeat } },
     { id: "onchain-analyst" },
@@ -1047,6 +1047,9 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
       }
       if (agent.default) {
         existing.default = true;
+      }
+      if (agent.identity && (!existing.identity || typeof existing.identity !== "object")) {
+        existing.identity = agent.identity;
       }
     } else {
       config.agents.list.push(agent);
@@ -1111,6 +1114,21 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   if (config.channels.defaults.heartbeat.showOk === undefined) {
     config.channels.defaults.heartbeat.showOk = true;
   }
+  if (config.channels.defaults.heartbeat.showAlerts === undefined) {
+    config.channels.defaults.heartbeat.showAlerts = true;
+  }
+
+  if (!config.channels.telegram || typeof config.channels.telegram !== "object") {
+    config.channels.telegram = {};
+  }
+  if (config.channels.telegram.streaming === undefined) {
+    config.channels.telegram.streaming = "partial";
+  }
+
+  if (!config.commands || typeof config.commands !== "object") config.commands = {};
+  if (config.commands.native === undefined) config.commands.native = "auto";
+  if (config.commands.restart === undefined) config.commands.restart = true;
+  if (!config.commands.ownerDisplay) config.commands.ownerDisplay = "raw";
 
   if (!config.agents.defaults || typeof config.agents.defaults !== "object") {
     config.agents.defaults = {};
