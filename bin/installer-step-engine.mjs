@@ -1124,21 +1124,6 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   const cronStorePath = resolveCronJobsStorePath(config);
   const cronMerge = mergeTraderCronJobsIntoStore(cronStorePath, targetJobs);
 
-  let qmdAvailable = false;
-  let qmdVersion = null;
-  try { qmdAvailable = commandExists("qmd"); } catch {}
-  if (qmdAvailable) {
-    qmdVersion = getCommandOutput("qmd --version");
-  } else {
-    if (typeof console !== "undefined") {
-      console.warn(
-        "[traderclaw] QMD binary not found. Memory engine will fall back to SQLite (no vector search, no temporal decay, no MMR).\n" +
-        "Install QMD:  npm install -g @tobilu/qmd\n" +
-        "Then restart the gateway:  openclaw gateway restart"
-      );
-    }
-  }
-
   return {
     configPath,
     agentsConfigured: targetAgents.length,
@@ -1150,8 +1135,6 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
     cronJobsStoreError: cronMerge.error,
     removedLegacyCronJobs,
     hooksConfigured: config.hooks.mappings.length,
-    qmdAvailable,
-    qmdVersion,
     isV2,
   };
 }
@@ -1843,9 +1826,9 @@ function verifyInstallation(modeConfig, apiKey) {
       note: heartbeatInWorkspace ? workspaceRoot : `expected ${join(workspaceRoot, "HEARTBEAT.md")}`,
     },
     {
-      label: "QMD memory engine (vector search)",
-      ok: commandExists("qmd"),
-      note: "not installed — memory uses keyword search only. Install: npm install -g @tobilu/qmd",
+      label: "Memory engine (builtin, vector + FTS)",
+      ok: true,
+      note: "run `openclaw memory status --deep` to verify index",
     },
   ];
 }
@@ -2339,32 +2322,6 @@ export class InstallerStepEngine {
         await this.runStep("openclaw_global_deps", "Ensuring OpenClaw global package dependencies", async () =>
           ensureOpenClawGlobalPackageDependencies(),
         );
-        await this.runStep("install_qmd", "Installing QMD memory engine (vector search)", async () => {
-          if (commandExists("qmd")) {
-            const ver = getCommandOutput("qmd --version");
-            this.emitLog("install_qmd", "info", `QMD already installed: ${ver}`);
-            return { alreadyInstalled: true, version: ver };
-          }
-          this.emitLog("install_qmd", "info", "Installing @tobilu/qmd globally for vector search memory...");
-          try {
-            await runCommandWithEvents("npm", ["install", "-g", "--ignore-scripts", "--registry", "https://registry.npmjs.org/", "@tobilu/qmd"], {
-              onEvent: (evt) => this.emitLog("install_qmd", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
-            });
-          } catch (err) {
-            this.emitLog(
-              "install_qmd",
-              "warn",
-              `QMD install failed (non-fatal): ${err?.message || err}. Memory will use keyword search only. You can install manually later: npm install -g @tobilu/qmd`,
-            );
-            return { installed: false, error: err?.message || String(err) };
-          }
-          const available = commandExists("qmd");
-          const ver = available ? getCommandOutput("qmd --version") : null;
-          if (!available) {
-            this.emitLog("install_qmd", "warn", "QMD installed but not on PATH. Memory will use keyword search only.");
-          }
-          return { installed: available, version: ver };
-        });
         await this.runStep(
           "activate_openclaw_plugin",
           "Installing and enabling TraderClaw inside OpenClaw",
@@ -2472,17 +2429,6 @@ export class InstallerStepEngine {
           this.emitLog("gateway_scheduling", "warn", "Removed legacy 'cron.jobs' from openclaw.json to keep config validation compatible.");
         }
         this.emitLog("gateway_scheduling", "info", `Webhook hooks: ${result.hooksConfigured}`);
-        if (!result.qmdAvailable) {
-          this.emitLog(
-            "gateway_scheduling",
-            "warn",
-            "QMD binary not found — memory will use SQLite keyword search only (no vector search, no temporal decay, no MMR). " +
-            "Vector search makes the agent's memory significantly more effective. " +
-            "Install: npm install -g @tobilu/qmd — then restart the gateway: openclaw gateway restart",
-          );
-        } else {
-          this.emitLog("gateway_scheduling", "info", `QMD memory engine: ${result.qmdVersion || "installed"}`);
-        }
         const restart = await restartGateway();
         return { ...result, restart };
       });
