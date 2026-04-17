@@ -94,6 +94,15 @@
         "default": 30,
         "description": "Number of days to retain daily log files before pruning"
       },
+      "kaybaApiKey": {
+        "type": "string",
+        "description": "Kayba tracing API key. When set, every tool call is traced and sent to the Kayba dashboard."
+      },
+      "kaybaFolder": {
+        "type": "string",
+        "default": "traderclaw",
+        "description": "Folder name for organizing traces in the Kayba dashboard."
+      },
       "beta": {
         "type": "object",
         "description": "Beta feature flags. Enable experimental capabilities that are not yet enabled by default.",
@@ -214,6 +223,17 @@
     },
     "dailyLogRetentionDays": {
       "label": "Daily Log Retention (days)",
+      "advanced": true
+    },
+    "kaybaApiKey": {
+      "label": "Kayba API Key",
+      "placeholder": "kb_xxx",
+      "sensitive": true,
+      "advanced": true
+    },
+    "kaybaFolder": {
+      "label": "Kayba Folder",
+      "placeholder": "traderclaw",
       "advanced": true
     },
     "beta": {
