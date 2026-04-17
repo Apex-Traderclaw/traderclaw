@@ -73,6 +73,8 @@ All authenticated endpoints use `Authorization: Bearer <accessToken>`.
 | `POST` | `/api/wallet/token-balance` | `walletId`, `tokenAddress` | On-chain SPL `uiAmount` (source of truth) for a specific mint in wallet. Use to verify actual holdings. |
 | `POST` | `/api/wallet/sweep-dead-tokens` | `walletId` | Sells **100%** of each **open** position with `unrealizedReturnPct ≤ -maxLossPct`. Optional: `maxLossPct` (default **80**), `slippageBps`, `dryRun`. **`trade:execute` scope.** |
 | `GET` | `/api/system/status` | — | System health and connectivity |
+| `GET` | `/api/referral/me` | — | Read referral profile: `referralCode`, `accessUntil`, tier, earnings. **Runtime-gate exempt** — accessible even after access window expires. |
+| `PUT` | `/api/referral/code` | `referralCode` (body) | Set or update custom referral code. Must be 4–16 alphanumeric characters; stored as UPPERCASE. **Runtime-gate exempt** — accessible even after access window expires. |
 
 ## Key Contract Notes
 

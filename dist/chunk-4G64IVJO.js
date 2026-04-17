@@ -13,7 +13,13 @@ var ERROR_CLASSIFICATION = {
   "404": { retryable: false, code: "NOT_FOUND" },
   "500": { retryable: true, code: "SERVER_ERROR" },
   "502": { retryable: true, code: "SERVER_ERROR" },
-  "503": { retryable: true, code: "SERVER_ERROR" }
+  "503": { retryable: true, code: "SERVER_ERROR" },
+  // Referral-specific codes (sent as "CODE: message" by http-client after extraction)
+  "REFERRAL_CODE_TAKEN": { retryable: false, code: "REFERRAL_CODE_TAKEN" },
+  "referral code already taken": { retryable: false, code: "REFERRAL_CODE_TAKEN" },
+  "REFERRAL_CODE_INVALID": { retryable: false, code: "REFERRAL_CODE_INVALID" },
+  "REFERRAL_CODE_ERROR": { retryable: false, code: "REFERRAL_CODE_ERROR" },
+  "alphanumeric": { retryable: false, code: "VALIDATION_ERROR" }
 };
 function generateTraceId() {
   const ts = Date.now().toString(36);

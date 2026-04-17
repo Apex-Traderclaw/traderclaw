@@ -3,6 +3,8 @@ export interface SessionTokens {
   refreshToken: string;
   accessTokenTtlSeconds: number;
   refreshTokenTtlSeconds: number;
+  /** Present when the server returns a one-time recovery secret alongside the session (e.g. after wallet-proof challenge for existing accounts). */
+  recoverySecret?: string;
   session: {
     id: string;
     apiKey: string;
@@ -462,6 +464,21 @@ export class SessionManager {
 
     if (challenge.walletPublicKey) {
       this.walletPublicKey = challenge.walletPublicKey;
+    }
+
+    // If the server included a recovery secret in the session-start response (e.g. for
+    // existing accounts that completed a wallet-proof challenge), persist it so the gateway
+    // can re-authenticate via recover-secret when the refresh token later expires —
+    // avoiding the need for TRADERCLAW_WALLET_PRIVATE_KEY on every re-auth cycle.
+    if (tokens.recoverySecret && this.onRecoverySecretRotated) {
+      try {
+        this.onRecoverySecretRotated(tokens.recoverySecret);
+        this.log.info("[session] Recovery secret from session start persisted.");
+      } catch (err: unknown) {
+        this.log.warn(
+          `[session] Failed to persist recovery secret from session start: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
 
