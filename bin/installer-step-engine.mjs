@@ -530,6 +530,42 @@ async function installOpenClawPlatform() {
   };
 }
 
+/**
+ * Check whether the OpenClaw CLI has any devices stuck in a pending-approval or
+ * repair state.  This can happen when the gateway version >= 1.0.93-beta.0 starts
+ * treating every CLI invocation as a "device" that must be explicitly approved
+ * before it gets operator-write scope.  Without that scope all trading RPCs fail
+ * silently (read-only).
+ *
+ * Returns:
+ *   { ran: false }                        – openclaw not on PATH or devices subcommand not supported
+ *   { ran: true, pendingIds: string[],    – list ran OK; ids needing approval
+ *     repairDetected: boolean,            – current device is in repair/read-only state
+ *     envTokenSet: boolean }              – OPENCLAW_GATEWAY_TOKEN env var already present (fallback)
+ */
+function checkOpenClawDeviceApproval() {
+  if (!commandExists("openclaw")) return { ran: false };
+  const raw = getCommandOutput("openclaw devices list");
+  if (!raw) return { ran: false };
+
+  const lower = raw.toLowerCase();
+  const envTokenSet = !!process.env.OPENCLAW_GATEWAY_TOKEN;
+
+  // Detect devices that are waiting for approval ("pending" requestId lines).
+  const pendingIds = [];
+  for (const line of raw.split("\n")) {
+    // Lines typically look like:  d4fcdbe8-5176-422b-...   pending
+    const m = line.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+    if (m && (line.toLowerCase().includes("pending") || line.toLowerCase().includes("repair"))) {
+      pendingIds.push(m[1]);
+    }
+  }
+
+  const repairDetected = lower.includes("repair");
+
+  return { ran: true, pendingIds, repairDetected, envTokenSet, raw };
+}
+
 function isNpmGlobalBinConflict(err, cliName) {
   const text = `${err?.message || ""}\n${err?.stderr || ""}\n${err?.stdout || ""}`.toLowerCase();
   return (
@@ -2347,6 +2383,40 @@ export class InstallerStepEngine {
       if (!this.options.skipInstallOpenClaw) {
         await this.runStep("install_openclaw", "Installing or upgrading OpenClaw platform", async () => installOpenClawPlatform());
       }
+
+      // Non-fatal: warn when the CLI has devices in pending-approval or repair state.
+      // Gateway >= 1.0.93-beta.0 requires explicit device approval for operator-write scope;
+      // without it, agent trading RPCs silently fail (device gets read-only "repair" state).
+      await this.runStep("device_approval_check", "Checking OpenClaw device approval status", async () => {
+        const check = checkOpenClawDeviceApproval();
+        if (!check.ran) {
+          this.emitLog("device_approval_check", "info", "Device approval check skipped (openclaw CLI not available or devices subcommand not supported).");
+          return { ran: false };
+        }
+        const needsAction = check.pendingIds.length > 0 || check.repairDetected;
+        if (!needsAction) {
+          this.emitLog("device_approval_check", "info", "No pending or repair-state devices found. Device approval OK.");
+          return { ran: true, ok: true };
+        }
+        const lines = [
+          "ACTION REQUIRED — OpenClaw device approval needed.",
+          "The gateway requires explicit device approval for operator-write scope.",
+          "Without it, trading RPCs will fail silently (read-only / repair state).",
+          "",
+          "Run in your VPS shell:",
+          "  openclaw devices list",
+          ...(check.pendingIds.length > 0
+            ? check.pendingIds.map((id) => `  openclaw devices approve ${id}`)
+            : ["  openclaw devices approve <requestId>   # use the id shown above"]),
+          "",
+          check.envTokenSet
+            ? "OPENCLAW_GATEWAY_TOKEN env var is already set — env-first auth will work as a fallback."
+            : "Optionally set: export OPENCLAW_GATEWAY_TOKEN=\"<token>\"   # bypasses device auth entirely",
+        ];
+        this.emitLog("device_approval_check", "warn", lines.join("\n"));
+        return { ran: true, ok: false, pendingIds: check.pendingIds, repairDetected: check.repairDetected, envTokenSet: check.envTokenSet };
+      });
+
       await this.runStep("configure_llm", "Configuring required OpenClaw LLM provider", async () => this.configureLlmStep());
       if (!this.options.skipInstallPlugin) {
         await this.runStep("install_plugin_package", "Installing TraderClaw CLI package", async () =>
