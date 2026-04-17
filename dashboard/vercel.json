@@ -1,0 +1,19 @@
+{
+  "framework": null,
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist/public",
+  "installCommand": "npm install",
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://api.traderclaw.ai/api/:path*"
+    },
+    {
+      "source": "/healthz",
+      "destination": "https://api.traderclaw.ai/healthz"
+    }
+  ],
+  "cleanUrls": true,
+  "trailingSlash": false
+}
+

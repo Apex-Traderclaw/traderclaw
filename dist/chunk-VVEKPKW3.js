@@ -358,6 +358,16 @@ var SessionManager = class {
     if (challenge.walletPublicKey) {
       this.walletPublicKey = challenge.walletPublicKey;
     }
+    if (tokens.recoverySecret && this.onRecoverySecretRotated) {
+      try {
+        this.onRecoverySecretRotated(tokens.recoverySecret);
+        this.log.info("[session] Recovery secret from session start persisted.");
+      } catch (err) {
+        this.log.warn(
+          `[session] Failed to persist recovery secret from session start: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
   }
   async getAccessToken() {
     if (this.accessToken && Date.now() < this.accessTokenExpiresAt - 12e4) {

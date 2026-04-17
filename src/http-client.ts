@@ -102,10 +102,14 @@ async function doRequest(
     }
 
     if (!res.ok) {
-      const errMsg =
-        data && typeof data === "object" && "error" in data
-          ? (data as { error: string }).error
-          : `HTTP ${res.status}: ${text.slice(0, 200)}`;
+      // Prefer `message` then `error` from JSON body; fall back to raw HTTP string.
+      const errBody = data && typeof data === "object" && !Array.isArray(data) ? (data as Record<string, unknown>) : null;
+      const errCode = typeof errBody?.code === "string" ? errBody.code : null;
+      const errText =
+        typeof errBody?.message === "string" ? errBody.message
+        : typeof errBody?.error === "string" ? errBody.error
+        : `HTTP ${res.status}: ${text.slice(0, 200)}`;
+      const errMsg = errCode ? `${errCode}: ${errText}` : errText;
       throw new Error(errMsg);
     }
 

@@ -132,8 +132,14 @@ export class IntelligenceLab {
       candidates.push(full);
     }
 
-    if (candidates.length > 5000) {
-      candidates.splice(0, candidates.length - 5000);
+    const MAX_CANDIDATES = 200;
+    if (candidates.length > MAX_CANDIDATES) {
+      const labeled = candidates.filter(c => c.outcome);
+      const unlabeled = candidates.filter(c => !c.outcome);
+      const keepUnlabeled = Math.max(0, MAX_CANDIDATES - labeled.length);
+      const trimmed = [...labeled, ...unlabeled.slice(-keepUnlabeled)];
+      candidates.length = 0;
+      candidates.push(...trimmed);
     }
 
     writeJsonFile(this.candidatesFile(), candidates);

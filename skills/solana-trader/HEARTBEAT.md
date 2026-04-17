@@ -10,7 +10,25 @@ Read MEMORY.md (auto-loaded). If empty or missing wallet/tier/strategy → run M
 
 1. **MEMORY.md** (already in context): tier, wallet, mode, strategy version, watchlist, regime canary
 2. **Daily log** (`memory/YYYY-MM-DD.md`, auto-loaded): what already happened today — don't repeat work
-3. **Server-side memory** — call `solana_memory_search` for: `"source_reputation"`, `"strategy_drift_warning"`, `"pre_trade_rationale"`, `"meta_rotation"`
+3. **Context engine** (automatic): `[TraderClaw Trading Context]` injected into system prompt at session start with current state, last 3 decisions, and entitlement limits. Just read it when present.
+4. **Server-side memory** — call `solana_memory_search` for: `"source_reputation"`, `"strategy_drift_warning"`, `"pre_trade_rationale"`, `"meta_rotation"`
+5. **QMD recall** — before analyzing any candidate, call `memory_search` with the token symbol or contract address. If seen before, use prior analysis to: skip repeat work, apply re-entry penalties, catch repeat rug patterns, reference prior confidence scores.
+
+## User Preferences Override (apply before any other step)
+
+If MEMORY.md contains a **User Preferences** section, those values override defaults in this document for this entire session.
+
+| Preference key | What it overrides |
+|---|---|
+| `volumeMinUsd` | Min 24h volume filter in STEP 1 SCAN and alpha_scan cron (default: 50000) |
+| `marketCapMinUsd` | Min market cap filter (default: 10000) |
+| `maxPositionSizeSol` | Max position size in SOL (overrides entitlement cap if lower) |
+| `scanMode` | `"conservative"` / `"standard"` / `"aggressive"` — adjusts confidence thresholds |
+| `slPct` | Default stop-loss % for new positions (default: 20 HARDENED, 40 DEGEN) |
+| `minConfidence` | Min confidence score to enter a trade (default: 0.65) |
+| `narrativeFilter` | Comma-separated narrative clusters to focus on (e.g. `"AI,Gaming"`) |
+
+Apply immediately. Durable — persists until user explicitly changes them.
 
 ---
 
@@ -22,23 +40,23 @@ Call `solana_positions`, `solana_killswitch_status`, `solana_capital_status`.
 
 **Kill switch active → halt all trading. No exceptions.**
 
-**Deployer reputation check on held positions:** For each open position, call `solana_deployer_trust_get({ address: "<deployer_address>" })`. If a deployer's trust score has dropped significantly since entry (e.g., they launched another token that rugged), flag the position for immediate review.
+**Deployer reputation check:** For each open position, call `solana_deployer_trust_get({ address: "<deployer_address>" })`. If trust score dropped significantly since entry (e.g., they launched another token that rugged), flag for immediate review.
 
-**Dead money check on every open position — apply ALL four criteria:**
+**Dead money check — apply ALL four criteria:**
 - Loss > 40%
 - Held 90+ min AND still down 5%+
 - 24h volume < $5,000
 - Price flat (±5%) for 4+ hours
 
-If ALL four are true → exit immediately as dead money. Do NOT hold hoping for recovery. MSTR-type 4.75h -97% holds are the #1 capital destroyer. A position at -40% after 90 min with dead volume is NOT coming back.
+If ALL four true → exit immediately. Do NOT hold hoping for recovery. A position at -40% after 90 min with dead volume is NOT coming back.
 
-**Strategy integrity:** Compare your last 3 trade decisions (from memory) against your feature weights. If your actual decisions diverge from what the weights would predict, log `strategy_drift_warning` via `solana_memory_write`.
+**Strategy integrity:** Compare last 3 trade decisions (from memory) against feature weights. If actual decisions diverge from what weights would predict, log `strategy_drift_warning` via `solana_memory_write`.
 
 ## STEP 1: SCAN
 
 Call `solana_scan_launches` for new launches and `solana_scan_hot_pairs` for hot pairs.
 
-**Bitquery subscription events:** Check `solana_bitquery_subscriptions` for any active streams. Process buffered events from real-time subscriptions (new launches, price alerts, pool changes). If no subscriptions are active and this is the first heartbeat of the session, call `solana_bitquery_templates` to discover available query templates and cache the list in memory.
+**Bitquery subscription events:** Check `solana_bitquery_subscriptions` for active streams. Process buffered events from real-time subscriptions. If no subscriptions active and first heartbeat of session, call `solana_bitquery_templates` to discover available templates and cache in memory.
 
 ## STEP 1.5: ALPHA SIGNALS
 
@@ -49,29 +67,27 @@ Call `solana_alpha_signals` to poll the buffer. Score and classify each signal b
 solana_source_trust_get({ name: "<signal source>" })
 solana_alpha_sources()
 ```
-If a source has trust score < 30 or win rate < 25%, downgrade signal priority by one tier. Do NOT skip signals from low-trust sources entirely — still log them — but reduce their weight in your decision.
+If trust score < 30 or win rate < 25%, downgrade signal priority by one tier. Do NOT skip low-trust signals entirely — still log them — but reduce their weight.
 
-**Multi-source conflict detection:** If 2+ signals reference the same token with conflicting `kind` values (e.g., one says `ca_drop` and another says `risk` or `exit`):
+**Multi-source conflict detection:** If 2+ signals reference same token with conflicting `kind` values:
 ```
 solana_contradiction_check({ claims: [{ source: "src1", claim: "bullish", confidence: 0.8 }, { source: "src2", claim: "bearish", confidence: 0.7 }] })
 ```
-Log the contradiction. Default to the more cautious signal (risk/exit > ca_drop).
+Log contradiction. Default to more cautious signal (risk/exit > ca_drop).
 
-**Historical context:** For tokens that appear in alpha signals, check prior signal history:
-```
-solana_alpha_history({ tokenAddress: "CA", limit: 10 })
-```
-If this token was called before and the outcome was a loss, apply the re-entry penalty (-0.15 confidence).
+**Historical context:** Check prior signal history:
+`solana_alpha_history({ tokenAddress: "CA", limit: 10 })`
+If called before and outcome was a loss, apply re-entry penalty (-0.15 confidence).
 
 ## STEP 2: ANALYZE
 
-For top candidates, call ALL of these — no exceptions:
+For top candidates, call ALL — no exceptions:
 - `solana_token_snapshot` — price, volume, OHLC, trade count
 - `solana_token_holders` — holder distribution, concentration, dev holdings
 - `solana_token_flows` — buy/sell pressure, unique traders
 - `solana_token_liquidity` — pool depth, DEX breakdown
 - `solana_token_risk` — composite risk profile
-- `solana_token_socials` — social media / community metadata (Twitter/X, Telegram, Discord, website)
+- `solana_token_socials` — social media / community metadata
 
 **FRESH token deep scan (mandatory for tokens < 1h old):**
 ```
@@ -79,57 +95,36 @@ solana_bitquery_catalog({ templatePath: "pumpFunHoldersRisk.first100Buyers", var
 solana_compute_deployer_risk({ previousTokens: N, rugHistory: R, avgTokenLifespanHours: H })
 solana_deployer_trust_get({ address: "<deployer_address>" })
 ```
-The first100Buyers template reveals serial dumpers and insider clusters. The deployer risk tools give you a deterministic HIGH/MEDIUM/LOW classification. If deployer is HIGH risk → hard skip. If MEDIUM → reduce sizing by 50%.
+first100Buyers reveals serial dumpers and insider clusters. Deployer risk gives deterministic HIGH/MEDIUM/LOW. HIGH risk → hard skip. MEDIUM → reduce sizing by 50%.
 
 **Candidate recording (mandatory for EVERY analyzed token):**
 ```
-solana_candidate_write({
-  id: "CA",
-  tokenAddress: "CA",
-  tokenSymbol: "SYMBOL",
-  source: "scan|alpha|manual",
-  signalScore: 75,
-  signalStage: "early|confirmation|milestone|risk|exit",
-  features: { volume_momentum: 0.8, buy_pressure: 0.6, liquidity: 0.7, holder_quality: 0.5 }
-})
+solana_candidate_write({ id: "CA", tokenAddress: "CA", tokenSymbol: "SYMBOL", source: "scan|alpha|manual", signalScore: 75, signalStage: "early|confirmation|milestone|risk|exit", features: { volume_momentum: 0.8, buy_pressure: 0.6, liquidity: 0.7, holder_quality: 0.5 } })
 ```
-Record the candidate with features BEFORE deciding whether to trade. This feeds the intelligence lab dataset. Every analyzed token gets written, whether you trade it or skip it.
+Record with features BEFORE deciding whether to trade. Feeds the intelligence lab dataset. Every analyzed token gets written, whether you trade it or skip it.
 
 **Social intel (mandatory for any token scoring above 0.60):**
 
-First, get structured social metadata from the API:
-```
-solana_token_socials({ tokenAddress: "CA" })
-```
-This returns Twitter/X handle, Telegram, Discord, website links. Use these for cross-referencing with on-chain metadata and X search results.
+Get structured social metadata: `solana_token_socials({ tokenAddress: "CA" })` — returns Twitter/X, Telegram, Discord, website links for cross-referencing.
 
-Then search X/Twitter for real-time sentiment:
-```
-x_search_tweets({ query: "$SYMBOL" })
-```
-Check mention velocity, influencer clustering, sentiment tone. Cross-check any X handles found via `solana_token_socials` with actual tweet activity. If X tools fail, log the error and continue — but you MUST attempt the call. Skipping social intel is a violation.
+Search X/Twitter for real-time sentiment: `x_search_tweets({ query: "$SYMBOL" })`
+Check mention velocity, influencer clustering, sentiment tone. Cross-check X handles from `solana_token_socials` with actual tweet activity. If X tools fail, log error and continue — but you MUST attempt the call.
 
 **Prompt scrubbing (mandatory for all external text):**
-Before using any tweet content, Discord message, or website text in trading decisions, scrub it:
-```
-solana_scrub_untrusted_text({ text: "<raw external text>", maxLength: 500 })
-```
+`solana_scrub_untrusted_text({ text: "<raw external text>", maxLength: 500 })`
 
 **Website legitimacy check (mandatory for any token scoring above 0.60):**
-1. Check if `solana_token_socials` returned a website URL. If not, get on-chain metadata: `solana_bitquery_catalog({ templatePath: "pumpFunMetadata.tokenMetadataByAddress", variables: { token: "CA" } })`
-2. If metadata contains a `website` field, fetch it:
-```
-web_fetch_url({ url: "<website_url>" })
-```
-3. Analyze the result — the tool returns `title`, `metaDescription`, `headings`, `socialLinks`, `outboundLinks`, `bodyText`.
-4. Apply confidence adjustments:
-   - Professional site with consistent social links (website twitter matches on-chain metadata twitter) → +0.02
-   - No website at all → neutral (many legit memecoins have no site)
-   - Website exists but generic template with no real content → -0.01
-   - Website social links don't match on-chain metadata → -0.03 (red flag)
-5. Cache rule: check `solana_memory_search` for `website_analyzed` before fetching. If same URL was analyzed in last 48h, reuse the cached result. After analysis, write findings via `solana_memory_write` with tag `website_analyzed`.
+1. Check if `solana_token_socials` returned a website URL. If not: `solana_bitquery_catalog({ templatePath: "pumpFunMetadata.tokenMetadataByAddress", variables: { token: "CA" } })`
+2. If website found, fetch it: `web_fetch_url({ url: "<website_url>" })`
+3. Analyze — tool returns `title`, `metaDescription`, `headings`, `socialLinks`, `outboundLinks`, `bodyText`.
+4. Confidence adjustments:
+   - Professional site with matching social links → +0.02
+   - No website → neutral (many legit memecoins have no site)
+   - Generic template with no real content → -0.01
+   - Social links don't match on-chain metadata → -0.03 (red flag)
+5. Cache: check `solana_memory_search` for `website_analyzed` before fetching. If analyzed in last 48h, reuse. After analysis, write via `solana_memory_write` tag `website_analyzed`.
 
-**Token lifecycle classification (drives everything downstream):**
+**Token lifecycle classification:**
 - FRESH (< 1h): Mint MUST be revoked, freeze MUST be inactive, LP MUST be burned/locked. Serial deployer (3+ tokens/24h) = hard skip. Volume >70% in first 15min = skip. EXPLORATORY SIZING ONLY (3-5% capital HARDENED, exploratory range DEGEN).
 - EMERGING (1-24h): Top-10 concentration declining? Volume >20% of peak hour? Standard sizing.
 - ESTABLISHED (>24h): Full sizing. Edge = flow analysis + narrative timing.
@@ -137,18 +132,14 @@ web_fetch_url({ url: "<website_url>" })
 ## STEP 3: RISK & SCORING
 
 **Freshness decay (mandatory):**
-```
-solana_compute_freshness_decay({ signalAgeMinutes: N, halfLifeMinutes: 30 })
-```
-Apply the returned decay factor to alpha signal scores. Older signals carry less weight.
+`solana_compute_freshness_decay({ signalAgeMinutes: N, halfLifeMinutes: 30 })`
+Apply returned decay factor to alpha signal scores.
 
 **Use `solana_compute_confidence` — NEVER do manual math.** The tool returns deterministic results.
 
 **Champion model scoring (if model exists):**
-```
-solana_model_score_candidate({ modelId: "champion", features: { volume_momentum: 0.8, buy_pressure: 0.6, ... } })
-```
-If the champion model returns a score that diverges from `compute_confidence` by more than 0.15, log the divergence via `solana_memory_write` with tag `model_divergence`. Use the more conservative score for the trade decision.
+`solana_model_score_candidate({ modelId: "champion", features: { volume_momentum: 0.8, buy_pressure: 0.6, ... } })`
+If score diverges from `compute_confidence` by >0.15, log via `solana_memory_write` tag `model_divergence`. Use the more conservative score.
 
 **FOMO check BEFORE computing confidence:**
 - Already moved +500% in <4h → skip
@@ -171,7 +162,7 @@ If the champion model returns a score that diverges from `compute_confidence` by
 
 **Hard caps (non-negotiable):**
 - Position ≤ 2% of pool depth in USD. Pool < $50K → max $1,000 SOL equivalent.
-- Mint authority active OR freeze authority active → HARD SKIP. No exceptions.
+- Mint authority active OR freeze authority active → HARD SKIP.
 - Max 40% capital across same narrative cluster.
 
 **Sizing reduction triggers (stack multiplicatively):**
@@ -194,18 +185,18 @@ If the champion model returns a score that diverges from `compute_confidence` by
 **CRITICAL:** Every `solana_trade_execute` call MUST include `tpExits` with multiple levels:
 ```
 tpExits: [
-  { percent: 100, amountPct: 30 },   // Sell 30% at +100%
-  { percent: 200, amountPct: 100 }   // Sell remaining at +200%
+  { percent: 100, amountPct: 30 },
+  { percent: 200, amountPct: 100 }
 ]
 ```
 HARDENED range: +100–300%. DEGEN range: +200–500%. `percent` = price increase from entry, `amountPct` = % of position to sell.
 
-**Use structured `trailingStop` with `levels` array** (preferred over legacy `trailingStopPct`):
-- `percentage` — trailing drawdown % from the armed high once that level is active.
-- `amount` — % of position to sell at this level (1–100; server default `100`).
-- `triggerAboveATH` — **optional.** Price must reach this % above the session ATH before this level arms. Default `100` (2× ATH). Use smaller value (e.g. `25`) to arm earlier. Use `trailingStopPct` for simpler single-level trailing without this gate.
+**Structured `trailingStop` with `levels` array** (preferred over legacy `trailingStopPct`):
+- `percentage` — trailing drawdown % from armed high once level is active.
+- `amount` — % of position to sell (1–100; server default `100`).
+- `triggerAboveATH` — **optional.** Price must reach this % above session ATH before level arms. Default `100` (2× ATH). Use `trailingStopPct` for simpler single-level trailing.
 
-**`slExits` for graduated stop-losses** — e.g., `[{ percent: 20, amountPct: 100 }]` (HARDENED) or `[{ percent: 40, amountPct: 100 }]` (DEGEN). Use `percent` = price decrease from entry, `amountPct` = % of remaining position to sell.
+**`slExits`** — e.g., `[{ percent: 20, amountPct: 100 }]` (HARDENED) or `[{ percent: 40, amountPct: 100 }]` (DEGEN). `percent` = price decrease from entry, `amountPct` = % of remaining position to sell.
 
 **Slippage:** >$500K pool = 100-200bps, $100-500K = 200-400bps, $50-100K = 300-500bps, <$50K = 400-800bps (cap). Exit = 1.5× entry.
 
@@ -215,34 +206,15 @@ HARDENED range: +100–300%. DEGEN range: +200–500%. `percent` = price increas
 
 **Pre-trade journal FIRST** — call `solana_memory_write` with tag `pre_trade_rationale` BEFORE executing. Also call `solana_decision_log` to record the decision with confidence, sizing rationale, and risk factors.
 
+**Source attribution (mandatory):** The `pre_trade_rationale` MUST include `source: "<how you found this token>"` — one of: `alpha_signal:<source_name>`, `scan_launches`, `scan_hot_pairs`, `bitquery_subscription`, `manual`, `watchlist`. Required for source trust scoring and strategy evolution.
+
 **Prior history check (mandatory):**
-```
-solana_memory_by_token({ tokenAddress: "CA" })
-```
-Check for prior trades on this token. If you lost money on it before, the re-entry penalty (-0.15) must already be factored into your confidence score.
+`solana_memory_by_token({ tokenAddress: "CA" })`
+If you lost money on this token before, re-entry penalty (-0.15) must already be factored into confidence.
 
 **REQUIRED PARAMETERS FOR solana_trade_execute:**
-
-```javascript
-solana_trade_execute({
-  tokenAddress: "CA",
-  side: "buy",
-  symbol: "SYMBOL",
-  sizeSol: X,
-  slPct: 20,
-  tpExits: [
-    { percent: 100, amountPct: 30 },
-    { percent: 200, amountPct: 100 }
-  ],
-  trailingStop: {
-    levels: [
-      { percentage: 25, amount: 50 },
-      { percentage: 35, amount: 100, triggerAboveATH: 100 }
-    ]
-  },
-  slippageBps: 300,   // REQUIRED — always send
-  idempotencyKey: "unique-id"
-})
+```
+solana_trade_execute({ tokenAddress: "CA", side: "buy", symbol: "SYMBOL", sizeSol: X, slPct: 20, tpExits: [{ percent: 100, amountPct: 30 }, { percent: 200, amountPct: 100 }], trailingStop: { levels: [{ percentage: 25, amount: 50 }, { percentage: 35, amount: 100, triggerAboveATH: 100 }] }, slippageBps: 300, idempotencyKey: "unique-id" })
 ```
 
 **ABSOLUTE RULES:**
@@ -251,13 +223,9 @@ solana_trade_execute({
 - ❌ NEVER use tpLevels alone (defaults to 100% exit per level)
 - ✅ Always send BOTH tpExits AND slExits
 
-Then call `solana_trade_execute`.
-
 **Post-buy Bitquery subscription (mandatory after successful buy):**
-```
-solana_bitquery_subscribe({ templateKey: "realtimeTokenPricesSolana", variables: { token: "CA" }, agentId: "main" })
-```
-Start real-time price monitoring for the position. This gives you live price data between heartbeats.
+`solana_bitquery_subscribe({ templateKey: "realtimeTokenPricesSolana", variables: { token: "CA" }, agentId: "main" })`
+Start real-time price monitoring. Live price data between heartbeats.
 
 **IMMEDIATELY after execution, post this EXACT format:**
 
@@ -278,19 +246,14 @@ For each open position: check PnL, SL/TP proximity, flow direction. **Use `unrea
 
 **On-chain verification:** If any position balance looks inconsistent, call `solana_wallet_token_balance` with the token mint to verify actual on-chain holdings.
 
-**Feature delta check on held positions (optional but recommended):**
-```
-solana_candidate_delta({ id: "CA", currentFeatures: { volume_momentum: 0.5, buy_pressure: 0.3, ... } })
-```
-Compare the token's current features against what they were at entry. If features have degraded significantly (e.g., buy pressure flipped negative, volume collapsed), consider exiting even if SL hasn't triggered.
+**Feature delta check (optional but recommended):**
+`solana_candidate_delta({ id: "CA", currentFeatures: { volume_momentum: 0.5, buy_pressure: 0.3, ... } })`
+Compare current features against entry. If degraded significantly (buy pressure flipped, volume collapsed), consider exiting even if SL hasn't triggered.
 
-**Social exhaustion check on held positions:**
-```
-x_search_tweets({ query: "$SYMBOL" })
-```
+**Social exhaustion check:** `x_search_tweets({ query: "$SYMBOL" })`
 Mention velocity declining + price flat/dropping = social exhaustion → consider exit.
 
-**Dead money re-check:** Apply the 4 criteria from Step 0 again. Do NOT wait for the next cycle to exit dead money.
+**Dead money re-check:** Apply the 4 criteria from Step 0 again. Do NOT wait for the next cycle.
 
 ## STEP 7: EXIT + ANNOUNCE
 
@@ -308,28 +271,27 @@ Execute exits via `solana_trade_execute` with `side: "sell"`.
 
 Partial exits → "🔴 PARTIAL EXIT (50%): SYMBOL (CA)"
 
-**Post-exit mandatory actions:**
+**Post-exit mandatory actions (ALL required — skipping any is a critical violation):**
 
 1. Call `solana_trade_review` for each closed position.
 
-2. Label the outcome for intelligence lab learning:
-```
-solana_candidate_label_outcome({ id: "CA", outcome: "win|loss|skip|dead_money", pnlPct: X.XX, holdingHours: H })
-```
-This is how the intelligence lab learns. Every exit MUST be labeled.
+2. **LABEL THE OUTCOME — DO NOT SKIP:**
+`solana_candidate_label_outcome({ id: "CA", outcome: "win|loss|skip|dead_money", pnlPct: X.XX, holdingHours: H })`
+The intelligence lab CANNOT learn without labeled outcomes. Strategy evolution, model evaluation, and replay all depend on labeled candidates.
 
-3. Unsubscribe from Bitquery stream for the exited token:
+3. **LEARNING ENTRY — REQUIRED after every loss or dead_money exit:**
 ```
-solana_bitquery_unsubscribe({ subscriptionId: "<id>" })
+solana_memory_write({ content: "LEARNING ENTRY: LRN-YYYYMMDD-NNN\nPriority: P2\nArea: <area_tag>\nWHAT HAPPENED: <1 sentence>\nWHY IT WENT WRONG: <root cause>\nEVIDENCE: token CA, entry price, exit price, hold time\nSUGGESTED ADJUSTMENT: <what to change>", tags: ["learning_entry", "learning_entry_<area>"] })
 ```
+Losses without learning entries are the #1 reason the strategy fails to evolve. See `refs/review-learning.md` for full format and area tags.
 
-4. If this was an alpha-sourced trade, check and record source accuracy:
-```
-solana_alpha_history({ tokenAddress: "CA", limit: 5 })
-```
-Log the source's accuracy via `solana_memory_write` with tag `source_reputation`.
+4. Unsubscribe from Bitquery stream: `solana_bitquery_unsubscribe({ subscriptionId: "<id>" })`
 
-## STEP 8: MEMORY WRITE-BACK (mandatory — call ALL of these)
+5. If alpha-sourced trade, check source accuracy:
+`solana_alpha_history({ tokenAddress: "CA", limit: 5 })`
+Log via `solana_memory_write` with tag `source_reputation`.
+
+## STEP 8: MEMORY WRITE-BACK (mandatory — call ALL)
 
 - `solana_state_save` if any durable state changed
 - `solana_daily_log` with cycle summary
@@ -339,7 +301,12 @@ Log the source's accuracy via `solana_memory_write` with tag `source_reputation`
 - `solana_team_bulletin_post` with tag `position_update` — post current portfolio state
 - `solana_context_snapshot_write` — write portfolio world-view for bootstrap injection
 
-Do NOT skip the last three. They are not optional memory — they feed the bootstrap digest that loads into your next session.
+**Self-check before completing Step 8:**
+- Did you exit any positions? → did you call `solana_candidate_label_outcome` for EACH? If not, do it now.
+- Any loss or dead_money exit? → did you write a `learning_entry`? If not, write one now.
+- Any trades executed? → does each `pre_trade_rationale` include `source:` attribution? If not, write correction now.
+
+Do NOT skip these. They feed the bootstrap digest that loads into your next session.
 
 ## STEP 9: REPORT TO USER
 
@@ -366,18 +333,18 @@ OPEN POSITIONS:
 [or "No open positions"]
 
 SKIPPED:
-- SYMBOL (full_CA): reason skipped (e.g., "FOMO +320% already", "mint authority active", "confidence 0.48 < threshold")
+- SYMBOL (full_CA): reason skipped
 [or "No candidates reached analysis"]
 
 NEXT CYCLE: [1 sentence — what you're watching for]
 ```
 
 **MANDATORY FORMAT RULES:**
-- Every token MUST be SYMBOL (full_contract_address). NO EXCEPTIONS. "BERENSTAIN" alone is INVALID. It must be "BERENSTAIN (full_CA_here)".
-- PnL numbers must come from `solana_positions` or `solana_trade_review` tool output — on `solana_positions`, always read `unrealizedPnl` / `realizedPnl` for SOL values. NEVER calculate PnL manually. NEVER estimate. If the tool didn't return it, say "PnL: pending".
-- Capital must come from `solana_capital_status`. NEVER estimate capital.
-- The DEEP ANALYSIS section is MANDATORY. Omitting it is a violation. If you used zero advanced tools, say so explicitly (e.g., "none — no FRESH tokens"). Lying about tool usage is worse than not using the tools.
-- Keep under 60 lines. This is a cycle summary, not a session essay.
+- Every token MUST be SYMBOL (full_contract_address). NO EXCEPTIONS.
+- PnL must come from `solana_positions` or `solana_trade_review` — use `unrealizedPnl` / `realizedPnl` for SOL values. NEVER calculate manually. If tool didn't return it, say "PnL: pending".
+- Capital must come from `solana_capital_status`. NEVER estimate.
+- DEEP ANALYSIS section is MANDATORY. If zero advanced tools used, say so explicitly.
+- Keep under 60 lines.
 
 ---
 
@@ -398,5 +365,5 @@ NEXT CYCLE: [1 sentence — what you're watching for]
 | API endpoint reference | refs/api-reference.md |
 | Wallet proof vs signup | SKILL.md § Wallet proof vs signup |
 | Strategy evolution details | refs/strategy-evolution.md |
-| Cron job definitions | refs/cron-jobs.md |
+| Cron job definitions | refs/cron-jobs.md (10 consolidated jobs, ~39 sessions/day) |
 | Position management details | refs/position-management.md |

@@ -1,7 +1,7 @@
 // OpenClaw Gateway Configuration — TraderClaw V1-Upgraded (Single Agent)
-// Single "main" agent with 5-minute heartbeat + cron jobs for autonomous operation.
-// V1-Upgraded: All cron jobs use sessionTarget:"isolated" + delivery:{mode:"none"}.
-// New cron jobs: intelligence_lab_eval (12h), source_trust_refresh (6h).
+// Single "main" agent with 5-minute heartbeat + 10 consolidated cron jobs.
+// Consolidated from 13 → 10: portfolio-health (dead-money+whale+risk-audit),
+// trust-refresh (source-reputation+deployer-trust). Shortened prompts.
 {
   agents: {
     list: [
@@ -22,6 +22,9 @@
       keepLines: 2000
     },
     jobs: [
+<<<<<<< feat/cron-jobs-upgrade
+      // ── Alpha Scanning ──────────────────────────────────────────────
+=======
       // ── Strategy & Learning ───────────────────────────────────────
       {
         id: "strategy-evolution",
@@ -29,111 +32,94 @@
         agentId: "main",
         sessionTarget: "isolated",
         delivery: { mode: "none" },
-        message: "CRON_JOB: strategy_evolution\n\nStep 1: Call solana_journal_summary to get aggregate performance stats (win rate, avg PnL, trade count). If fewer than 20 closed trades since the last strategy evolution, skip weight updates but still run pattern detection.\n\nStep 2: Call solana_memory_search for 'strategy_evolution' — find last 3 evolution cycle results. Call solana_memory_search for 'strategy_drift_warning' — find drift warnings since last evolution. Call solana_memory_search for 'pre_trade_rationale' — recent decision patterns.\n\nStep 3: Run Recurring Pattern Detection — search for learning_entry tags, group by area, check linked chains (3+ = confirmed pattern), investigate drift warnings.\n\nStep 4: Call solana_strategy_state to read current feature weights.\n\nStep 5: Call solana_trades to get recent closed trades. Apply ADL checks (direction consistency, weight velocity, reversion check).\n\nStep 6: Compute proposed weight changes. Score each with VFM (Frequency + Failure Reduction + Self-Cost). Only apply changes scoring >= 3/5.\n\nStep 7: Verify guardrails: maxDeltaOk, sumWeightsOk, minTradesOk, floorCapOk. If all pass, call solana_strategy_update with incremented version.\n\nStep 8: Run Named Pattern Recognition — search for winning trade clusters, catalog new patterns, evolve existing ones.\n\nStep 9: Evaluate discovery filter performance. Log all results via solana_memory_write with tags: strategy_evolution, vfm_scorecard, pattern_detection, named_pattern.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        message: "CRON_JOB: strategy_evolution\n\nStep 1: Call solana_journal_summary to get aggregate performance stats (win rate, avg PnL, trade count). If fewer than 10 closed trades since the last strategy evolution, skip weight updates but still run pattern detection.\n\nStep 2: Call solana_memory_search for 'strategy_evolution' — find last 3 evolution cycle results. Call solana_memory_search for 'strategy_drift_warning' — find drift warnings since last evolution. Call solana_memory_search for 'pre_trade_rationale' — recent decision patterns.\n\nStep 3: Run Recurring Pattern Detection — search for learning_entry tags, group by area, check linked chains (3+ = confirmed pattern), investigate drift warnings.\n\nStep 4: Call solana_strategy_state to read current feature weights.\n\nStep 5: Call solana_trades to get recent closed trades. Apply ADL checks (direction consistency, weight velocity, reversion check).\n\nStep 6: Compute proposed weight changes. Score each with VFM (Frequency + Failure Reduction + Self-Cost). Only apply changes scoring >= 3/5.\n\nStep 7: Verify guardrails: maxDeltaOk, sumWeightsOk, minTradesOk, floorCapOk. If all pass, call solana_strategy_update with incremented version.\n\nStep 8: Run Named Pattern Recognition — search for winning trade clusters, catalog new patterns, evolve existing ones.\n\nStep 9: Evaluate discovery filter performance. Log all results via solana_memory_write with tags: strategy_evolution, vfm_scorecard, pattern_detection, named_pattern.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
         enabled: true
       },
+>>>>>>> main
       {
-        id: "source-reputation",
+        id: "alpha-scan",
         schedule: "0 */3 * * *",
         agentId: "main",
         sessionTarget: "isolated",
-        delivery: { mode: "none" },
-        message: "CRON_JOB: source_reputation_recalc\n\nStep 1: Call solana_alpha_sources to get per-source performance stats (signal count, conversion rate, avg score).\n\nStep 2: Call solana_alpha_history to get recent signal history with scores and source identifiers.\n\nStep 3: Call solana_trades to get recent trade outcomes. Cross-reference each trade back to its originating signal source.\n\nStep 4: For each source, calculate: win rate (trades that hit TP vs SL), average PnL per trade, signal-to-trade conversion rate.\n\nStep 5: Assign tier rankings:\n- TIER-1 (LOCK): Win rate above 60% AND 5+ trades AND positive avg PnL\n- TIER-2 (CONDITIONAL): Win rate 30-60% OR fewer than 5 trades\n- TIER-3 (BLACKLIST): Win rate below 30% with 5+ trades\n\nStep 6: Write scorecard to memory using solana_memory_write with tag 'source_reputation'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        delivery: { mode: "announce", channel: "last", bestEffort: true },
+        message: "CRON_JOB: alpha_scan\n\nScan new launches, filter, score, log alpha. Tools: solana_scan_launches → filter (vol>30K, mcap>10K, liq>5K) → solana_token_snapshot for survivors → quality filter (top10 <50%, deployer <3 abandoned, has social) → score 0-100 → solana_alpha_log for 65+. Summarize results.",
         enabled: true
       },
 
-      // ── Risk & Audit ──────────────────────────────────────────────
+      // ── Portfolio Health (combined dead-money + whale + risk audit) ──
       {
-        id: "risk-audit",
-        schedule: "0 */2 * * *",
+        id: "portfolio-health",
+        schedule: "0 */4 * * *",
+        agentId: "main",
+        sessionTarget: "isolated",
+        delivery: { mode: "announce", channel: "last", bestEffort: true },
+        message: "CRON_JOB: portfolio_health\n\nCombined dead-money + whale + risk audit. solana_capital_status + solana_positions → solana_token_snapshot per position → dead money exit (loss>40% or 90min+down+low vol) → whale flags (>5% supply moves) → risk checks (concentration/drawdown/exposure) → sell if CRITICAL → solana_memory_write tag 'portfolio_health'.",
+        enabled: true
+      },
+
+      // ── Trust Refresh (combined source + deployer trust) ────────────
+      {
+        id: "trust-refresh",
+        schedule: "0 */8 * * *",
         agentId: "main",
         sessionTarget: "isolated",
         delivery: { mode: "none" },
-        message: "CRON_JOB: portfolio_risk_audit\n\nStep 1: Call solana_capital_status to get wallet balance and portfolio value.\n\nStep 2: Call solana_positions to get all open positions with entry prices and sizes.\n\nStep 3: For each open position, call solana_token_snapshot to get current price, 24h volume, and market cap.\n\nStep 4: Run concentration check — flag WARNING if any single position exceeds 30 percent of total portfolio value, CRITICAL if above 50 percent.\n\nStep 5: Run exposure check — flag WARNING if total exposure exceeds 50 percent of wallet balance, CRITICAL if above 75 percent.\n\nStep 6: Run drawdown check — CRITICAL if portfolio drawdown exceeds 25 percent from peak capital.\n\nStep 7: Calculate portfolio heat (sum of all position risk scores). Flag WARNING above 50 percent, CRITICAL above 75 percent.\n\nStep 8: Run liquidity check — WARNING if any position exceeds 2 percent of its pool depth.\n\nStep 9: Check solana_killswitch_status.\n\nStep 10: Write risk report via solana_memory_write with tag 'risk_audit'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        message: "CRON_JOB: trust_refresh\n\nCombined source + deployer trust. solana_source_trust_refresh + solana_deployer_trust_refresh → solana_alpha_sources + solana_trades for win rates → solana_source_trust_get + solana_deployer_trust_get, flag <30 → solana_memory_write tag 'trust_refresh'.",
         enabled: true
       },
 
-      // ── On-Chain Intelligence ─────────────────────────────────────
+      // ── On-Chain Intelligence ───────────────────────────────────────
       {
         id: "meta-rotation",
-        schedule: "30 */3 * * *",
+        schedule: "30 */8 * * *",
         agentId: "main",
         sessionTarget: "isolated",
-        delivery: { mode: "none" },
-        message: "CRON_JOB: meta_rotation_analysis\n\nStep 0: Call x_search_tweets with queries: 'solana memecoin', 'pump fun gem', 'sol alpha'. Note which token names and narratives appear most frequently in the last 3 hours. Use this social signal to validate or challenge the on-chain data in the following steps.\n\nStep 1: Call solana_scan_launches to get recent token launches (last 3-6 hours).\n\nStep 2: Categorize each token by narrative cluster: AI/Agents, Animal Memes, Political, Celebrity/IP, DeFi, Gaming, Culture/Humor, Other.\n\nStep 3: For each cluster, aggregate: token count, total volume, average market cap.\n\nStep 4: Call solana_memory_search for 'meta_rotation' to compare with prior scan.\n\nStep 5: Classify each narrative: GAINING, SATURATED, COOLING, DORMANT.\n\nStep 6: Write rotation report via solana_memory_write with tag 'meta_rotation'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        delivery: { mode: "announce", channel: "last", bestEffort: true },
+        message: "CRON_JOB: meta_rotation_analysis\n\nx_search_tweets trending topics → solana_scan_launches → categorize by narrative cluster → per-cluster metrics → compare vs solana_memory_search tag 'meta_rotation' → declare hot/fading clusters → solana_memory_write tag 'meta_rotation'.",
         enabled: true
       },
 
-      // ── Portfolio Maintenance ─────────────────────────────────────
+      // ── Strategy & Learning ─────────────────────────────────────────
       {
-        id: "dead-money-sweep",
-        schedule: "0 */2 * * *",
+        id: "strategy-evolution",
+        schedule: "0 6 * * *",
         agentId: "main",
         sessionTarget: "isolated",
-        delivery: { mode: "none" },
-        message: "CRON_JOB: dead_money_sweep\n\nStep 1: Call solana_positions to get all open LOCAL_MANAGED positions.\n\nStep 2: For each position, call solana_token_snapshot for current price and 24h volume.\n\nStep 3: Apply dead money criteria (ALL four must be true):\n- Loss > 40%\n- Held 90+ min AND still down 5%+\n- 24h volume < $5,000\n- Price flat (±5%) for 4+ hours\n\nStep 4: For flagged positions, execute exit via solana_trade_execute with side 'sell', max slippage 2000bps.\n\nStep 5: Call solana_trade_review for each exit.\n\nStep 6: Write sweep report via solana_memory_write with tag 'dead_money'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Every TX MUST include solscan link.",
+        delivery: { mode: "announce", channel: "last", bestEffort: true },
+        message: "CRON_JOB: strategy_evolution\n\nDaily strategy review. solana_journal_summary — if <10 closed trades since last evolution, log 'insufficient data' and stop. Otherwise: solana_trades to bucket by confidence tier → solana_strategy_state for current weights → analyze tier performance → solana_strategy_update with conservative adjustments (max 10% per weight per cycle) → solana_memory_write tag 'strategy_evolution'.",
         enabled: true
       },
+
+      // ── Portfolio Maintenance ───────────────────────────────────────
       {
         id: "subscription-cleanup",
-        schedule: "0 * * * *",
+        schedule: "15 */8 * * *",
         agentId: "main",
         sessionTarget: "isolated",
-        delivery: { mode: "none" },
-        message: "CRON_JOB: subscription_cleanup\n\nStep 1: Call solana_positions to get all open positions and extract their contract addresses.\n\nStep 2: Call solana_bitquery_subscriptions to list all active Bitquery subscriptions. If this call returns an AUTH_SCOPE_MISSING error, log the error to memory and stop gracefully — do not retry or error out.\n\nStep 3: For each active subscription, check if the associated token CA still has an open position. Build two lists: 'matched' (has position) and 'orphaned' (no position).\n\nStep 4: Unsubscribe orphans via solana_bitquery_unsubscribe.\n\nStep 5: Reopen subscriptions nearing 24h expiry via solana_bitquery_subscription_reopen.\n\nStep 6: Write summary via solana_memory_write with tag 'subscription_cleanup'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
+        delivery: { mode: "announce", channel: "last", bestEffort: true },
+        message: "CRON_JOB: subscription_cleanup\n\nsolana_positions for open CAs → solana_bitquery_subscriptions for active subs (if AUTH_SCOPE_MISSING, log and stop) → match subs to positions → solana_bitquery_unsubscribe orphaned subs → solana_memory_write tag 'subscription_cleanup'. Summarize before/after counts.",
         enabled: true
       },
 
-      // ── Reporting ─────────────────────────────────────────────────
+      // ── Reporting ───────────────────────────────────────────────────
       {
-        id: "daily-report",
+        id: "daily-performance-report",
         schedule: "0 4 * * *",
         agentId: "main",
         sessionTarget: "isolated",
-        delivery: { mode: "none" },
-        message: "CRON_JOB: daily_performance_report\n\nStep 1: Call solana_journal_summary for last 24h aggregate stats.\n\nStep 2: Call solana_capital_status for current balance.\n\nStep 3: Call solana_positions for open positions.\n\nStep 4: Call solana_trades for all trades in last 24h.\n\nStep 5: Call solana_strategy_state for current version and weights.\n\nStep 6: Call solana_memory_search for 'source_reputation' and 'daily_report' (yesterday's for comparison).\n\nStep 7: Build comprehensive report: executive summary, trade log, best/worst trades, source performance, capital trajectory, strategy status, open positions.\n\nStep 8: Write report via solana_memory_write with tag 'daily_performance'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Every trade MUST include solscan TX link.\n- Do not execute trades. Do not ask questions.",
+        delivery: { mode: "announce", channel: "telegram" },
+        message: "CRON_JOB: daily_performance_report\n\nCompile 24h report. solana_journal_summary + solana_capital_status + solana_positions + solana_trades + solana_strategy_state → sections: Portfolio Summary, Trading Activity (count/win rate/PnL), Best/Worst Trades, Strategy State, Risk Metrics, Recommendations → solana_memory_write tag 'daily_report'. Deliver full report.",
         enabled: true
       },
 
-      // ── Whale / Smart Money Tracking ──────────────────────────────
-      {
-        id: "whale-watch",
-        schedule: "0 */2 * * *",
-        agentId: "main",
-        sessionTarget: "isolated",
-        delivery: { mode: "none" },
-        message: "CRON_JOB: whale_activity_scan\n\nStep 1: Call solana_positions to get open position CAs.\n\nStep 2: For each held token, call solana_token_holders for top 10 distribution.\n\nStep 3: Call solana_memory_search for 'whale_activity' baseline.\n\nStep 4: Compare distributions. Flag: NEW_WHALE, WHALE_EXIT, DEPLOYER_MOVE, CONCENTRATION_SPIKE, FRESH_WALLET_SURGE.\n\nStep 5: Assign priority: HIGH for whale exit/deployer move on held positions, MEDIUM for concentration changes, LOW for watchlist-only.\n\nStep 6: Write findings via solana_memory_write with tag 'whale_activity'.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Do not execute trades. Do not ask questions.",
-        enabled: true
-      },
-
-      // ── Alpha Scanning ──────────────────────────────────────────────
-      {
-        id: "alpha-scan",
-        schedule: "0 * * * *",
-        agentId: "main",
-        sessionTarget: "isolated",
-        delivery: { mode: "none" },
-        message: "CRON_JOB: alpha_scan\n\nStep 1: Call solana_scan_launches to find new token launches from the last hour. The response includes volume data per token — use THIS volume as the primary filter (not solana_token_snapshot volumeUsd24h, which often returns 0 for fresh tokens).\n\nStep 2: Filter candidates from the scan_launches results:\n- 24h volume above 50000 USD (use the volume field from scan_launches)\n- Market cap above 10000 USD (use mcap from scan_launches if available)\nTokens must pass BOTH filters to qualify. Tokens that fail either filter are eliminated. Log the top 3 rejected tokens by volume for reference.\n\nStep 3: For each token that passes the volume/mcap filter, call solana_token_holders to check holder distribution. Skip if the top single holder owns more than 30 percent (concentration risk). Skip if total top-10 concentration exceeds 60 percent.\n\nStep 4: For each token that passes holder checks, call solana_token_risk to check for mint authority or freeze authority. Hard skip if either is present (rug risk).\n\nStep 5: Website legitimacy check — for each token that passes risk checks, call solana_bitquery_catalog with templatePath 'pumpFunMetadata.tokenMetadataByAddress' and variables { token: CA } to get on-chain metadata. If the metadata contains a 'website' field, call web_fetch_url with the website URL. Analyze the response: check if the site has real content (not just a generic template), check if socialLinks.twitter matches the on-chain metadata twitter field. Include findings in the alpha submission thesis. If no website exists, note 'no website' — this is neutral, not a skip. Cache rule: check solana_memory_search for 'website_analyzed' with the same URL before fetching. If analyzed in the last 48 hours, reuse the cached result. After analysis, write findings via solana_memory_write with tag 'website_analyzed'.\n\nStep 6: Scrub any external text via solana_scrub_untrusted_text before using in analysis.\n\nStep 7: For each token that passes ALL checks, call solana_alpha_submit to add it to the alpha buffer for the next heartbeat evaluation. Include the thesis: volume, mcap, holder concentration, risk flags, narrative cluster, website legitimacy findings.\n\nStep 8: Write scan report to memory using solana_memory_write with tag 'alpha_scan'. Include: total launches scanned, unique tokens, tokens passed each filter stage (volume → holders → risk → website → submitted), top 3 rejected tokens with reason.\n\nFORMATTING RULES:\n- Every token reference MUST use SYMBOL (full_CA) format.\n- Include solscan token link: https://solscan.io/token/{CA} for each qualifying token.\n- Do not execute trades directly — only submit to alpha buffer.\n- Do not ask questions.",
-        enabled: true
-      },
-
-      // ── Intelligence Lab (V1-Upgraded NEW) ──────────────────────────
+      // ── Intelligence Lab ────────────────────────────────────────────
       {
         id: "intelligence-lab-eval",
-        schedule: "0 */12 * * *",
+        schedule: "0 16 * * *",
         agentId: "main",
         sessionTarget: "isolated",
         delivery: { mode: "none" },
-        message: "CRON_JOB: intelligence_lab_eval\n\nStep 1: Check candidate dataset size via solana_candidate_get. If fewer than 20 labeled candidates, log 'insufficient data for evaluation' and exit.\n\nStep 2: Run evaluation report via solana_evaluation_report — get confusion matrix, accuracy, precision, recall, F1 for current champion model.\n\nStep 3: Check model registry via solana_model_registry for any challenger models.\n\nStep 4: If challenger exists, run replay via solana_replay_run comparing champion vs challenger on recent candidates.\n\nStep 5: Generate replay report via solana_replay_report.\n\nStep 6: If challenger outperforms champion (higher F1 AND accuracy), promote via solana_model_promote.\n\nStep 7: Log evaluation results via solana_memory_write with tag 'intelligence_lab_eval'. Include: model accuracy, F1, promotion decision, dataset size.\n\nDo not execute trades. Do not ask questions.",
-        enabled: true
-      },
-      {
-        id: "source-trust-refresh",
-        schedule: "0 */6 * * *",
-        agentId: "main",
-        sessionTarget: "isolated",
-        delivery: { mode: "none" },
-        message: "CRON_JOB: source_trust_refresh\n\nStep 1: Call solana_source_trust_refresh to recalculate trust scores for all tracked alpha sources based on recent trade outcomes.\n\nStep 2: Call solana_deployer_trust_refresh to recalculate deployer trust scores based on recent token performance.\n\nStep 3: Call solana_source_trust_get to read updated scores. Flag any sources that dropped below 30 trust score.\n\nStep 4: Call solana_deployer_trust_get to read deployer scores. Flag any deployers with 3+ failed tokens.\n\nStep 5: Log trust score updates via solana_memory_write with tag 'trust_refresh'. Include: sources updated, deployers updated, flagged sources/deployers.\n\nDo not execute trades. Do not ask questions.",
+        message: "CRON_JOB: intelligence_lab_eval\n\nsolana_candidate_get — if <20 labeled candidates, log 'insufficient data' and exit. Otherwise: solana_evaluation_report → solana_model_registry for challengers → solana_replay_eval if challenger exists → solana_model_promote if challenger beats champion by >5% F1 → solana_memory_write tag 'intelligence_lab'.",
         enabled: true
       },
 
@@ -144,7 +130,18 @@
         agentId: "main",
         sessionTarget: "isolated",
         delivery: { mode: "none" },
-        message: "CRON_JOB: memory_trim\n\nStep 1: Call solana_memory_trim with dryRun true first to preview what will be trimmed.\n\nStep 2: Review the dry run summary. Verify no critical data is flagged for removal.\n\nStep 3: Call solana_memory_trim with retentionDays 2 to execute the trim.\n\nStep 4: Log the trim summary via solana_memory_write with tag 'memory_trim'. Include: daily logs deleted, state keys pruned, watchlist entries trimmed, decision entries trimmed, bulletin entries trimmed.\n\nDo not execute trades. Do not ask questions.",
+        message: "CRON_JOB: memory_trim\n\nsolana_memory_trim dryRun:true first → review → solana_memory_trim retentionDays:2 → solana_memory_write tag 'memory_trim' with summary.",
+        enabled: true
+      },
+
+      // ── Balance Watchdog ────────────────────────────────────────────
+      {
+        id: "balance-watchdog",
+        schedule: "0 */2 * * *",
+        agentId: "main",
+        sessionTarget: "isolated",
+        delivery: { mode: "announce", channel: "telegram" },
+        message: "Balance watchdog. 1) solana_capital_status 2) solana_positions 3) solana_context_snapshot_read 4) Compare real vs believed. If mismatch: solana_context_snapshot_write with corrected state, summarize changes. If match: reply WATCHDOG_OK.",
         enabled: true
       }
     ]
