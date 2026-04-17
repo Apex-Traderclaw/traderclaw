@@ -1117,24 +1117,6 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   }
   config.agents.defaults.heartbeat = { ...defaultHeartbeat };
 
-  if (!config.env || typeof config.env !== "object") config.env = {};
-  if (process.env.OPENAI_API_KEY && !config.env.OPENAI_API_KEY) {
-    // Literal env reference (not the value). The gateway expands ${OPENAI_API_KEY}
-    // at runtime from its process environment. Keeps the secret out of the
-    // config file on disk.
-    config.env.OPENAI_API_KEY = "${OPENAI_API_KEY}";
-  } else if (!process.env.OPENAI_API_KEY && !config.env.OPENAI_API_KEY && typeof console !== "undefined") {
-    console.warn(
-      "[traderclaw] OPENAI_API_KEY not detected in the installer shell. " +
-      "Memory embeddings require it for vector search (text-embedding-3-small, ~$0.02/M tokens).\n" +
-      "Set it and re-run the installer, or add the env ref manually:\n" +
-      "  1) export OPENAI_API_KEY=sk-...\n" +
-      "  2) edit ~/.openclaw/openclaw.json and set env.OPENAI_API_KEY to \"${OPENAI_API_KEY}\"\n" +
-      "  3) openclaw gateway restart"
-    );
-  }
-
-
   ensureAgentsDefaultsSchemaCompat(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
