@@ -41,6 +41,7 @@ import {
 
 // index.ts
 import { Type } from "@sinclair/typebox";
+import kayba, { SpanType } from "@kayba_ai/tracing";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -791,6 +792,8 @@ function parseConfig(raw) {
   const xConfig = parseXConfig(obj);
   const betaRaw = obj.beta && typeof obj.beta === "object" && !Array.isArray(obj.beta) ? obj.beta : {};
   const beta = { xPosting: betaRaw.xPosting === true };
+  const kaybaApiKey = typeof obj.kaybaApiKey === "string" ? obj.kaybaApiKey : void 0;
+  const kaybaFolder = typeof obj.kaybaFolder === "string" ? obj.kaybaFolder : "traderclaw";
   return {
     orchestratorUrl,
     walletId,
@@ -812,7 +815,9 @@ function parseConfig(raw) {
     bootstrapBulletinWindowHours,
     dailyLogRetentionDays,
     xConfig,
-    beta
+    beta,
+    kaybaApiKey,
+    kaybaFolder
   };
 }
 function buildTraderClawWelcomeMessage(apiKeyForDisplay) {
@@ -906,6 +911,18 @@ var solanaTraderPlugin = {
         "[solana-trader] apiKey or refreshToken is required. Tell the user to run on their machine: traderclaw setup --signup (or traderclaw signup) for a new account, or traderclaw setup / traderclaw login if they already have an API key. The agent cannot sign up or edit credentials."
       );
       return;
+    }
+    const kaybaKey = config.kaybaApiKey || process.env.KAYBA_API_KEY || "";
+    if (kaybaKey) {
+      try {
+        kayba.configure({
+          apiKey: kaybaKey,
+          folder: config.kaybaFolder || "traderclaw"
+        });
+        api.logger.info("[solana-trader] Kayba tracing enabled");
+      } catch (err) {
+        api.logger.warn(`[solana-trader] Kayba tracing init failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
     const dataDir = config.dataDir || path.join(process.cwd(), ".traderclaw-v1-data");
     const sessionTokensPath = path.join(dataDir, "session-tokens.json");
@@ -1076,12 +1093,23 @@ var solanaTraderPlugin = {
     });
     const wrapExecute = (sourceName, fn) => async (toolCallId, params) => {
       const toolName = sourceName;
-      try {
-        const result = await fn(toolCallId, params ?? {});
-        return json(JSON.parse(renderToolEnvelope(normalizeToolSuccess(result, toolName))));
-      } catch (err) {
-        return json(JSON.parse(renderToolEnvelope(normalizeToolError(err, toolName))));
+      const run = async () => {
+        try {
+          const result = await fn(toolCallId, params ?? {});
+          return json(JSON.parse(renderToolEnvelope(normalizeToolSuccess(result, toolName))));
+        } catch (err) {
+          return json(JSON.parse(renderToolEnvelope(normalizeToolError(err, toolName))));
+        }
+      };
+      if (kayba.isConfigured()) {
+        const traced = kayba.trace(run, {
+          name: toolName,
+          spanType: SpanType.TOOL,
+          attributes: { "tool.params": JSON.stringify(params ?? {}) }
+        });
+        return traced();
       }
+      return run();
     };
     const workspaceRoot = resolveWorkspaceRoot(config.workspaceDir);
     const stateDir = path.join(dataDir, "state");

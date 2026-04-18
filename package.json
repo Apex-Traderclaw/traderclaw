@@ -39,6 +39,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@kayba_ai/tracing": "^0.9.7",
     "@sinclair/typebox": "0.34.48",
     "ws": "^8.18.0"
   },
