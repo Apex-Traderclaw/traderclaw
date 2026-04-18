@@ -72,7 +72,7 @@ interface PluginConfig {
   dailyLogRetentionDays?: number;
   xConfig?: XConfig;
   beta?: { xPosting?: boolean };
-  /** Kayba tracing API key. Falls back to KAYBA_API_KEY env var. */
+  /** Kayba tracing API key. Set via openclaw.json plugin config. */
   kaybaApiKey?: string;
   /** Kayba folder name for organizing traces. Defaults to "traderclaw". */
   kaybaFolder?: string;
@@ -239,7 +239,7 @@ const solanaTraderPlugin = {
     }
 
     // ── Kayba tracing ──────────────────────────────────────────────────
-    const kaybaKey = config.kaybaApiKey || process.env.KAYBA_API_KEY || "";
+    const kaybaKey = config.kaybaApiKey || "";
     if (kaybaKey) {
       try {
         kayba.configure({

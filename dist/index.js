@@ -912,7 +912,7 @@ var solanaTraderPlugin = {
       );
       return;
     }
-    const kaybaKey = config.kaybaApiKey || process.env.KAYBA_API_KEY || "";
+    const kaybaKey = config.kaybaApiKey || "";
     if (kaybaKey) {
       try {
         kayba.configure({
