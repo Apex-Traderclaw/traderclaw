@@ -21,7 +21,7 @@ import {
 } from "./chunk-VR5WP5S4.js";
 import {
   orchestratorRequest
-} from "./chunk-NDPVVAV7.js";
+} from "./chunk-6GSGHMUH.js";
 import {
   IntelligenceLab
 } from "./chunk-FBS5FGW2.js";
@@ -912,7 +912,7 @@ var solanaTraderPlugin = {
       );
       return;
     }
-    const kaybaKey = config.kaybaApiKey || process.env.KAYBA_API_KEY || "";
+    const kaybaKey = config.kaybaApiKey || "";
     if (kaybaKey) {
       try {
         kayba.configure({

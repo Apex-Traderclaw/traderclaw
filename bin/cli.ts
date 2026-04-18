@@ -4,6 +4,7 @@ import { createInterface } from "readline";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { spawnSync } from "child_process";
 
 const VERSION = "1.0.0";
 const PLUGIN_ID = "solana-trader";
@@ -611,6 +612,57 @@ async function cmdConfig(subArgs: string[]) {
   process.exit(1);
 }
 
+async function cmdUpdate(args: string[]) {
+  const tag = args.includes("--beta") ? "beta" : "latest";
+
+  print("\nOpenClaw Trader — Update\n");
+  print("=".repeat(45));
+
+  let currentVersion = "unknown";
+  try {
+    const r = spawnSync("npm", ["list", "-g", "traderclaw-cli", "--json", "--depth=0"], { encoding: "utf-8" });
+    if (r.stdout) {
+      const data = JSON.parse(r.stdout) as { dependencies?: Record<string, { version?: string }> };
+      currentVersion = data?.dependencies?.["traderclaw-cli"]?.version ?? "unknown";
+    }
+  } catch {}
+  printInfo(`  Current version:  ${currentVersion}`);
+
+  let latestVersion = "unknown";
+  try {
+    const r = spawnSync("npm", ["view", `traderclaw-cli@${tag}`, "version"], { encoding: "utf-8" });
+    latestVersion = r.stdout?.trim() ?? "unknown";
+  } catch {}
+  printInfo(`  Available (${tag}):${" ".repeat(Math.max(1, 9 - tag.length))}${latestVersion}`);
+
+  if (currentVersion !== "unknown" && latestVersion !== "unknown" && currentVersion === latestVersion) {
+    printSuccess(`\n  Already on the ${tag} version (${currentVersion}). Nothing to do.\n`);
+    return;
+  }
+
+  print(`\n  Installing traderclaw-cli@${tag}...\n`);
+
+  const install = spawnSync("npm", ["install", "-g", `traderclaw-cli@${tag}`], { stdio: "inherit" });
+  if (install.status !== 0) {
+    printError("npm install failed. Try running manually:");
+    print(`  npm install -g traderclaw-cli@${tag}`);
+    process.exit(1);
+  }
+
+  printSuccess(`\n  Package updated.`);
+  print("\n  Restarting gateway...\n");
+
+  const restart = spawnSync("openclaw", ["gateway", "restart"], { stdio: "inherit" });
+  if (restart.status !== 0) {
+    printWarn("  Gateway restart returned non-zero. Restart manually: openclaw gateway restart");
+  } else {
+    printSuccess("  Gateway restarted.");
+  }
+
+  print("\n" + "=".repeat(45));
+  printSuccess("\n  Update complete!\n");
+}
+
 function printHelp() {
   print(`
 OpenClaw Solana Trader CLI v${VERSION}
@@ -621,6 +673,7 @@ Commands:
   setup              Set up the plugin (API key, orchestrator, wallet)
   status             Check connection health and wallet status
   config             View and manage configuration
+  update             Update to the latest version and restart the gateway
 
 Setup options:
   --api-key, -k              API key (skip interactive prompt)
@@ -632,11 +685,16 @@ Config subcommands:
   config set <k> <v> Update a configuration value
   config reset       Remove plugin configuration
 
+Update options:
+  --beta             Update to the latest beta version instead of stable
+
 Examples:
   openclaw-trader setup
   openclaw-trader setup --api-key sk_live_abc123 --url https://api.traderclaw.ai
   openclaw-trader setup --telegram-recipient @MyChannelOrUser
   openclaw-trader status
+  openclaw-trader update
+  openclaw-trader update --beta
   openclaw-trader config show
   openclaw-trader config set apiTimeout 60000
 `);
@@ -665,6 +723,9 @@ async function main() {
       break;
     case "config":
       await cmdConfig(args.slice(1));
+      break;
+    case "update":
+      await cmdUpdate(args.slice(1));
       break;
     default:
       printError(`Unknown command: ${command}`);

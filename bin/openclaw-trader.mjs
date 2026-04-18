@@ -4169,6 +4169,7 @@ Commands:
   status             Check connection health and wallet status
   config             View and manage configuration
   test-session       Test session auth flow (refresh, rotation, challenge) without reinstalling
+  update             Update to the latest version and restart the gateway
 
 Setup options:
   --api-key, -k      API key (skip interactive prompt)
@@ -4236,7 +4237,57 @@ Examples:
   traderclaw config set apiTimeout 60000
   traderclaw test-session
   traderclaw test-session --wallet-private-key <base58_key>
+  traderclaw update
+  traderclaw update --beta
 `);
+}
+
+async function cmdUpdate(args) {
+  const tag = args.includes("--beta") ? "beta" : "latest";
+
+  print("\nTraderClaw — Update\n");
+  print("=".repeat(45));
+
+  let currentVersion = "unknown";
+  try {
+    const out = execSync("npm list -g traderclaw-cli --json --depth=0", { encoding: "utf-8" });
+    const data = JSON.parse(out);
+    currentVersion = data?.dependencies?.["traderclaw-cli"]?.version ?? "unknown";
+  } catch {}
+  printInfo(`  Current version:  ${currentVersion}`);
+
+  let latestVersion = "unknown";
+  try {
+    latestVersion = execSync(`npm view traderclaw-cli@${tag} version`, { encoding: "utf-8" }).trim();
+  } catch {}
+  printInfo(`  Available (${tag}):${" ".repeat(Math.max(1, 9 - tag.length))}${latestVersion}`);
+
+  if (currentVersion !== "unknown" && latestVersion !== "unknown" && currentVersion === latestVersion) {
+    printSuccess(`\n  Already on the ${tag} version (${currentVersion}). Nothing to do.\n`);
+    return;
+  }
+
+  print(`\n  Installing traderclaw-cli@${tag}...\n`);
+  try {
+    execSync(`npm install -g traderclaw-cli@${tag}`, { stdio: "inherit" });
+  } catch {
+    printError("npm install failed. Try running manually:");
+    print(`  npm install -g traderclaw-cli@${tag}`);
+    process.exit(1);
+  }
+
+  printSuccess(`\n  Package updated.`);
+  print("\n  Restarting gateway...\n");
+
+  try {
+    execSync("openclaw gateway restart", { stdio: "inherit" });
+    printSuccess("  Gateway restarted.");
+  } catch {
+    printWarn("  Gateway restart returned non-zero. Restart manually: openclaw gateway restart");
+  }
+
+  print("\n" + "=".repeat(45));
+  printSuccess("\n  Update complete!\n");
 }
 
 async function cmdRepairOpenclaw() {
@@ -4302,6 +4353,9 @@ async function main() {
       break;
     case "test-session":
       await cmdTestSession(args.slice(1));
+      break;
+    case "update":
+      await cmdUpdate(args.slice(1));
       break;
     default:
       printError(`Unknown command: ${command}`);
