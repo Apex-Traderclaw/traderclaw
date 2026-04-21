@@ -3760,6 +3760,9 @@ async function cmdInstall(args) {
           print(`  Then run: ${restartCommand}`);
         }
         printInfo("Wizard finish requested from browser. Closing server and returning shell prompt.");
+        printInfo(
+          "If you used SSH -L for ports 17890/1455: close browser tabs to the wizard, or open a new SSH session without those forwards. Otherwise the SSH client may print many \"channel … Connection refused\" lines after the servers stop — that is normal and stops once nothing tries those local ports or you reconnect.",
+        );
         server.close(() => process.exit(0));
       }, 650);
       return;
@@ -3906,6 +3909,9 @@ async function cmdInstall(args) {
   printInfo("Press Ctrl+C to stop the wizard server.");
   printInfo(`If you are on a remote VPS, forward both ports from your local machine:`);
   printInfo(`  ssh -L ${defaults.port}:127.0.0.1:${defaults.port} -L 1455:127.0.0.1:1455 <user>@<your-vps>`);
+  printInfo(
+    "When the wizard exits, reconnect without -L (or close tabs using those localhost ports) to avoid noisy SSH \"channel … Connection refused\" messages.",
+  );
 }
 
 async function cmdTestSession(args) {
