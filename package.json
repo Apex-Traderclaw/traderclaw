@@ -1,6 +1,6 @@
 {
   "name": "solana-traderclaw",
-  "version": "1.0.97",
+  "version": "1.0.98",
   "description": "TraderClaw V1-Upgraded — Solana trading for OpenClaw with intelligence lab, tool envelopes, prompt scrubbing, read-only X social intel, and split skill docs",
   "type": "module",
   "main": "./dist/index.js",

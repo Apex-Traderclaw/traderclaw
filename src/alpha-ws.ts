@@ -19,6 +19,8 @@ interface WSMessage {
 }
 
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
+const PING_INTERVAL_MS = 30_000;
+const PONG_TIMEOUT_MS = 10_000;
 
 export class AlphaStreamManager {
   private config: AlphaWSConfig;
@@ -151,12 +153,34 @@ export class AlphaStreamManager {
         }
       }, 10000);
 
+      let pingInterval: ReturnType<typeof setInterval> | null = null;
+      let pongTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const clearKeepalive = () => {
+        if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+        if (pongTimer) { clearTimeout(pongTimer); pongTimer = null; }
+      };
+
       this.ws.on("open", () => {
         clearTimeout(connectTimeout);
         this.connectedAt = Date.now();
         this.reconnectAttempt = 0;
         this.log("info", "WebSocket connected, waiting for server handshake...");
+
+        pingInterval = setInterval(() => {
+          if (!this.ws || this.ws.readyState !== 1) return;
+          pongTimer = setTimeout(() => {
+            this.log("warn", "Pong timeout — forcing reconnect");
+            this.ws?.terminate();
+          }, PONG_TIMEOUT_MS);
+          try { this.ws.ping(); } catch { /* ignore if ws already closing */ }
+        }, PING_INTERVAL_MS);
+
         resolve();
+      });
+
+      this.ws.on("pong", () => {
+        if (pongTimer) { clearTimeout(pongTimer); pongTimer = null; }
       });
 
       this.ws.on("message", (data: Buffer | string) => {
@@ -170,6 +194,7 @@ export class AlphaStreamManager {
 
       this.ws.on("close", () => {
         clearTimeout(connectTimeout);
+        clearKeepalive();
         this.subscribed = false;
         this.authenticated = false;
         this.log("info", "WebSocket closed");
