@@ -1,6 +1,10 @@
 import {
+  ALPHA_INGESTION_STALE_MS,
+  ALPHA_STALE_GRACE_AFTER_CONNECT_MS,
   AlphaStreamManager
-} from "../chunk-3YPZOXWE.js";
+} from "../chunk-JVQNXWBW.js";
 export {
+  ALPHA_INGESTION_STALE_MS,
+  ALPHA_STALE_GRACE_AFTER_CONNECT_MS,
   AlphaStreamManager
 };

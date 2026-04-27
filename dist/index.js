@@ -1,4 +1,7 @@
 import {
+  readRecoverySecretFromDisk
+} from "./chunk-SBYHSJLU.js";
+import {
   SessionManager
 } from "./chunk-VVEKPKW3.js";
 import {
@@ -15,10 +18,13 @@ import {
 } from "./chunk-3UQIQJPQ.js";
 import {
   AlphaStreamManager
-} from "./chunk-3YPZOXWE.js";
+} from "./chunk-JVQNXWBW.js";
 import {
   BitqueryStreamManager
-} from "./chunk-VR5WP5S4.js";
+} from "./chunk-S2DLZKMQ.js";
+import {
+  shouldSyncGatewayCredentials
+} from "./chunk-R24UDHQG.js";
 import {
   orchestratorRequest
 } from "./chunk-6GSGHMUH.js";
@@ -35,9 +41,6 @@ import {
 import {
   scrubUntrustedText
 } from "./chunk-AI6MTHUN.js";
-import {
-  readRecoverySecretFromDisk
-} from "./chunk-SBYHSJLU.js";
 
 // index.ts
 import { Type } from "@sinclair/typebox";
@@ -2593,6 +2596,18 @@ ${notes}
             refreshed = await get("/api/agents/gateway-credentials");
             activeCredential = getActiveCredential(refreshed);
           }
+          if (activeCredential && autoFixGateway && gbu && gt && shouldSyncGatewayCredentials(gbu, gt, activeCredential)) {
+            const driftBody = {
+              gatewayBaseUrl: gbu,
+              gatewayToken: gt,
+              active: true
+            };
+            if (config.agentId) driftBody.agentId = config.agentId;
+            if (forwardChatId) driftBody.forwardTelegramChatId = forwardChatId;
+            await put("/api/agents/gateway-credentials", driftBody);
+            refreshed = await get("/api/agents/gateway-credentials");
+            activeCredential = getActiveCredential(refreshed);
+          }
           gatewayStepOk = Boolean(activeCredential);
           if (!gatewayStepOk) throw new Error("Gateway credentials are missing or inactive");
           pushStep({
@@ -2697,10 +2712,13 @@ ${notes}
     };
     api.registerTool({
       name: "solana_alpha_subscribe",
-      description: "Subscribe to the SpyFly alpha signal stream via WebSocket. Signals are buffered locally and retrieved with solana_alpha_signals. The startup gate calls this automatically. Optionally set agentId and subscriberType for event-to-agent forwarding.",
+      description: "Subscribe to the SpyFly alpha signal stream via WebSocket. Signals are buffered locally and retrieved with solana_alpha_signals. The startup gate calls this automatically. Optionally set agentId and subscriberType for event-to-agent forwarding. Use force=true to close an existing connection and resubscribe when the socket looks healthy but alpha_signal ingestion has stalled (zombie subscription).",
       parameters: Type.Object({
         agentId: Type.Optional(Type.String({ description: "Agent ID for event-to-agent forwarding. Uses plugin config agentId as default." })),
-        subscriberType: Type.Optional(Type.String({ description: "Subscriber type: 'agent' or 'client'." }))
+        subscriberType: Type.Optional(Type.String({ description: "Subscriber type: 'agent' or 'client'." })),
+        force: Type.Optional(Type.Boolean({
+          description: "If true, disconnect any existing WebSocket and subscribe again. Use when resubscribe would otherwise be a no-op but signals stopped arriving."
+        }))
       }),
       execute: wrapExecute("solana_alpha_subscribe", async (_id, params) => {
         const effectiveAgentId = params.agentId || config.agentId;
@@ -2711,7 +2729,7 @@ ${notes}
         if (effectiveSubscriberType) {
           alphaStreamManager.setSubscriberType(effectiveSubscriberType);
         }
-        return alphaStreamManager.subscribe();
+        return alphaStreamManager.subscribe({ force: params.force === true });
       })
     });
     api.registerTool({
@@ -2923,6 +2941,7 @@ ${notes}
         startupGate: startupGateState,
         alphaStream: {
           subscribed: alphaStreamManager.isSubscribed(),
+          ingestionStale: alphaStreamManager.isIngestionStale(),
           stats: alphaStreamManager.getStats(),
           bufferSize: alphaBuffer.getBufferSize()
         },
@@ -4283,6 +4302,80 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
           api.logger.info(`[solana-trader] Forward probe result: ${JSON.stringify(probe)}`);
         } catch (err) {
           api.logger.warn(`[solana-trader] Forward probe failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        const WATCHDOG_INTERVAL_MS = 9e4;
+        const FORWARD_PROBE_WATCHDOG_MS = 7 * 60 * 1e3;
+        const STARTUP_GATE_AFTER_PROBE_FAIL_COOLDOWN_MS = 10 * 60 * 1e3;
+        let alphaStalePhase = 0;
+        const watchdogStartedAt = Date.now();
+        let lastForwardProbeWatchdogMs = watchdogStartedAt;
+        let lastProbeFailureStartupGateMs = watchdogStartedAt;
+        const watchdogTimer = setInterval(async () => {
+          const now = Date.now();
+          if (!alphaStreamManager.isSubscribed()) {
+            alphaStalePhase = 0;
+            api.logger.warn("[watchdog] Alpha stream not subscribed \u2014 resubscribing...");
+            try {
+              await alphaStreamManager.subscribe();
+              api.logger.info("[watchdog] Alpha stream resubscribed successfully.");
+            } catch (err) {
+              api.logger.error(`[watchdog] Alpha resubscribe failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          } else if (alphaStreamManager.isIngestionStale(now)) {
+            if (alphaStalePhase === 0) {
+              api.logger.warn("[watchdog] Alpha ingestion stale (no recent alpha_signal) \u2014 resending alpha_stream_subscribe");
+              if (alphaStreamManager.resendApplicationSubscribe()) {
+                alphaStalePhase = 1;
+              } else {
+                try {
+                  await alphaStreamManager.subscribe({ force: true });
+                  api.logger.info("[watchdog] Alpha force-resubscribe completed (soft send unavailable).");
+                } catch (err) {
+                  api.logger.error(`[watchdog] Alpha force-resubscribe failed: ${err instanceof Error ? err.message : String(err)}`);
+                }
+                alphaStalePhase = 0;
+              }
+            } else {
+              api.logger.warn("[watchdog] Alpha still stale after soft recovery \u2014 forcing WebSocket reconnect");
+              try {
+                await alphaStreamManager.subscribe({ force: true });
+                api.logger.info("[watchdog] Alpha force-resubscribe completed.");
+              } catch (err) {
+                api.logger.error(`[watchdog] Alpha force-resubscribe failed: ${err instanceof Error ? err.message : String(err)}`);
+              }
+              alphaStalePhase = 0;
+            }
+          } else {
+            alphaStalePhase = 0;
+          }
+          try {
+            const creds = await get("/api/agents/gateway-credentials");
+            if (!getActiveCredential(creds)) {
+              api.logger.warn("[watchdog] Gateway credentials inactive \u2014 re-registering...");
+              await runStartupGate({ autoFixGateway: true, force: true });
+            }
+          } catch (err) {
+            api.logger.warn(`[watchdog] Gateway credential check failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          if (now - lastForwardProbeWatchdogMs >= FORWARD_PROBE_WATCHDOG_MS) {
+            lastForwardProbeWatchdogMs = now;
+            try {
+              const pr = await runForwardProbe({ agentId: config.agentId || "main", source: "watchdog" });
+              if (!Boolean(pr.ok)) {
+                api.logger.warn(`[watchdog] Gateway forward probe failed: ${JSON.stringify(pr)}`);
+                if (now - lastProbeFailureStartupGateMs >= STARTUP_GATE_AFTER_PROBE_FAIL_COOLDOWN_MS) {
+                  lastProbeFailureStartupGateMs = now;
+                  api.logger.warn("[watchdog] Running startup gate after forward probe failure (cooldown elapsed)");
+                  await runStartupGate({ autoFixGateway: true, force: true });
+                }
+              }
+            } catch (err) {
+              api.logger.warn(`[watchdog] Forward probe error: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+        }, WATCHDOG_INTERVAL_MS);
+        if (watchdogTimer && typeof watchdogTimer === "object" && "unref" in watchdogTimer) {
+          watchdogTimer.unref();
         }
       }
     });

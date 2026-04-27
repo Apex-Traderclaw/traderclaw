@@ -1,6 +1,6 @@
 import {
   BitqueryStreamManager
-} from "../chunk-VR5WP5S4.js";
+} from "../chunk-S2DLZKMQ.js";
 export {
   BitqueryStreamManager
 };
