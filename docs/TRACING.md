@@ -49,12 +49,15 @@ The two folder names (`traderclaw` for tool spans, `traderclaw-agent` for full L
 
 ## Manual setup (if you skipped the wizard)
 
-```sh
-openclaw plugins install @kayba_ai/openclaw-tracing
-openclaw plugins enable kayba-tracing
-```
+Order matters — `openclaw plugins install` validates the entry's config against the plugin manifest, and `apiKey` is required, so seed the config first:
 
-Then add the `kayba-tracing` entry shown above to your `openclaw.json` and restart the gateway.
+1. Add the `kayba-tracing` entry shown above to `~/.openclaw/openclaw.json` (with your `apiKey` filled in) and add `"kayba-tracing"` to `plugins.allow`.
+2. Then run:
+
+   ```sh
+   openclaw plugins install @kayba_ai/openclaw-tracing
+   openclaw plugins enable kayba-tracing
+   ```
 
 ## Configuration knobs (kayba-tracing)
 
