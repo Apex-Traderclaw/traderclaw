@@ -65,6 +65,9 @@ try {
 const VERSION = CLI_VERSION || PLUGIN_VERSION;
 const PLUGIN_ID = "solana-trader";
 const LEGACY_PLUGIN_IDS = ["traderclaw-v1", "solana-traderclaw-v1", "solana-traderclaw"];
+const KAYBA_TRACING_PLUGIN_ID = "kayba-tracing";
+const KAYBA_TRACING_NPM_PACKAGE = "@kayba_ai/openclaw-tracing";
+const KAYBA_TRACING_FOLDER_DEFAULT = "traderclaw-agent";
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 const WALLET_PRIVATE_KEY_ENV = "TRADERCLAW_WALLET_PRIVATE_KEY";
@@ -420,6 +423,48 @@ function setPluginConfig(config, pluginConfig) {
     enabled: true,
     config: pluginConfig,
   };
+}
+
+function setKaybaTracingPluginConfig(config, kaybaApiKey, folder) {
+  normalizePluginConfigShape(config);
+  if (!config.plugins) config.plugins = {};
+  if (!config.plugins.entries) config.plugins.entries = {};
+  if (!Array.isArray(config.plugins.allow)) config.plugins.allow = [];
+  if (!config.plugins.allow.includes(KAYBA_TRACING_PLUGIN_ID)) {
+    config.plugins.allow.push(KAYBA_TRACING_PLUGIN_ID);
+  }
+  const prev = config.plugins.entries[KAYBA_TRACING_PLUGIN_ID];
+  const prevConfig = prev && typeof prev.config === "object" && prev.config !== null ? prev.config : {};
+  config.plugins.entries[KAYBA_TRACING_PLUGIN_ID] = {
+    enabled: true,
+    hooks: { allowConversationAccess: true },
+    config: {
+      ...prevConfig,
+      apiKey: kaybaApiKey,
+      folder: prevConfig.folder || folder || KAYBA_TRACING_FOLDER_DEFAULT,
+    },
+  };
+}
+
+async function installAndEnableKaybaTracingPlugin() {
+  // Best-effort: openclaw plugins install <pkg> + enable <id>. Returns null on success, error message on failure.
+  try {
+    await execFileAsync("openclaw", ["plugins", "install", KAYBA_TRACING_NPM_PACKAGE], { env: NO_COLOR_ENV });
+  } catch (err) {
+    const text = `${err?.message || ""}\n${err?.stderr || ""}`.toLowerCase();
+    if (!text.includes("already exists") && !text.includes("already installed")) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  }
+  try {
+    await execFileAsync("openclaw", ["plugins", "enable", KAYBA_TRACING_PLUGIN_ID], { env: NO_COLOR_ENV });
+  } catch (err) {
+    const text = `${err?.message || ""}\n${err?.stderr || ""}`.toLowerCase();
+    if (!text.includes("already enabled")) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  }
+  return null;
 }
 
 function getGatewayConfig(config) {
@@ -782,6 +827,7 @@ async function cmdSetup(args) {
   let forwardTelegramRecipientArg = "";
   let referralCodeArg = "";
   let referralInvalidRetries = 0;
+  let kaybaApiKeyArg = "";
 
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === "--api-key" || args[i] === "-k") && args[i + 1]) {
@@ -830,6 +876,9 @@ async function cmdSetup(args) {
     }
     if ((args[i] === "--referral-code" || args[i] === "-r") && args[i + 1]) {
       referralCodeArg = args[++i];
+    }
+    if ((args[i] === "--kayba-key" || args[i] === "--kayba-api-key") && args[i + 1]) {
+      kaybaApiKeyArg = args[++i];
     }
   }
   const runtimeWalletPrivateKey = getRuntimeWalletPrivateKey(walletPrivateKey);
@@ -1169,11 +1218,29 @@ async function cmdSetup(args) {
     }
   }
 
+  let kaybaApiKey = (kaybaApiKeyArg || process.env.KAYBA_API_KEY || prevPlugin?.kaybaApiKey || "").trim();
+  if (!kaybaApiKey) {
+    print("\nKayba tracing (optional)...\n");
+    printInfo("  Capture every agent turn — full LLM prompts, tool calls, replies — for observability.");
+    printInfo("  Get a key at https://use.kayba.ai/settings/api-keys, or use one provided by your operator.");
+    kaybaApiKey = (await prompt("Kayba API key (kayba_ak_..., Enter to skip)", "")).trim();
+  } else {
+    printInfo(`\n  Reusing Kayba API key: ${maskKey(kaybaApiKey)}`);
+  }
+  if (kaybaApiKey) {
+    pluginConfig.kaybaApiKey = kaybaApiKey;
+    if (!pluginConfig.kaybaFolder) pluginConfig.kaybaFolder = "traderclaw";
+  }
+
   print("\nWriting configuration...\n");
 
   const existingConfig = readConfig();
   removeLegacyWalletPrivateKey(pluginConfig);
   setPluginConfig(existingConfig, pluginConfig);
+
+  if (kaybaApiKey) {
+    setKaybaTracingPluginConfig(existingConfig, kaybaApiKey, KAYBA_TRACING_FOLDER_DEFAULT);
+  }
 
   if (!existingConfig.agents || typeof existingConfig.agents !== "object") {
     existingConfig.agents = {};
@@ -1203,6 +1270,17 @@ async function cmdSetup(args) {
   writeConfig(existingConfig);
 
   printSuccess(`  Config written to ${CONFIG_FILE}`);
+
+  if (kaybaApiKey) {
+    print(`\nInstalling ${KAYBA_TRACING_PLUGIN_ID} plugin (one-time)...\n`);
+    const installErr = await installAndEnableKaybaTracingPlugin();
+    if (installErr) {
+      printWarn(`  Plugin install failed: ${installErr}`);
+      printWarn(`  Finish manually: openclaw plugins install ${KAYBA_TRACING_NPM_PACKAGE} && openclaw plugins enable ${KAYBA_TRACING_PLUGIN_ID}`);
+    } else {
+      printSuccess(`  ${KAYBA_TRACING_PLUGIN_ID} installed and enabled (folder: ${KAYBA_TRACING_FOLDER_DEFAULT})`);
+    }
+  }
 
   if (!skipGatewayRegistration) {
     print("\nGateway forwarding setup (required for event-driven wakeups)...\n");
@@ -4184,6 +4262,8 @@ Setup options:
   --gateway-token, -t     Gateway bearer token (defaults to API key)
   --telegram-recipient    Telegram @username or chat id (aliases: --forward-telegram-chat-id, --telegram-chat-id)
   --referral-code, -r   Optional referral code for new signups (extra trial time when valid)
+  --kayba-key             Kayba API key (kayba_ak_...) — captures every agent turn to your Kayba dashboard.
+                          Aliases: --kayba-api-key. Env fallback: KAYBA_API_KEY. Skip with empty value.
   --skip-gateway-registration  Skip gateway URL registration with orchestrator
   --show-api-key     Extra hint after signup (full key is always shown once; confirm with API_KEY_STORED)
   --show-wallet-private-key  Reveal full wallet private key in setup output
@@ -4229,6 +4309,8 @@ Examples:
   traderclaw setup --api-key oc_xxx --url https://api.traderclaw.ai
   traderclaw setup --gateway-base-url https://gateway.myhost.ts.net
   traderclaw setup --telegram-recipient @myusername
+  traderclaw setup --kayba-key kayba_ak_xxx     # one-shot Kayba tracing setup (installs kayba-tracing plugin)
+  KAYBA_API_KEY=kayba_ak_xxx traderclaw setup    # same via env var
   traderclaw login
   traderclaw login --force-reauth --wallet-private-key <base58_key>
   traderclaw logout
