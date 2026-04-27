@@ -3731,6 +3731,39 @@ const solanaTraderPlugin = {
         } catch (err) {
           api.logger.warn(`[solana-trader] Forward probe failed: ${err instanceof Error ? err.message : String(err)}`);
         }
+
+        // Background health watchdog: periodically verify the alpha stream is
+        // subscribed and gateway credentials are still active in the orchestrator.
+        // This catches silent WS drops that slip past ping/pong and credential
+        // staleness without requiring an agent tool call to discover the problem.
+        const WATCHDOG_INTERVAL_MS = 90_000;
+        const watchdogTimer = setInterval(async () => {
+          // 1. Alpha stream liveness check
+          if (!alphaStreamManager.isSubscribed()) {
+            api.logger.warn("[watchdog] Alpha stream not subscribed — resubscribing...");
+            try {
+              await alphaStreamManager.subscribe();
+              api.logger.info("[watchdog] Alpha stream resubscribed successfully.");
+            } catch (err) {
+              api.logger.error(`[watchdog] Alpha resubscribe failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+
+          // 2. Gateway credential liveness check
+          try {
+            const creds = (await get("/api/agents/gateway-credentials")) as Record<string, unknown>;
+            if (!getActiveCredential(creds)) {
+              api.logger.warn("[watchdog] Gateway credentials inactive — re-registering...");
+              await runStartupGate({ autoFixGateway: true, force: true });
+            }
+          } catch (err) {
+            api.logger.warn(`[watchdog] Gateway credential check failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }, WATCHDOG_INTERVAL_MS);
+
+        if (watchdogTimer && typeof watchdogTimer === "object" && "unref" in watchdogTimer) {
+          (watchdogTimer as NodeJS.Timeout).unref();
+        }
       },
     });
 

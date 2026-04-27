@@ -6,7 +6,7 @@ import { dirname, join } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { homedir } from "os";
 import { randomUUID, createPrivateKey, sign as cryptoSign } from "crypto";
-import { execFile, execSync } from "child_process";
+import { execFile, execFileSync, execSync } from "child_process";
 import { promisify } from "util";
 import { createServer } from "http";
 import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
@@ -3760,6 +3760,9 @@ async function cmdInstall(args) {
           print(`  Then run: ${restartCommand}`);
         }
         printInfo("Wizard finish requested from browser. Closing server and returning shell prompt.");
+        printInfo(
+          "If you used SSH -L for ports 17890/1455: close browser tabs to the wizard, or open a new SSH session without those forwards. Otherwise the SSH client may print many \"channel … Connection refused\" lines after the servers stop — that is normal and stops once nothing tries those local ports or you reconnect.",
+        );
         server.close(() => process.exit(0));
       }, 650);
       return;
@@ -3906,6 +3909,9 @@ async function cmdInstall(args) {
   printInfo("Press Ctrl+C to stop the wizard server.");
   printInfo(`If you are on a remote VPS, forward both ports from your local machine:`);
   printInfo(`  ssh -L ${defaults.port}:127.0.0.1:${defaults.port} -L 1455:127.0.0.1:1455 <user>@<your-vps>`);
+  printInfo(
+    "When the wizard exits, reconnect without -L (or close tabs using those localhost ports) to avoid noisy SSH \"channel … Connection refused\" messages.",
+  );
 }
 
 async function cmdTestSession(args) {
@@ -4169,7 +4175,12 @@ Commands:
   status             Check connection health and wallet status
   config             View and manage configuration
   test-session       Test session auth flow (refresh, rotation, challenge) without reinstalling
-  update             Update to the latest version and restart the gateway
+  update             Update global traderclaw-cli, re-sync the OpenClaw plugin (openclaw.json), force-install solana-traderclaw, and restart the gateway
+
+Update options (traderclaw update):
+  --beta             Use the npm dist-tag "beta" for traderclaw-cli and solana-traderclaw (default: "latest")
+  --dry-run          Show / simulate actions without fully applying (where supported)
+  --skip-plugins     Do not run openclaw "plugins update" or "plugins install --force" (only npm + gateway restart)
 
 Setup options:
   --api-key, -k      API key (skip interactive prompt)
@@ -4239,14 +4250,20 @@ Examples:
   traderclaw test-session --wallet-private-key <base58_key>
   traderclaw update
   traderclaw update --beta
+  traderclaw update --dry-run
 `);
 }
 
 async function cmdUpdate(args) {
   const tag = args.includes("--beta") ? "beta" : "latest";
+  const dryRun = args.includes("--dry-run");
+  const skipPlugins = args.includes("--skip-plugins");
 
   print("\nTraderClaw — Update\n");
   print("=".repeat(45));
+  if (dryRun) {
+    printInfo("  (dry-run: npm install and gateway restart are simulated where noted)\n");
+  }
 
   let currentVersion = "unknown";
   try {
@@ -4254,40 +4271,144 @@ async function cmdUpdate(args) {
     const data = JSON.parse(out);
     currentVersion = data?.dependencies?.["traderclaw-cli"]?.version ?? "unknown";
   } catch {}
-  printInfo(`  Current version:  ${currentVersion}`);
+  printInfo(`  Global traderclaw-cli:  ${currentVersion}`);
 
   let latestVersion = "unknown";
   try {
     latestVersion = execSync(`npm view traderclaw-cli@${tag} version`, { encoding: "utf-8" }).trim();
   } catch {}
-  printInfo(`  Available (${tag}):${" ".repeat(Math.max(1, 9 - tag.length))}${latestVersion}`);
+  printInfo(`  npm ${tag} tag resolves to:${" ".repeat(Math.max(1, 11 - tag.length))}${latestVersion}`);
 
-  if (currentVersion !== "unknown" && latestVersion !== "unknown" && currentVersion === latestVersion) {
-    printSuccess(`\n  Already on the ${tag} version (${currentVersion}). Nothing to do.\n`);
-    return;
+  /** Published solana-traderclaw version for openclaw plugins install …@version --force (matches CLI release in this monorepo). */
+  let publishedPluginVersion = "unknown";
+  try {
+    publishedPluginVersion = execSync(`npm view ${NPM_PACKAGE_NAME}@${tag} version`, { encoding: "utf-8" }).trim();
+  } catch {
+    try {
+      publishedPluginVersion = execSync(`npm view ${NPM_PACKAGE_NAME}@latest version`, { encoding: "utf-8" }).trim();
+    } catch {
+      /* leave unknown */
+    }
+  }
+  if (publishedPluginVersion === "unknown" && latestVersion !== "unknown") {
+    publishedPluginVersion = latestVersion;
+  }
+  printInfo(
+    `  Target ${NPM_PACKAGE_NAME}@${tag}: ${publishedPluginVersion === "unknown" ? "unknown" : publishedPluginVersion}`,
+  );
+
+  const cliUpToDate =
+    currentVersion !== "unknown" && latestVersion !== "unknown" && currentVersion === latestVersion;
+  const needNpmInstall = !cliUpToDate;
+
+  if (needNpmInstall) {
+    if (dryRun) {
+      print(`\n  [dry-run] Would run: npm install -g traderclaw-cli@${tag}\n`);
+    } else {
+      print(`\n  Installing traderclaw-cli@${tag} globally...\n`);
+      try {
+        execSync(`npm install -g traderclaw-cli@${tag}`, { stdio: "inherit" });
+        printSuccess(`\n  Global traderclaw-cli updated.`);
+      } catch {
+        printError("npm install failed. Try running manually:");
+        print(`  npm install -g traderclaw-cli@${tag}`);
+        process.exit(1);
+      }
+    }
+  } else {
+    printSuccess(`\n  Global traderclaw-cli is already on ${tag} (${currentVersion}).`);
   }
 
-  print(`\n  Installing traderclaw-cli@${tag}...\n`);
-  try {
-    execSync(`npm install -g traderclaw-cli@${tag}`, { stdio: "inherit" });
-  } catch {
-    printError("npm install failed. Try running manually:");
-    print(`  npm install -g traderclaw-cli@${tag}`);
-    process.exit(1);
+  // OpenClaw still tracks a separate copy under extensions + plugins.installs in openclaw.json.
+  // Always refresh that install so it matches the new CLI (spec / integrity / resolvedVersion).
+  if (!skipPlugins) {
+    if (!commandExists("openclaw")) {
+      printWarn(`\n  "openclaw" not found in PATH — cannot run "openclaw plugins update ${PLUGIN_ID}" or "plugins install … --force".`);
+      print("  After installing the OpenClaw CLI, run (use the version from npm or this log):\n");
+      print(`     openclaw plugins update ${PLUGIN_ID}`);
+      print(`     openclaw plugins install ${NPM_PACKAGE_NAME}@${publishedPluginVersion !== "unknown" ? publishedPluginVersion : "<version>"} --force`);
+      print("  Then: openclaw gateway restart");
+    } else {
+      const pluginUpdateArgs = ["plugins", "update", PLUGIN_ID];
+      if (dryRun) {
+        pluginUpdateArgs.push("--dry-run");
+      }
+      try {
+        print(`\n  Syncing OpenClaw plugin install (${PLUGIN_ID}, solana-traderclaw)...\n`);
+        printInfo(
+          `  (updates ~/.openclaw/… plugin files and ${CONFIG_FILE} plugins.installs — do not hand-edit those versions)\n`,
+        );
+        execFileSync("openclaw", pluginUpdateArgs, { stdio: "inherit" });
+        if (!dryRun) {
+          printSuccess(`\n  OpenClaw plugin "${PLUGIN_ID}" update finished.`);
+        }
+
+        if (publishedPluginVersion === "unknown") {
+          printWarn(
+            `  Skipped "openclaw plugins install ${NPM_PACKAGE_NAME}@<version> --force" (could not resolve version from npm).`,
+          );
+        } else {
+          const installSpec = `${NPM_PACKAGE_NAME}@${publishedPluginVersion}`;
+          const installArgs = ["plugins", "install", installSpec, "--force"];
+          if (dryRun) {
+            print(
+              `\n  [dry-run] Would run: openclaw plugins install ${installSpec} --force\n` +
+                "  (re-downloads the exact tarball, rewrites the extension, and re-syncs plugins.installs.)\n",
+            );
+          } else {
+            try {
+              print(
+                `\n  Forcing full integration: openclaw plugins install ${installSpec} --force\n` +
+                  "  (extension on disk + plugins.installs / integrity.)\n",
+              );
+              execFileSync("openclaw", installArgs, { stdio: "inherit" });
+              printSuccess(`\n  Forced install complete: ${installSpec}.`);
+            } catch {
+              printError(`"openclaw plugins install ${installSpec} --force" failed. Try manually:`);
+              print(`  openclaw plugins install ${installSpec} --force`);
+              process.exit(1);
+            }
+          }
+        }
+      } catch {
+        if (dryRun) {
+          printError(`openclaw plugins update ${PLUGIN_ID} --dry-run failed.`);
+        } else {
+          printError(`"openclaw plugins update ${PLUGIN_ID}" failed. You can try:`);
+          print(`  openclaw plugins update ${PLUGIN_ID}`);
+          print("  or (all installed plugins)  openclaw plugins update --all");
+        }
+        process.exit(1);
+      }
+    }
+  } else {
+    printWarn(
+      `\n  --skip-plugins: skipped "openclaw plugins update ${PLUGIN_ID}" and "openclaw plugins install ${NPM_PACKAGE_NAME}@… --force"; openclaw.json / extension may stay on an old version.`,
+    );
   }
 
-  printSuccess(`\n  Package updated.`);
-  print("\n  Restarting gateway...\n");
-
-  try {
-    execSync("openclaw gateway restart", { stdio: "inherit" });
-    printSuccess("  Gateway restarted.");
-  } catch {
-    printWarn("  Gateway restart returned non-zero. Restart manually: openclaw gateway restart");
+  if (dryRun) {
+    print(`\n  [dry-run] Would run: openclaw gateway restart\n`);
+  } else {
+    if (!commandExists("openclaw")) {
+      printWarn("\n  Skipping gateway restart: openclaw not in PATH. After fixing PATH: openclaw gateway restart");
+    } else {
+      print("\n  Restarting gateway...\n");
+      try {
+        execFileSync("openclaw", ["gateway", "restart"], { stdio: "inherit" });
+        printSuccess("  Gateway restarted.");
+      } catch {
+        printWarn("  Gateway restart returned non-zero. Try manually: openclaw gateway restart");
+      }
+    }
   }
 
   print("\n" + "=".repeat(45));
-  printSuccess("\n  Update complete!\n");
+  if (dryRun) {
+    printSuccess("\n  Dry run finished. Re-run without --dry-run to apply.\n");
+  } else {
+    printSuccess("\n  Update complete!\n");
+  }
 }
 
 async function cmdRepairOpenclaw() {

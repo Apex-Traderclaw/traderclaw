@@ -1234,9 +1234,31 @@ async function restartGateway() {
   if (!commandExists("openclaw")) return { ran: false };
   try {
     await runCommandWithEvents("openclaw", ["gateway", "restart"]);
-    return { ran: true, success: true };
   } catch {
-    return { ran: true, success: false };
+    return { ran: true, success: false, healthy: false };
+  }
+
+  // Brief wait then verify the gateway is actually healthy after the restart.
+  await new Promise((r) => setTimeout(r, 2500));
+  try {
+    const raw = getCommandOutput("openclaw gateway status --json || true");
+    let statusJson = null;
+    if (raw) {
+      try { statusJson = JSON.parse(raw); } catch { /* non-JSON output */ }
+    }
+    const serviceStatus = statusJson?.service?.runtime?.status;
+    const rpcOk = statusJson?.rpc?.ok === true;
+    const healthy = serviceStatus === "running" && rpcOk;
+    if (!healthy) {
+      console.warn(
+        "[restartGateway] Gateway restarted but health check failed " +
+        `(status=${serviceStatus ?? "unknown"}, rpc.ok=${rpcOk}). ` +
+        "Check: journalctl --user -u openclaw-gateway",
+      );
+    }
+    return { ran: true, success: true, healthy };
+  } catch {
+    return { ran: true, success: true, healthy: false };
   }
 }
 

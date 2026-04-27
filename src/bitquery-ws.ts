@@ -33,6 +33,8 @@ interface PendingUnsubscribe {
 }
 
 const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
+const PING_INTERVAL_MS = 30_000;
+const PONG_TIMEOUT_MS = 10_000;
 
 /**
  * Manages a persistent WebSocket connection to the orchestrator for
@@ -163,6 +165,29 @@ export class BitqueryStreamManager {
     this.authenticated = false;
   }
 
+  /**
+   * Close the socket and schedule a reconnect without marking the close as
+   * intentional. Used for auth errors where we want to reconnect with a fresh
+   * token rather than leaving the socket permanently dead.
+   */
+  private forceReconnect(reason: string): void {
+    this.log("warn", `Force reconnect: ${reason}`);
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    try {
+      this.ws?.close();
+    } catch {
+      // ignore
+    }
+    this.ws = null;
+    this.authenticated = false;
+    if (this.activeSubscriptions.size > 0) {
+      this.scheduleReconnect();
+    }
+  }
+
   private async ensureConnected(): Promise<void> {
     if (this.ws && this.ws.readyState === 1 && this.authenticated) return;
 
@@ -226,11 +251,33 @@ export class BitqueryStreamManager {
         }
       }, 10000);
 
+      let pingInterval: ReturnType<typeof setInterval> | null = null;
+      let pongTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const clearKeepalive = () => {
+        if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+        if (pongTimer) { clearTimeout(pongTimer); pongTimer = null; }
+      };
+
       ws.on("open", () => {
         clearTimeout(connectTimeout);
         this.reconnectAttempt = 0;
         this.log("info", "Connected");
+
+        pingInterval = setInterval(() => {
+          if (!this.ws || this.ws.readyState !== 1) return;
+          pongTimer = setTimeout(() => {
+            this.log("warn", "Pong timeout — forcing reconnect");
+            this.ws?.terminate();
+          }, PONG_TIMEOUT_MS);
+          try { this.ws.ping(); } catch { /* ignore if ws already closing */ }
+        }, PING_INTERVAL_MS);
+
         resolve();
+      });
+
+      ws.on("pong", () => {
+        if (pongTimer) { clearTimeout(pongTimer); pongTimer = null; }
       });
 
       ws.on("message", (data: Buffer | string) => {
@@ -244,6 +291,7 @@ export class BitqueryStreamManager {
 
       ws.on("close", () => {
         clearTimeout(connectTimeout);
+        clearKeepalive();
         this.authenticated = false;
         this.log("info", "WS closed");
         this.drainPendingOnClose();
@@ -322,9 +370,10 @@ export class BitqueryStreamManager {
             pending.reject(new Error(`${code}: ${msg.message || ""}`));
           }
         }
-        // On auth errors, close so the next call reconnects with a fresh token
+        // On auth errors, force reconnect with a fresh token without marking
+        // the close as intentional (which would suppress auto-reconnect).
         if (["WS_AUTH_REQUIRED", "WS_AUTH_INVALID", "ACCESS_TOKEN_EXPIRED"].includes(code)) {
-          this.close();
+          this.forceReconnect(code);
         }
         break;
       }
@@ -348,9 +397,12 @@ export class BitqueryStreamManager {
   private async resubscribeAll(): Promise<void> {
     if (this.activeSubscriptions.size === 0) return;
     const subs = [...this.activeSubscriptions.values()];
-    this.activeSubscriptions.clear();
+    // Remove each stale entry individually before attempting to re-subscribe
+    // so the map doesn't hold dead IDs. On failure the original entry is
+    // restored so the next reconnect can retry it.
     this.log("info", `Re-subscribing ${subs.length} subscription(s) after reconnect`);
     for (const sub of subs) {
+      this.activeSubscriptions.delete(sub.subscriptionId);
       try {
         const result = await this.subscribe({
           templateKey: sub.templateKey,
@@ -361,6 +413,8 @@ export class BitqueryStreamManager {
         this.log("info", `Re-subscribed ${sub.templateKey} → new id: ${result.subscriptionId}`);
       } catch (err) {
         this.log("error", `Re-subscribe failed for ${sub.templateKey}: ${err}`);
+        // Restore the original entry so the next reconnect cycle can retry it.
+        this.activeSubscriptions.set(sub.subscriptionId, sub);
       }
     }
   }
