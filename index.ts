@@ -5,6 +5,7 @@ import { orchestratorRequest } from "./src/http-client.js";
 import { SessionManager } from "./src/session-manager.js";
 import { AlphaBuffer } from "./src/alpha-buffer.js";
 import { AlphaStreamManager } from "./src/alpha-ws.js";
+import { shouldSyncGatewayCredentials } from "./src/gateway-config-sync.js";
 import { BitqueryStreamManager } from "./src/bitquery-ws.js";
 import { normalizeToolSuccess, normalizeToolError, renderToolEnvelope } from "./src/tool-envelope.js";
 import {
@@ -2114,6 +2115,24 @@ const solanaTraderPlugin = {
             refreshed = (await get("/api/agents/gateway-credentials")) as Record<string, unknown>;
             activeCredential = getActiveCredential(refreshed);
           }
+          if (
+            activeCredential &&
+            autoFixGateway &&
+            gbu &&
+            gt &&
+            shouldSyncGatewayCredentials(gbu, gt, activeCredential)
+          ) {
+            const driftBody: Record<string, unknown> = {
+              gatewayBaseUrl: gbu,
+              gatewayToken: gt,
+              active: true,
+            };
+            if (config.agentId) driftBody.agentId = config.agentId;
+            if (forwardChatId) driftBody.forwardTelegramChatId = forwardChatId;
+            await put("/api/agents/gateway-credentials", driftBody);
+            refreshed = (await get("/api/agents/gateway-credentials")) as Record<string, unknown>;
+            activeCredential = getActiveCredential(refreshed);
+          }
           gatewayStepOk = Boolean(activeCredential);
           if (!gatewayStepOk) throw new Error("Gateway credentials are missing or inactive");
           pushStep({
@@ -2219,10 +2238,15 @@ const solanaTraderPlugin = {
 
     api.registerTool({
       name: "solana_alpha_subscribe",
-      description: "Subscribe to the SpyFly alpha signal stream via WebSocket. Signals are buffered locally and retrieved with solana_alpha_signals. The startup gate calls this automatically. Optionally set agentId and subscriberType for event-to-agent forwarding.",
+      description:
+        "Subscribe to the SpyFly alpha signal stream via WebSocket. Signals are buffered locally and retrieved with solana_alpha_signals. The startup gate calls this automatically. Optionally set agentId and subscriberType for event-to-agent forwarding. Use force=true to close an existing connection and resubscribe when the socket looks healthy but alpha_signal ingestion has stalled (zombie subscription).",
       parameters: Type.Object({
         agentId: Type.Optional(Type.String({ description: "Agent ID for event-to-agent forwarding. Uses plugin config agentId as default." })),
         subscriberType: Type.Optional(Type.String({ description: "Subscriber type: 'agent' or 'client'." })),
+        force: Type.Optional(Type.Boolean({
+          description:
+            "If true, disconnect any existing WebSocket and subscribe again. Use when resubscribe would otherwise be a no-op but signals stopped arriving.",
+        })),
       }),
       execute: wrapExecute("solana_alpha_subscribe", async (_id, params) => {
         const effectiveAgentId = (params.agentId as string | undefined) || config.agentId;
@@ -2233,7 +2257,7 @@ const solanaTraderPlugin = {
         if (effectiveSubscriberType) {
           alphaStreamManager.setSubscriberType(effectiveSubscriberType);
         }
-        return alphaStreamManager.subscribe();
+        return alphaStreamManager.subscribe({ force: params.force === true });
       }),
     });
 
@@ -2451,6 +2475,7 @@ const solanaTraderPlugin = {
         startupGate: startupGateState,
         alphaStream: {
           subscribed: alphaStreamManager.isSubscribed(),
+          ingestionStale: alphaStreamManager.isIngestionStale(),
           stats: alphaStreamManager.getStats(),
           bufferSize: alphaBuffer.getBufferSize(),
         },
@@ -3732,14 +3757,23 @@ const solanaTraderPlugin = {
           api.logger.warn(`[solana-trader] Forward probe failed: ${err instanceof Error ? err.message : String(err)}`);
         }
 
-        // Background health watchdog: periodically verify the alpha stream is
-        // subscribed and gateway credentials are still active in the orchestrator.
-        // This catches silent WS drops that slip past ping/pong and credential
-        // staleness without requiring an agent tool call to discover the problem.
+        // Background health watchdog: alpha ingestion staleness, subscription,
+        // gateway credentials, and rate-limited orchestrator→gateway forward probe.
         const WATCHDOG_INTERVAL_MS = 90_000;
+        const FORWARD_PROBE_WATCHDOG_MS = 7 * 60 * 1000;
+        const STARTUP_GATE_AFTER_PROBE_FAIL_COOLDOWN_MS = 10 * 60 * 1000;
+        let alphaStalePhase: 0 | 1 = 0;
+        // Anchor to service start so `Date.now() - 0` does not satisfy thresholds on every tick.
+        const watchdogStartedAt = Date.now();
+        let lastForwardProbeWatchdogMs = watchdogStartedAt;
+        let lastProbeFailureStartupGateMs = watchdogStartedAt;
+
         const watchdogTimer = setInterval(async () => {
-          // 1. Alpha stream liveness check
+          const now = Date.now();
+
+          // 1. Alpha: not subscribed → subscribe; else ingestion staleness → soft resubscribe then force reconnect
           if (!alphaStreamManager.isSubscribed()) {
+            alphaStalePhase = 0;
             api.logger.warn("[watchdog] Alpha stream not subscribed — resubscribing...");
             try {
               await alphaStreamManager.subscribe();
@@ -3747,9 +3781,35 @@ const solanaTraderPlugin = {
             } catch (err) {
               api.logger.error(`[watchdog] Alpha resubscribe failed: ${err instanceof Error ? err.message : String(err)}`);
             }
+          } else if (alphaStreamManager.isIngestionStale(now)) {
+            if (alphaStalePhase === 0) {
+              api.logger.warn("[watchdog] Alpha ingestion stale (no recent alpha_signal) — resending alpha_stream_subscribe");
+              if (alphaStreamManager.resendApplicationSubscribe()) {
+                alphaStalePhase = 1;
+              } else {
+                try {
+                  await alphaStreamManager.subscribe({ force: true });
+                  api.logger.info("[watchdog] Alpha force-resubscribe completed (soft send unavailable).");
+                } catch (err) {
+                  api.logger.error(`[watchdog] Alpha force-resubscribe failed: ${err instanceof Error ? err.message : String(err)}`);
+                }
+                alphaStalePhase = 0;
+              }
+            } else {
+              api.logger.warn("[watchdog] Alpha still stale after soft recovery — forcing WebSocket reconnect");
+              try {
+                await alphaStreamManager.subscribe({ force: true });
+                api.logger.info("[watchdog] Alpha force-resubscribe completed.");
+              } catch (err) {
+                api.logger.error(`[watchdog] Alpha force-resubscribe failed: ${err instanceof Error ? err.message : String(err)}`);
+              }
+              alphaStalePhase = 0;
+            }
+          } else {
+            alphaStalePhase = 0;
           }
 
-          // 2. Gateway credential liveness check
+          // 2. Gateway credential liveness (orchestrator row)
           try {
             const creds = (await get("/api/agents/gateway-credentials")) as Record<string, unknown>;
             if (!getActiveCredential(creds)) {
@@ -3758,6 +3818,24 @@ const solanaTraderPlugin = {
             }
           } catch (err) {
             api.logger.warn(`[watchdog] Gateway credential check failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+
+          // 3. Rate-limited forward probe + bounded startup gate on persistent failure
+          if (now - lastForwardProbeWatchdogMs >= FORWARD_PROBE_WATCHDOG_MS) {
+            lastForwardProbeWatchdogMs = now;
+            try {
+              const pr = await runForwardProbe({ agentId: config.agentId || "main", source: "watchdog" });
+              if (!Boolean(pr.ok)) {
+                api.logger.warn(`[watchdog] Gateway forward probe failed: ${JSON.stringify(pr)}`);
+                if (now - lastProbeFailureStartupGateMs >= STARTUP_GATE_AFTER_PROBE_FAIL_COOLDOWN_MS) {
+                  lastProbeFailureStartupGateMs = now;
+                  api.logger.warn("[watchdog] Running startup gate after forward probe failure (cooldown elapsed)");
+                  await runStartupGate({ autoFixGateway: true, force: true });
+                }
+              }
+            } catch (err) {
+              api.logger.warn(`[watchdog] Forward probe error: ${err instanceof Error ? err.message : String(err)}`);
+            }
           }
         }, WATCHDOG_INTERVAL_MS);
 
