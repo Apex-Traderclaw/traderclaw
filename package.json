@@ -17,6 +17,7 @@
   ],
   "scripts": {
     "build": "node build.mjs",
+    "test": "npm run build && node scripts/gateway-config-sync-selftest.mjs",
     "prepublishOnly": "npm run build",
     "sync-cli": "node scripts/sync-cli-version.mjs",
     "release:patch": "node scripts/release-patch.mjs"
