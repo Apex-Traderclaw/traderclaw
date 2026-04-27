@@ -1,5 +1,7 @@
 // src/bitquery-ws.ts
 var RECONNECT_DELAYS = [1e3, 2e3, 4e3, 8e3, 16e3, 3e4];
+var PING_INTERVAL_MS = 3e4;
+var PONG_TIMEOUT_MS = 1e4;
 var BitqueryStreamManager = class {
   config;
   ws = null;
@@ -98,6 +100,27 @@ var BitqueryStreamManager = class {
     }
     this.authenticated = false;
   }
+  /**
+   * Close the socket and schedule a reconnect without marking the close as
+   * intentional. Used for auth errors where we want to reconnect with a fresh
+   * token rather than leaving the socket permanently dead.
+   */
+  forceReconnect(reason) {
+    this.log("warn", `Force reconnect: ${reason}`);
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    try {
+      this.ws?.close();
+    } catch {
+    }
+    this.ws = null;
+    this.authenticated = false;
+    if (this.activeSubscriptions.size > 0) {
+      this.scheduleReconnect();
+    }
+  }
   async ensureConnected() {
     if (this.ws && this.ws.readyState === 1 && this.authenticated) return;
     if (this.connecting) {
@@ -152,11 +175,40 @@ var BitqueryStreamManager = class {
           reject(new Error("WS connection timed out"));
         }
       }, 1e4);
+      let pingInterval = null;
+      let pongTimer = null;
+      const clearKeepalive = () => {
+        if (pingInterval) {
+          clearInterval(pingInterval);
+          pingInterval = null;
+        }
+        if (pongTimer) {
+          clearTimeout(pongTimer);
+          pongTimer = null;
+        }
+      };
       ws.on("open", () => {
         clearTimeout(connectTimeout);
         this.reconnectAttempt = 0;
         this.log("info", "Connected");
+        pingInterval = setInterval(() => {
+          if (!this.ws || this.ws.readyState !== 1) return;
+          pongTimer = setTimeout(() => {
+            this.log("warn", "Pong timeout \u2014 forcing reconnect");
+            this.ws?.terminate();
+          }, PONG_TIMEOUT_MS);
+          try {
+            this.ws.ping();
+          } catch {
+          }
+        }, PING_INTERVAL_MS);
         resolve();
+      });
+      ws.on("pong", () => {
+        if (pongTimer) {
+          clearTimeout(pongTimer);
+          pongTimer = null;
+        }
       });
       ws.on("message", (data) => {
         try {
@@ -168,6 +220,7 @@ var BitqueryStreamManager = class {
       });
       ws.on("close", () => {
         clearTimeout(connectTimeout);
+        clearKeepalive();
         this.authenticated = false;
         this.log("info", "WS closed");
         this.drainPendingOnClose();
@@ -242,7 +295,7 @@ var BitqueryStreamManager = class {
           }
         }
         if (["WS_AUTH_REQUIRED", "WS_AUTH_INVALID", "ACCESS_TOKEN_EXPIRED"].includes(code)) {
-          this.close();
+          this.forceReconnect(code);
         }
         break;
       }
@@ -263,9 +316,9 @@ var BitqueryStreamManager = class {
   async resubscribeAll() {
     if (this.activeSubscriptions.size === 0) return;
     const subs = [...this.activeSubscriptions.values()];
-    this.activeSubscriptions.clear();
     this.log("info", `Re-subscribing ${subs.length} subscription(s) after reconnect`);
     for (const sub of subs) {
+      this.activeSubscriptions.delete(sub.subscriptionId);
       try {
         const result = await this.subscribe({
           templateKey: sub.templateKey,
@@ -276,6 +329,7 @@ var BitqueryStreamManager = class {
         this.log("info", `Re-subscribed ${sub.templateKey} \u2192 new id: ${result.subscriptionId}`);
       } catch (err) {
         this.log("error", `Re-subscribe failed for ${sub.templateKey}: ${err}`);
+        this.activeSubscriptions.set(sub.subscriptionId, sub);
       }
     }
   }

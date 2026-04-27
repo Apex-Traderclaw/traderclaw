@@ -1,5 +1,9 @@
 // src/alpha-ws.ts
 var RECONNECT_DELAYS = [1e3, 2e3, 4e3, 8e3, 16e3, 3e4];
+var PING_INTERVAL_MS = 3e4;
+var PONG_TIMEOUT_MS = 1e4;
+var ALPHA_INGESTION_STALE_MS = 20 * 60 * 1e3;
+var ALPHA_STALE_GRACE_AFTER_CONNECT_MS = 3 * 60 * 1e3;
 var AlphaStreamManager = class {
   config;
   ws = null;
@@ -17,9 +21,49 @@ var AlphaStreamManager = class {
   constructor(config) {
     this.config = config;
   }
-  async subscribe() {
-    if (this.subscribed && this.ws && this.ws.readyState === 1) {
+  /**
+   * @param opts.force If true, drop the existing WebSocket (when connected) and subscribe again.
+   * Use when the socket looks healthy but alpha_signal delivery may have stalled.
+   */
+  async subscribe(opts = {}) {
+    const force = Boolean(opts.force);
+    if (!force && this.subscribed && this.ws && this.ws.readyState === 1) {
       return { subscribed: true, premiumAccess: this.premiumAccess, tier: this.tier };
+    }
+    if (force && this.ws) {
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      const oldWs = this.ws;
+      this.intentionalClose = true;
+      this.log("info", "Force subscribe: closing WebSocket for clean reconnect");
+      await new Promise((resolve) => {
+        if (oldWs.readyState === 3) {
+          resolve();
+          return;
+        }
+        const t = setTimeout(resolve, 5e3);
+        oldWs.once("close", () => {
+          clearTimeout(t);
+          resolve();
+        });
+        try {
+          if (oldWs.readyState === 1 || oldWs.readyState === 0) {
+            oldWs.close();
+          } else {
+            clearTimeout(t);
+            resolve();
+          }
+        } catch {
+          clearTimeout(t);
+          resolve();
+        }
+      });
+      this.ws = null;
+      this.subscribed = false;
+      this.authenticated = false;
+      this.intentionalClose = false;
     }
     this.intentionalClose = false;
     await this.connect();
@@ -36,6 +80,26 @@ var AlphaStreamManager = class {
         reject(new Error("Alpha stream subscription timed out after 15 seconds"));
       }, 15e3);
     });
+  }
+  /**
+   * True when the socket reports subscribed but no alpha_signal has been received for
+   * {@link ALPHA_INGESTION_STALE_MS} (after {@link ALPHA_STALE_GRACE_AFTER_CONNECT_MS}).
+   */
+  isIngestionStale(now = Date.now()) {
+    if (!this.isSubscribed()) return false;
+    const uptime = now - this.connectedAt;
+    if (uptime < ALPHA_STALE_GRACE_AFTER_CONNECT_MS) return false;
+    const lastActivity = this.lastEventTs > 0 ? this.lastEventTs : this.connectedAt;
+    return now - lastActivity >= ALPHA_INGESTION_STALE_MS;
+  }
+  /**
+   * Re-send alpha_stream_subscribe on the existing connection (soft recovery).
+   * @returns true if the message was sent
+   */
+  resendApplicationSubscribe() {
+    if (!this.authenticated || !this.ws || this.ws.readyState !== 1) return false;
+    this.sendAlphaSubscribe();
+    return true;
   }
   async unsubscribe() {
     this.intentionalClose = true;
@@ -110,12 +174,41 @@ var AlphaStreamManager = class {
           reject(new Error("WebSocket connection timed out"));
         }
       }, 1e4);
+      let pingInterval = null;
+      let pongTimer = null;
+      const clearKeepalive = () => {
+        if (pingInterval) {
+          clearInterval(pingInterval);
+          pingInterval = null;
+        }
+        if (pongTimer) {
+          clearTimeout(pongTimer);
+          pongTimer = null;
+        }
+      };
       this.ws.on("open", () => {
         clearTimeout(connectTimeout);
         this.connectedAt = Date.now();
         this.reconnectAttempt = 0;
         this.log("info", "WebSocket connected, waiting for server handshake...");
+        pingInterval = setInterval(() => {
+          if (!this.ws || this.ws.readyState !== 1) return;
+          pongTimer = setTimeout(() => {
+            this.log("warn", "Pong timeout \u2014 forcing reconnect");
+            this.ws?.terminate();
+          }, PONG_TIMEOUT_MS);
+          try {
+            this.ws.ping();
+          } catch {
+          }
+        }, PING_INTERVAL_MS);
         resolve();
+      });
+      this.ws.on("pong", () => {
+        if (pongTimer) {
+          clearTimeout(pongTimer);
+          pongTimer = null;
+        }
       });
       this.ws.on("message", (data) => {
         try {
@@ -127,6 +220,7 @@ var AlphaStreamManager = class {
       });
       this.ws.on("close", () => {
         clearTimeout(connectTimeout);
+        clearKeepalive();
         this.subscribed = false;
         this.authenticated = false;
         this.log("info", "WebSocket closed");
@@ -234,5 +328,7 @@ var AlphaStreamManager = class {
 };
 
 export {
+  ALPHA_INGESTION_STALE_MS,
+  ALPHA_STALE_GRACE_AFTER_CONNECT_MS,
   AlphaStreamManager
 };
