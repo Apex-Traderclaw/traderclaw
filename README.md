@@ -113,6 +113,8 @@ Run mandatory startup sequence and report pass/fail for each:
 6) solana_killswitch_status
 ```
 
+If alpha signals stop but the gateway looks healthy, call `solana_alpha_subscribe({ force: true })` or inspect `solana_runtime_status` (alpha `stats.lastEventTs`, `subscribed`). The plugin also runs a background watchdog for stale ingestion and gateway forward probes.
+
 ### Non-interactive setup
 
 ```bash
@@ -379,7 +381,7 @@ Pay-as-you-go or Basic tier is required for the read-only social intel tools.
 ### Alpha Signal Processing
 | Tool | Description |
 |------|-------------|
-| `solana_alpha_subscribe` | Subscribe to alpha signal WebSocket feed |
+| `solana_alpha_subscribe` | Subscribe to alpha WebSocket feed (`force: true` reconnects if ingestion stalls) |
 | `solana_alpha_unsubscribe` | Unsubscribe from alpha feed |
 | `solana_alpha_signals` | Retrieve buffered alpha signals |
 | `solana_alpha_history` | Query historical alpha signals |
@@ -413,7 +415,7 @@ Pay-as-you-go or Basic tier is required for the read-only social intel tools.
 | `solana_gateway_forward_probe` | Probe gateway forwarding connectivity |
 | `solana_agent_sessions` | View agent session diagnostics |
 | `solana_startup_gate` | Run startup gate sequence |
-| `solana_runtime_status` | Get runtime status diagnostics |
+| `solana_runtime_status` | Runtime diagnostics (startup gate, alpha stats / `lastEventTs`, last forward probe) |
 
 ### Local Durable State
 | Tool | Description |

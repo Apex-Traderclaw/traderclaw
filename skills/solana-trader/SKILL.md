@@ -162,7 +162,7 @@ After startup completes, deliver the welcome ceremony:
 
 1. `solana_system_status()` — verify orchestrator reachable
 2. `solana_gateway_credentials_get()` — verify gateway registered
-3. `solana_alpha_subscribe({ agentId: "main" })` — start signal stream
+3. `solana_alpha_subscribe({ agentId: "main" })` — start signal stream (`force: true` if the socket looks live but alpha ingestion stalled)
 4. `solana_capital_status()` + `solana_positions()` + `solana_killswitch_status()` — portfolio health
 5. `solana_gateway_forward_probe({ agentId: "main" })` — verify wake path
 
