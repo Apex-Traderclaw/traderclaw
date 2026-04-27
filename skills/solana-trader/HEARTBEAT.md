@@ -60,9 +60,7 @@ Call `solana_scan_launches` for new launches and `solana_scan_hot_pairs` for hot
 
 ## STEP 1.5: ALPHA SIGNALS
 
-Call `solana_alpha_signals` to poll the buffer. Score and classify each signal by priority. Check `calledAgainCount` — multiple independent callers on same token = high conviction.
-
-**Ingestion health:** If the buffer stays empty but the session should be live, check `solana_runtime_status` (alpha `stats.lastEventTs`, `subscribed`). When the WebSocket looks subscribed but signals stopped arriving, call `solana_alpha_subscribe({ force: true })` or unsubscribe then subscribe again.
+Call `solana_alpha_signals` to poll the buffer. Score and classify each signal by priority. Check `calledAgainCount` — multiple independent callers on same token = high conviction. If buffer stays empty while live, `solana_runtime_status` then `solana_alpha_subscribe({ force: true })` or unsub+subscribe.
 
 **Source trust check (mandatory before acting on any signal):**
 ```
