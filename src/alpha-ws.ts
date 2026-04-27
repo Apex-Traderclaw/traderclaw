@@ -22,6 +22,11 @@ const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
 const PING_INTERVAL_MS = 30_000;
 const PONG_TIMEOUT_MS = 10_000;
 
+/** No alpha_signal for this long after grace → treat ingestion as stale (watchdog may recover). */
+export const ALPHA_INGESTION_STALE_MS = 20 * 60 * 1000;
+/** Ignore staleness until the connection has been up this long (bootstrap + quiet startup). */
+export const ALPHA_STALE_GRACE_AFTER_CONNECT_MS = 3 * 60 * 1000;
+
 export class AlphaStreamManager {
   private config: AlphaWSConfig;
   private ws: import("ws") | null = null;
@@ -41,9 +46,51 @@ export class AlphaStreamManager {
     this.config = config;
   }
 
-  async subscribe(): Promise<{ subscribed: boolean; premiumAccess: boolean; tier: string }> {
-    if (this.subscribed && this.ws && this.ws.readyState === 1) {
+  /**
+   * @param opts.force If true, drop the existing WebSocket (when connected) and subscribe again.
+   * Use when the socket looks healthy but alpha_signal delivery may have stalled.
+   */
+  async subscribe(opts: { force?: boolean } = {}): Promise<{ subscribed: boolean; premiumAccess: boolean; tier: string }> {
+    const force = Boolean(opts.force);
+
+    if (!force && this.subscribed && this.ws && this.ws.readyState === 1) {
       return { subscribed: true, premiumAccess: this.premiumAccess, tier: this.tier };
+    }
+
+    if (force && this.ws) {
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      const oldWs = this.ws;
+      this.intentionalClose = true;
+      this.log("info", "Force subscribe: closing WebSocket for clean reconnect");
+      await new Promise<void>((resolve) => {
+        if (oldWs.readyState === 3) {
+          resolve();
+          return;
+        }
+        const t = setTimeout(resolve, 5000);
+        oldWs.once("close", () => {
+          clearTimeout(t);
+          resolve();
+        });
+        try {
+          if (oldWs.readyState === 1 || oldWs.readyState === 0) {
+            oldWs.close();
+          } else {
+            clearTimeout(t);
+            resolve();
+          }
+        } catch {
+          clearTimeout(t);
+          resolve();
+        }
+      });
+      this.ws = null;
+      this.subscribed = false;
+      this.authenticated = false;
+      this.intentionalClose = false;
     }
 
     this.intentionalClose = false;
@@ -63,6 +110,28 @@ export class AlphaStreamManager {
         reject(new Error("Alpha stream subscription timed out after 15 seconds"));
       }, 15000);
     });
+  }
+
+  /**
+   * True when the socket reports subscribed but no alpha_signal has been received for
+   * {@link ALPHA_INGESTION_STALE_MS} (after {@link ALPHA_STALE_GRACE_AFTER_CONNECT_MS}).
+   */
+  isIngestionStale(now: number = Date.now()): boolean {
+    if (!this.isSubscribed()) return false;
+    const uptime = now - this.connectedAt;
+    if (uptime < ALPHA_STALE_GRACE_AFTER_CONNECT_MS) return false;
+    const lastActivity = this.lastEventTs > 0 ? this.lastEventTs : this.connectedAt;
+    return now - lastActivity >= ALPHA_INGESTION_STALE_MS;
+  }
+
+  /**
+   * Re-send alpha_stream_subscribe on the existing connection (soft recovery).
+   * @returns true if the message was sent
+   */
+  resendApplicationSubscribe(): boolean {
+    if (!this.authenticated || !this.ws || this.ws.readyState !== 1) return false;
+    this.sendAlphaSubscribe();
+    return true;
   }
 
   async unsubscribe(): Promise<{ unsubscribed: boolean }> {
