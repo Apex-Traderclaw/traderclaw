@@ -171,6 +171,53 @@ function extractJson(raw) {
 /** Env vars passed to every openclaw CLI invocation to suppress colour output. */
 const NO_COLOR_ENV = { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" };
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** True when OpenClaw / ClawHub reports HTTP 429 or rate limiting (retry installs instead of failing). */
+function isOpenClawClawHubRateLimit(combinedOutput) {
+  const t = stripAnsi(String(combinedOutput || "")).toLowerCase();
+  return /\b429\b/.test(t) || t.includes("rate limit") || t.includes("too many requests");
+}
+
+/**
+ * Runs `openclaw plugins install … --force` with backoff retries when ClawHub returns 429.
+ */
+async function runOpenclawPluginsInstallWithRetry(installArgs, installSpec) {
+  const maxAttempts = 5;
+  const baseDelayMs = 12000;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const r = await execFileAsync("openclaw", installArgs, {
+        maxBuffer: 15 * 1024 * 1024,
+        env: NO_COLOR_ENV,
+      });
+      if (r.stdout) process.stdout.write(r.stdout);
+      if (r.stderr) process.stderr.write(r.stderr);
+      return;
+    } catch (e) {
+      const stdout =
+        typeof e.stdout === "string" ? e.stdout : Buffer.isBuffer(e.stdout) ? e.stdout.toString("utf-8") : "";
+      const stderr =
+        typeof e.stderr === "string" ? e.stderr : Buffer.isBuffer(e.stderr) ? e.stderr.toString("utf-8") : "";
+      const combined = `${stdout}${stderr}${e.message || ""}`;
+      if (stdout) process.stdout.write(stdout);
+      if (stderr) process.stderr.write(stderr);
+      const retryable = isOpenClawClawHubRateLimit(combined);
+      if (attempt < maxAttempts && retryable) {
+        const waitMs = Math.min(baseDelayMs * 2 ** (attempt - 1), 180000);
+        printWarn(
+          `  ClawHub rate limited while installing ${installSpec} (attempt ${attempt}/${maxAttempts}). Waiting ${Math.round(waitMs / 1000)}s, then retrying…`,
+        );
+        await delay(waitMs);
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
 function getCommandOutput(cmd) {
   try {
     return execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], shell: true, maxBuffer: 50 * 1024 * 1024, env: NO_COLOR_ENV }).trim();
@@ -4361,9 +4408,27 @@ async function cmdUpdate(args) {
                 `\n  Forcing full integration: openclaw plugins install ${installSpec} --force\n` +
                   "  (extension on disk + plugins.installs / integrity.)\n",
               );
-              execFileSync("openclaw", installArgs, { stdio: "inherit" });
+              await runOpenclawPluginsInstallWithRetry(installArgs, installSpec);
               printSuccess(`\n  Forced install complete: ${installSpec}.`);
-            } catch {
+            } catch (e) {
+              const out =
+                typeof e.stdout === "string"
+                  ? e.stdout
+                  : Buffer.isBuffer(e.stdout)
+                    ? e.stdout.toString("utf-8")
+                    : "";
+              const err =
+                typeof e.stderr === "string"
+                  ? e.stderr
+                  : Buffer.isBuffer(e.stderr)
+                    ? e.stderr.toString("utf-8")
+                    : "";
+              const blob = `${out}${err}${e.message || ""}`;
+              if (isOpenClawClawHubRateLimit(blob)) {
+                printWarn(
+                  `  ClawHub rate limit persisted after retries — plugin files may still match the version from "plugins update" until this step succeeds.`,
+                );
+              }
               printError(`"openclaw plugins install ${installSpec} --force" failed. Try manually:`);
               print(`  openclaw plugins install ${installSpec} --force`);
               process.exit(1);
