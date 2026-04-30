@@ -1533,6 +1533,7 @@ function fallbackModelForProvider(provider) {
   if (provider === "moonshot") return "moonshot/kimi-k2";
   if (provider === "cerebras") return "cerebras/llama-4-scout-17b-16e-instruct";
   if (provider === "qwen") return "qwen/qwen3-235b-a22b";
+  if (provider === "cli-cloud") return "cli-cloud/gemma-e4b";
   return `${provider}/default`;
 }
 
@@ -1552,6 +1553,7 @@ function providerEnvKey(provider) {
   if (provider === "moonshot") return "MOONSHOT_API_KEY";
   if (provider === "cerebras") return "CEREBRAS_API_KEY";
   if (provider === "qwen") return "DASHSCOPE_API_KEY";
+  if (provider === "cli-cloud") return "CLI_CLOUD_API_KEY";
   return "";
 }
 
@@ -1702,8 +1704,9 @@ function configureOpenClawLlmProvider({ provider, model, credential }, configPat
   if (!config.env || typeof config.env !== "object") config.env = {};
   config.env[envKey] = credential;
 
-  // Clean stale/broken provider objects from previous buggy writes.
-  if (config.models && config.models.providers && config.models.providers[provider]) {
+  // Clean stale/broken provider objects from previous buggy writes (skip custom providers that need their entry).
+  const CUSTOM_PROVIDERS_WITH_BASEURL = ["cli-cloud"];
+  if (!CUSTOM_PROVIDERS_WITH_BASEURL.includes(provider) && config.models && config.models.providers && config.models.providers[provider]) {
     delete config.models.providers[provider];
     if (Object.keys(config.models.providers).length === 0) {
       delete config.models.providers;
@@ -1711,6 +1714,13 @@ function configureOpenClawLlmProvider({ provider, model, credential }, configPat
     if (Object.keys(config.models).length === 0) {
       delete config.models;
     }
+  }
+
+  // Write baseUrl for custom OpenAI-compatible providers.
+  if (provider === "cli-cloud") {
+    if (!config.models) config.models = {};
+    if (!config.models.providers) config.models.providers = {};
+    config.models.providers["cli-cloud"] = { baseUrl: "https://app.cli.cloud/llm/v1" };
   }
 
   if (!config.agents) config.agents = {};
@@ -2224,6 +2234,7 @@ export class InstallerStepEngine {
   }
 
   async configureLlmStep() {
+    const CUSTOM_PROVIDERS_NO_PROBE = ["cli-cloud"];
     const provider = String(this.options.llmProvider || "").trim();
     const requestedModel = String(this.options.llmModel || "").trim();
     const credential = String(this.options.llmCredential || "").trim();
@@ -2293,15 +2304,19 @@ export class InstallerStepEngine {
         onEvent: (evt) => this.emitLog("configure_llm", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
       });
 
-      try {
-        await runCommandWithEvents("openclaw", ["models", "status", "--check", "--probe-provider", provider], {
-          onEvent: (evt) => this.emitLog("configure_llm", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
-        });
-      } catch (err) {
-        const details = `${err?.stderr || ""}\n${err?.stdout || ""}\n${err?.message || ""}`.trim();
-        throw new Error(
-          `LLM provider validation failed for '${provider}'. Check OAuth login and model, then retry.\n${details}`,
-        );
+      if (CUSTOM_PROVIDERS_NO_PROBE.includes(provider)) {
+        this.emitLog("configure_llm", "info", `Skipping openclaw provider probe for custom provider '${provider}'.`);
+      } else {
+        try {
+          await runCommandWithEvents("openclaw", ["models", "status", "--check", "--probe-provider", provider], {
+            onEvent: (evt) => this.emitLog("configure_llm", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
+          });
+        } catch (err) {
+          const details = `${err?.stderr || ""}\n${err?.stdout || ""}\n${err?.message || ""}`.trim();
+          throw new Error(
+            `LLM provider validation failed for '${provider}'. Check OAuth login and model, then retry.\n${details}`,
+          );
+        }
       }
 
       return { configured: true, provider, model, configPath: saved.configPath, authMode: "oauth" };
@@ -2326,15 +2341,19 @@ export class InstallerStepEngine {
       onEvent: (evt) => this.emitLog("configure_llm", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
     });
 
-    try {
-      await runCommandWithEvents("openclaw", ["models", "status", "--check", "--probe-provider", provider], {
-        onEvent: (evt) => this.emitLog("configure_llm", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
-      });
-    } catch (err) {
-      const details = `${err?.stderr || ""}\n${err?.stdout || ""}\n${err?.message || ""}`.trim();
-      throw new Error(
-        `LLM provider validation failed for '${provider}'. Check credential/model and retry.\n${details}`,
-      );
+    if (CUSTOM_PROVIDERS_NO_PROBE.includes(provider)) {
+      this.emitLog("configure_llm", "info", `Skipping openclaw provider probe for custom provider '${provider}'.`);
+    } else {
+      try {
+        await runCommandWithEvents("openclaw", ["models", "status", "--check", "--probe-provider", provider], {
+          onEvent: (evt) => this.emitLog("configure_llm", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
+        });
+      } catch (err) {
+        const details = `${err?.stderr || ""}\n${err?.stdout || ""}\n${err?.message || ""}`.trim();
+        throw new Error(
+          `LLM provider validation failed for '${provider}'. Check credential/model and retry.\n${details}`,
+        );
+      }
     }
 
     return { configured: true, provider, model, configPath: saved.configPath, authMode: "api_key" };
