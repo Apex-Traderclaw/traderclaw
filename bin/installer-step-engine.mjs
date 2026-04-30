@@ -1720,7 +1720,7 @@ function configureOpenClawLlmProvider({ provider, model, credential }, configPat
   if (provider === "cli-cloud") {
     if (!config.models) config.models = {};
     if (!config.models.providers) config.models.providers = {};
-    config.models.providers["cli-cloud"] = { baseUrl: "https://app.cli.cloud/llm/v1" };
+    config.models.providers["cli-cloud"] = { baseUrl: "https://app.cli.cloud/llm/v1", models: [] };
   }
 
   if (!config.agents) config.agents = {};
