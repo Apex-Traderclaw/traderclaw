@@ -3,6 +3,9 @@
   "name": "Solana Trader",
   "description": "Public edition V1-Upgraded — Solana trading agent with X/Twitter social intel (read-only, no posting), standardized tool envelopes, intelligence lab, prompt injection scrubbing, and split skill architecture. Full V1 trading capabilities plus 17 new intelligence tools.",
   "enabledByDefault": true,
+  "activation": {
+    "onStartup": true
+  },
   "skills": ["skills/solana-trader"],
   "configSchema": {
     "type": "object",
