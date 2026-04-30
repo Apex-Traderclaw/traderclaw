@@ -71,8 +71,8 @@ traderclaw setup
 ```
 
 The setup wizard will:
-- Ask for your API key (from [traderclaw.ai/register](https://traderclaw.ai/register))
-- Connect to the orchestrator and validate your key
+- Ask for your API key (leave blank if any)
+- Connect to the orchestrator and validate your key (or create new one)
 - Create or select a trading wallet
 - Write the plugin configuration automatically
 
