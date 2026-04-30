@@ -198,16 +198,26 @@ export async function ensureLinuxGatewayPersistence(options = {}) {
   let unitEnabled = false;
   try {
     await runSpawn("systemctl", ["--user", "daemon-reload"]);
-    await runSpawn("systemctl", ["--user", "enable", unitName]);
+    await runSpawn("systemctl", ["--user", "enable", "--now", unitName]);
     unitEnabled = true;
-    emit("info", `systemd user unit enabled: ${unitName}`);
+    emit("info", `systemd user unit enabled and started: ${unitName}`);
   } catch (err) {
     const msg = err?.stderr || err?.message || String(err);
-    errors.push(`systemctl --user enable: ${msg}`);
+    errors.push(`systemctl --user enable --now: ${msg}`);
     emit(
       "warn",
-      `Could not enable user unit ${unitName} (${msg.trim()}). If the gateway was installed, try: systemctl --user enable ${unitName}`,
+      `Could not enable/start user unit ${unitName} (${msg.trim()}). If the gateway was installed, try: systemctl --user enable --now ${unitName}`,
     );
+  }
+
+  let unitActive = false;
+  try {
+    await runSpawn("systemctl", ["--user", "is-active", unitName]);
+    unitActive = true;
+    emit("info", `${unitName} is active.`);
+  } catch {
+    // is-active exits non-zero when inactive; not a hard error
+    emit("info", `${unitName} is not yet active (may need: openclaw gateway restart).`);
   }
 
   return {
@@ -215,6 +225,7 @@ export async function ensureLinuxGatewayPersistence(options = {}) {
     linger: lingerOk,
     unitName,
     unitEnabled,
+    unitActive,
     errors: errors.length ? errors : undefined,
   };
 }
