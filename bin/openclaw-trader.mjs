@@ -6,7 +6,7 @@ import { dirname, join } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { homedir } from "os";
 import { randomUUID, createPrivateKey, sign as cryptoSign } from "crypto";
-import { execFile, execFileSync, execSync } from "child_process";
+import { execFile, execFileSync, execSync, spawnSync } from "child_process";
 import { promisify } from "util";
 import { createServer } from "http";
 import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
@@ -4327,10 +4327,10 @@ Setup options:
   --show-wallet-private-key  Reveal full wallet private key in setup output
   --signup           Force signup flow (create new account)
   --write-gateway-env  Write TRADERCLAW_WALLET_PRIVATE_KEY to a systemd EnvironmentFile for the user gateway (Linux)
-  --no-ensure-gateway-persistent  Skip automatic Linux loginctl linger + user unit enable after setup
+  --no-ensure-gateway-persistent  Skip automatic Linux loginctl linger + systemctl --user enable --now after setup
 
 Gateway subcommands:
-  gateway ensure-persistent   Linux: enable loginctl linger and systemd --user unit for OpenClaw gateway
+  gateway ensure-persistent   Linux: enable loginctl linger and systemctl --user enable --now for OpenClaw gateway
 
 Login options:
   --wallet-private-key <k>  Base58 key for wallet proof (runtime only, never saved). Optional in a
@@ -4535,17 +4535,46 @@ async function cmdUpdate(args) {
   }
 
   if (dryRun) {
-    print(`\n  [dry-run] Would run: openclaw gateway restart\n`);
+    print(`\n  [dry-run] Would run: systemctl --user enable --now + restart (Linux) or openclaw gateway restart\n`);
   } else {
-    if (!commandExists("openclaw")) {
-      printWarn("\n  Skipping gateway restart: openclaw not in PATH. After fixing PATH: openclaw gateway restart");
-    } else {
+    const { isLinuxGatewayPersistenceEligible, ensureLinuxGatewayPersistence, resolveGatewayUnitNameFromStatusJson, readOpenclawGatewayStatusJson } = await import("./gateway-persistence-linux.mjs");
+    if (isLinuxGatewayPersistenceEligible()) {
+      print("\n  Gateway persistence (Linux)...\n");
+      let unitName = "openclaw-gateway.service";
+      try {
+        const statusJson = readOpenclawGatewayStatusJson();
+        unitName = resolveGatewayUnitNameFromStatusJson(statusJson);
+        await ensureLinuxGatewayPersistence({
+          emitLog: (level, text) => {
+            if (level === "warn") printWarn(`  ${text}`);
+            else printInfo(`  ${text}`);
+          },
+        });
+      } catch (err) {
+        printWarn(`  Gateway persistence (optional): ${err.message || err}`);
+      }
       print("\n  Restarting gateway...\n");
       try {
-        execFileSync("openclaw", ["gateway", "restart"], { stdio: "inherit" });
-        printSuccess("  Gateway restarted.");
-      } catch {
-        printWarn("  Gateway restart returned non-zero. Try manually: openclaw gateway restart");
+        const r = spawnSync("systemctl", ["--user", "restart", unitName], { stdio: "inherit" });
+        if (r.status === 0) {
+          printSuccess(`  Gateway restarted (systemctl --user restart ${unitName}).`);
+        } else {
+          printWarn(`  systemctl --user restart returned ${r.status}. Try: systemctl --user restart ${unitName}`);
+        }
+      } catch (err) {
+        printWarn(`  systemctl --user restart: ${err.message || err}. Try manually: systemctl --user restart ${unitName}`);
+      }
+    } else {
+      if (!commandExists("openclaw")) {
+        printWarn("\n  Skipping gateway restart: openclaw not in PATH. After fixing PATH: openclaw gateway restart");
+      } else {
+        print("\n  Restarting gateway...\n");
+        try {
+          execFileSync("openclaw", ["gateway", "restart"], { stdio: "inherit" });
+          printSuccess("  Gateway restarted.");
+        } catch {
+          printWarn("  Gateway restart returned non-zero. Try manually: openclaw gateway restart");
+        }
       }
     }
   }
