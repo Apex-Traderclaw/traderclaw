@@ -672,15 +672,23 @@ async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorU
   // Our dist/index.js triggers it because process.env (wallet key) and fetch() (web_fetch_url tool)
   // appear within the scanner's proximity window in the bundle, even though they are in separate
   // unrelated functions with no data flow between them.
-  onEvent({
-    type: "stdout",
-    text: "Note: passing --dangerously-force-unsafe-install to bypass a known OpenClaw scanner false positive.\n" +
-      "The plugin reads an env var (wallet signing key) and includes a web-fetch tool — two unrelated functions\n" +
-      "that happen to be close in the compiled bundle. No credential harvesting occurs.",
-  });
+  let scannerWarningExplained = false;
+  const onEventWithScannerNote = (evt) => {
+    onEvent(evt);
+    const text = evt.text || "";
+    if (!scannerWarningExplained && (text.includes("dangerous code patterns") || text.includes("credential harvesting"))) {
+      scannerWarningExplained = true;
+      onEvent({
+        type: "stdout",
+        text: "  ^ Known false positive: the plugin reads an env var (wallet signing key) and includes a\n" +
+          "    web-fetch tool — two unrelated functions that happen to be close in the compiled bundle.\n" +
+          "    No credential harvesting occurs. Bypassing with --dangerously-force-unsafe-install.",
+      });
+    }
+  };
   const installArgs = ["plugins", "install", pluginInstallSpec, "--dangerously-force-unsafe-install"];
   try {
-    await runCommandWithEvents("openclaw", installArgs, { onEvent });
+    await runCommandWithEvents("openclaw", installArgs, { onEvent: onEventWithScannerNote });
   } catch (err) {
     if (!isPluginAlreadyExistsError(err, modeConfig.pluginId)) {
       throw err;
@@ -689,7 +697,7 @@ async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorU
     if (!recoveredExistingDir) {
       throw err;
     }
-    await runCommandWithEvents("openclaw", installArgs, { onEvent });
+    await runCommandWithEvents("openclaw", installArgs, { onEvent: onEventWithScannerNote });
   }
 
   // Manifest is on disk now; merge orchestrator URL before enable (plugin config schema may require it).
