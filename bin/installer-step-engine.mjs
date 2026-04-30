@@ -672,6 +672,12 @@ async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorU
   // Our dist/index.js triggers it because process.env (wallet key) and fetch() (web_fetch_url tool)
   // appear within the scanner's proximity window in the bundle, even though they are in separate
   // unrelated functions with no data flow between them.
+  onEvent({
+    type: "stdout",
+    text: "Note: passing --dangerously-force-unsafe-install to bypass a known OpenClaw scanner false positive.\n" +
+      "The plugin reads an env var (wallet signing key) and includes a web-fetch tool — two unrelated functions\n" +
+      "that happen to be close in the compiled bundle. No credential harvesting occurs.",
+  });
   const installArgs = ["plugins", "install", pluginInstallSpec, "--dangerously-force-unsafe-install"];
   try {
     await runCommandWithEvents("openclaw", installArgs, { onEvent });
