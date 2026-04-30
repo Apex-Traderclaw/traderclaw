@@ -2236,7 +2236,7 @@ async function loadWizardLlmCatalogAsync() {
       },
       {
         id: "cli-cloud",
-        models: [{ id: "cli-cloud/gemma-e4b", name: "Gemma E4B (personal partner endpoint)" }],
+        models: [{ id: "cli-cloud/gemma-e4b", name: "Gemma E4B" }],
       },
     ],
     generatedAt: new Date().toISOString(),
@@ -2348,7 +2348,7 @@ function wizardHtml(defaults) {
           <label>LLM API key or token (required)</label>
           <input id="llmCredential" type="password" placeholder="Paste the credential for the selected provider/model" />
           <p class="muted">Written to OpenClaw <code>config.env</code> for the selected provider. If you do not choose a model manually, the installer picks a safe default.</p>
-          <p class="muted hidden" id="llmCliCloudHint">Routes to <code>https://app.cli.cloud/llm/v1</code> — paste your personal CLI Cloud API key above.</p>
+          <p class="muted hidden" id="llmCliCloudHint">Routes to <code>https://app.cli.cloud/llm/v1</code> — paste your CLI Cloud API key above.</p>
         </div>
         <div style="margin-top:12px;" id="llmOauthBlock" class="hidden">
           <p class="muted" style="margin-bottom:12px;">
