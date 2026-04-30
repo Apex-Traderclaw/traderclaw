@@ -346,7 +346,7 @@ var SessionManager = class {
       const walletPrivateKey = (await this.walletPrivateKeyProvider?.())?.trim();
       if (!walletPrivateKey) {
         throw new Error(
-          `Wallet proof required but no walletPrivateKey configured. This account already has a wallet \u2014 set TRADERCLAW_WALLET_PRIVATE_KEY in the OpenClaw gateway process environment (e.g. systemd), not only in an SSH shell, then restart the gateway. The key is used only for local signing and is never sent to the orchestrator. Do not store private keys in openclaw.json. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`
+          `Wallet proof required but the gateway cannot sign interactively \u2014 no wallet key is wired into this process. This account already has a wallet. On the host that runs OpenClaw (with a normal terminal / TTY), run: traderclaw login \u2014 complete wallet proof when prompted \u2014 then openclaw gateway restart. That persists new session tokens without putting a private key in the gateway configuration. Do not paste private keys into openclaw.json. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`
         );
       }
       walletPubKey = challenge.walletPublicKey || this.walletPublicKey || void 0;
@@ -376,7 +376,7 @@ var SessionManager = class {
     await this.unifiedRefresh();
     if (!this.accessToken) {
       throw new Error(
-        `Session expired and could not be refreshed. Re-authentication required. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`
+        `Session expired and could not be refreshed. Re-authentication required. On the gateway host try: traderclaw login \u2014 then openclaw gateway restart. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`
       );
     }
     return this.accessToken;
@@ -387,7 +387,7 @@ var SessionManager = class {
     await this.unifiedRefresh();
     if (!this.accessToken) {
       throw new Error(
-        `Session expired and could not be refreshed. Re-authentication required. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`
+        `Session expired and could not be refreshed. Re-authentication required. On the gateway host try: traderclaw login \u2014 then openclaw gateway restart. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`
       );
     }
     return this.accessToken;
