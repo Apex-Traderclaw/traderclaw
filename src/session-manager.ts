@@ -447,9 +447,9 @@ export class SessionManager {
       const walletPrivateKey = (await this.walletPrivateKeyProvider?.())?.trim();
       if (!walletPrivateKey) {
         throw new Error(
-          "Wallet proof required but no walletPrivateKey configured. " +
-            "This account already has a wallet — set TRADERCLAW_WALLET_PRIVATE_KEY in the OpenClaw gateway process environment (e.g. systemd), not only in an SSH shell, then restart the gateway. " +
-            "The key is used only for local signing and is never sent to the orchestrator. Do not store private keys in openclaw.json. " +
+          "Wallet proof required but the gateway cannot sign interactively — no wallet key is wired into this process. " +
+            "This account already has a wallet. On the host that runs OpenClaw (with a normal terminal / TTY), run: traderclaw login — complete wallet proof when prompted — then openclaw gateway restart. " +
+            "That persists new session tokens without putting a private key in the gateway configuration. Do not paste private keys into openclaw.json. " +
             `Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`,
         );
       }
@@ -491,7 +491,7 @@ export class SessionManager {
 
     if (!this.accessToken) {
       throw new Error(
-        `Session expired and could not be refreshed. Re-authentication required. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`,
+        `Session expired and could not be refreshed. Re-authentication required. On the gateway host try: traderclaw login — then openclaw gateway restart. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`,
       );
     }
 
@@ -506,7 +506,7 @@ export class SessionManager {
 
     if (!this.accessToken) {
       throw new Error(
-        `Session expired and could not be refreshed. Re-authentication required. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`,
+        `Session expired and could not be refreshed. Re-authentication required. On the gateway host try: traderclaw login — then openclaw gateway restart. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`,
       );
     }
 

@@ -163,7 +163,7 @@ var AlphaStreamManager = class {
     this.log("info", `Connecting to alpha stream: ${this.config.wsUrl}`);
     return new Promise((resolve, reject) => {
       try {
-        this.ws = new WebSocket(url);
+        this.ws = new WebSocket(url, { perMessageDeflate: false, handshakeTimeout: 1e4 });
       } catch (err) {
         reject(err);
         return;

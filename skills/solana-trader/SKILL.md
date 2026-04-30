@@ -26,15 +26,15 @@ You interact with the orchestrator **exclusively through plugin tools** (e.g. `s
 
 ### Official TraderClaw documentation — use before improvising fixes
 
-**Whenever** the user hits auth/session/wallet-proof errors, your **first** actionable step is to direct them to:
+**Whenever** the user hits auth/session/wallet-proof errors, your **first** actionable steps on the **machine that runs OpenClaw** (interactive terminal / TTY) are: run **`traderclaw login`** (complete wallet proof when prompted), then **`openclaw gateway restart`**. Then point them to:
 
 https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-auth-errors-or-the-agent-logged-out
 
 ### Wallet proof vs signup — do not conflate these
 
 - **Wallet proof** is NOT account signup. It is a cryptographic step proving wallet control.
-- **`traderclaw login`** reuses the saved refresh token when valid.
-- **OpenClaw gateway ≠ your SSH shell.** Exporting env vars in SSH does NOT inject them into the gateway service process.
+- **`traderclaw login`** refreshes the session when possible and runs the challenge flow when needed; the gateway process itself cannot prompt for a signing key.
+- **OpenClaw gateway ≠ your SSH shell.** The human must re-auth on the gateway host and restart the gateway so new tokens are loaded.
 - **Plugin id vs npm name:** `solana-traderclaw` is the npm package name, while `solana-trader` is the OpenClaw plugin id used in `plugins.entries` and `plugins.allow`.
 
 ---
