@@ -209,7 +209,8 @@ export class AlphaStreamManager {
 
     return new Promise((resolve, reject) => {
       try {
-        this.ws = new WebSocket(url);
+        // Match OpenClaw server (perMessageDeflate: false); avoid negotiate mismatch / RSV1 framing errors with strict clients.
+        this.ws = new WebSocket(url, { perMessageDeflate: false, handshakeTimeout: 10_000 });
       } catch (err) {
         reject(err);
         return;
