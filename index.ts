@@ -44,6 +44,26 @@ interface XConfig {
   profiles: Record<string, XProfile>;
 }
 
+const TRADERCLAW_WALLET_PRIVATE_KEY_ENV = "TRADERCLAW_WALLET_PRIVATE_KEY";
+
+/** Non-empty `walletPrivateKey` from plugin JSON only (no env). */
+function walletPrivateKeyFromPluginConfigRecord(obj: Record<string, unknown>): string | undefined {
+  const w = typeof obj.walletPrivateKey === "string" ? obj.walletPrivateKey.trim() : "";
+  return w.length > 0 ? w : undefined;
+}
+
+/**
+ * Resolved signing key for wallet-proof challenges: non-empty plugin config wins, else
+ * `process.env.TRADERCLAW_WALLET_PRIVATE_KEY` (OpenClaw merges JSON → env for the gateway).
+ */
+function resolveEffectiveWalletPrivateKey(walletPrivateKeyFromPluginConfig: string | undefined): string | undefined {
+  if (walletPrivateKeyFromPluginConfig && walletPrivateKeyFromPluginConfig.trim().length > 0) {
+    return walletPrivateKeyFromPluginConfig.trim();
+  }
+  const fromEnv = process.env[TRADERCLAW_WALLET_PRIVATE_KEY_ENV]?.trim();
+  return fromEnv && fromEnv.length > 0 ? fromEnv : undefined;
+}
+
 interface PluginConfig {
   orchestratorUrl: string;
   walletId: string;
@@ -51,7 +71,10 @@ interface PluginConfig {
   externalUserId?: string;
   refreshToken?: string;
   walletPublicKey?: string;
-  /** Solana wallet private key (base58); use plugin config only — env vars are not read (OpenClaw install policy). */
+  /**
+   * Solana wallet private key (base58) from plugin JSON. When unset here, runtime falls back to
+   * `process.env.TRADERCLAW_WALLET_PRIVATE_KEY` (recommended: state-dir `.env` or systemd — not committed).
+   */
   walletPrivateKey?: string;
   /** Consumable one-time recovery secret (rotated server-side on each use). */
   recoverySecret?: string;
@@ -90,7 +113,7 @@ function parseConfig(raw: unknown): PluginConfig {
   const externalUserId = typeof obj.externalUserId === "string" ? obj.externalUserId : undefined;
   const refreshToken = typeof obj.refreshToken === "string" ? obj.refreshToken : undefined;
   const walletPublicKey = typeof obj.walletPublicKey === "string" ? obj.walletPublicKey : undefined;
-  const walletPrivateKey = typeof obj.walletPrivateKey === "string" ? obj.walletPrivateKey : undefined;
+  const walletPrivateKey = resolveEffectiveWalletPrivateKey(walletPrivateKeyFromPluginConfigRecord(obj));
   const apiTimeout = typeof obj.apiTimeout === "number" ? obj.apiTimeout : 120000;
   const agentId = typeof obj.agentId === "string" ? obj.agentId : undefined;
   const gatewayBaseUrl = typeof obj.gatewayBaseUrl === "string" ? obj.gatewayBaseUrl : undefined;
@@ -224,6 +247,11 @@ const solanaTraderPlugin = {
   description: "Autonomous Solana memecoin trading agent — V1-Upgraded with intelligence lab, tool envelopes, prompt scrubbing, and split skill architecture",
 
   register(api: OpenClawPluginApi) {
+    const pluginConfigRaw =
+      api.pluginConfig && typeof api.pluginConfig === "object" && !Array.isArray(api.pluginConfig)
+        ? (api.pluginConfig as Record<string, unknown>)
+        : {};
+    const walletPrivateKeyFromPluginJsonOnly = walletPrivateKeyFromPluginConfigRecord(pluginConfigRaw);
     const config = parseConfig(api.pluginConfig);
     const { orchestratorUrl, walletId, apiKey, apiTimeout } = config;
 
@@ -304,9 +332,13 @@ const solanaTraderPlugin = {
       initialAccessTokenExpiresAt = sidecar.accessTokenExpiresAt;
     }
 
+    const walletProofKeySource =
+      config.walletPrivateKey && walletPrivateKeyFromPluginJsonOnly ? "plugin_json" :
+      config.walletPrivateKey ? "env" :
+      "absent";
     api.logger.info(
       `[solana-trader] Session: sidecar=${sidecar ? "yes" : "no"}, refreshToken=${effectiveRefreshToken ? "present (" + effectiveRefreshToken.slice(0, 8) + "...)" : "MISSING"}, ` +
-        `apiKey=${apiKey ? "present" : "MISSING"}, walletPublicKey=${effectiveWalletPublicKey ? "present" : "MISSING"}`,
+        `apiKey=${apiKey ? "present" : "MISSING"}, walletPublicKey=${effectiveWalletPublicKey ? "present" : "MISSING"}, walletProofSigningKey=${walletProofKeySource}`,
     );
 
     const sessionManager = new SessionManager({
@@ -314,10 +346,7 @@ const solanaTraderPlugin = {
       apiKey: apiKey || "",
       refreshToken: effectiveRefreshToken,
       walletPublicKey: effectiveWalletPublicKey,
-      walletPrivateKeyProvider: () => {
-        const k = config.walletPrivateKey;
-        return typeof k === "string" && k.trim() ? k.trim() : undefined;
-      },
+      walletPrivateKeyProvider: () => resolveEffectiveWalletPrivateKey(walletPrivateKeyFromPluginJsonOnly),
       recoverySecretProvider: async () => {
         const sidecarData = readSessionSidecar();
         const fromSidecar = sidecarData?.recoverySecret;

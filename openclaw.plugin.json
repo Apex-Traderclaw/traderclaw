@@ -40,7 +40,7 @@
       "walletPrivateKey": {
         "type": "string",
         "deprecated": true,
-        "description": "DEPRECATED — use env TRADERCLAW_WALLET_PRIVATE_KEY or --wallet-private-key arg. Never store private keys in config files."
+        "description": "Optional base58 signing key when the server requires wallet proof. Prefer TRADERCLAW_WALLET_PRIVATE_KEY in OpenClaw/gateway merged env or systemd EnvironmentFile instead of plaintext JSON (never commit)."
       },
       "apiTimeout": {
         "type": "integer",

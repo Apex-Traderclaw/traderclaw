@@ -771,6 +771,18 @@ function registerWebFetchTool(api, Type2, logPrefix, options) {
 }
 
 // index.ts
+var TRADERCLAW_WALLET_PRIVATE_KEY_ENV = "TRADERCLAW_WALLET_PRIVATE_KEY";
+function walletPrivateKeyFromPluginConfigRecord(obj) {
+  const w = typeof obj.walletPrivateKey === "string" ? obj.walletPrivateKey.trim() : "";
+  return w.length > 0 ? w : void 0;
+}
+function resolveEffectiveWalletPrivateKey(walletPrivateKeyFromPluginConfig) {
+  if (walletPrivateKeyFromPluginConfig && walletPrivateKeyFromPluginConfig.trim().length > 0) {
+    return walletPrivateKeyFromPluginConfig.trim();
+  }
+  const fromEnv = process.env[TRADERCLAW_WALLET_PRIVATE_KEY_ENV]?.trim();
+  return fromEnv && fromEnv.length > 0 ? fromEnv : void 0;
+}
 function parseConfig(raw) {
   const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   const orchestratorUrl = typeof obj.orchestratorUrl === "string" ? obj.orchestratorUrl : "";
@@ -779,7 +791,7 @@ function parseConfig(raw) {
   const externalUserId = typeof obj.externalUserId === "string" ? obj.externalUserId : void 0;
   const refreshToken = typeof obj.refreshToken === "string" ? obj.refreshToken : void 0;
   const walletPublicKey = typeof obj.walletPublicKey === "string" ? obj.walletPublicKey : void 0;
-  const walletPrivateKey = typeof obj.walletPrivateKey === "string" ? obj.walletPrivateKey : void 0;
+  const walletPrivateKey = resolveEffectiveWalletPrivateKey(walletPrivateKeyFromPluginConfigRecord(obj));
   const apiTimeout = typeof obj.apiTimeout === "number" ? obj.apiTimeout : 12e4;
   const agentId = typeof obj.agentId === "string" ? obj.agentId : void 0;
   const gatewayBaseUrl = typeof obj.gatewayBaseUrl === "string" ? obj.gatewayBaseUrl : void 0;
@@ -903,6 +915,8 @@ var solanaTraderPlugin = {
   name: "Solana Trader",
   description: "Autonomous Solana memecoin trading agent \u2014 V1-Upgraded with intelligence lab, tool envelopes, prompt scrubbing, and split skill architecture",
   register(api) {
+    const pluginConfigRaw = api.pluginConfig && typeof api.pluginConfig === "object" && !Array.isArray(api.pluginConfig) ? api.pluginConfig : {};
+    const walletPrivateKeyFromPluginJsonOnly = walletPrivateKeyFromPluginConfigRecord(pluginConfigRaw);
     const config = parseConfig(api.pluginConfig);
     const { orchestratorUrl, walletId, apiKey, apiTimeout } = config;
     if (!orchestratorUrl) {
@@ -954,18 +968,16 @@ var solanaTraderPlugin = {
       initialAccessToken = sidecar.accessToken;
       initialAccessTokenExpiresAt = sidecar.accessTokenExpiresAt;
     }
+    const walletProofKeySource = config.walletPrivateKey && walletPrivateKeyFromPluginJsonOnly ? "plugin_json" : config.walletPrivateKey ? "env" : "absent";
     api.logger.info(
-      `[solana-trader] Session: sidecar=${sidecar ? "yes" : "no"}, refreshToken=${effectiveRefreshToken ? "present (" + effectiveRefreshToken.slice(0, 8) + "...)" : "MISSING"}, apiKey=${apiKey ? "present" : "MISSING"}, walletPublicKey=${effectiveWalletPublicKey ? "present" : "MISSING"}`
+      `[solana-trader] Session: sidecar=${sidecar ? "yes" : "no"}, refreshToken=${effectiveRefreshToken ? "present (" + effectiveRefreshToken.slice(0, 8) + "...)" : "MISSING"}, apiKey=${apiKey ? "present" : "MISSING"}, walletPublicKey=${effectiveWalletPublicKey ? "present" : "MISSING"}, walletProofSigningKey=${walletProofKeySource}`
     );
     const sessionManager = new SessionManager({
       baseUrl: orchestratorUrl,
       apiKey: apiKey || "",
       refreshToken: effectiveRefreshToken,
       walletPublicKey: effectiveWalletPublicKey,
-      walletPrivateKeyProvider: () => {
-        const k = config.walletPrivateKey;
-        return typeof k === "string" && k.trim() ? k.trim() : void 0;
-      },
+      walletPrivateKeyProvider: () => resolveEffectiveWalletPrivateKey(walletPrivateKeyFromPluginJsonOnly),
       recoverySecretProvider: async () => {
         const sidecarData = readSessionSidecar();
         const fromSidecar = sidecarData?.recoverySecret;
