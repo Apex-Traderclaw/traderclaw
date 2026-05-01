@@ -1,8 +1,8 @@
 import { execFileSync, execSync, spawn } from "child_process";
 import { randomBytes } from "crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
-import { dirname, join } from "path";
+import { basename, dirname, join } from "path";
 import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
 import { choosePreferredProviderModel } from "./llm-model-preference.mjs";
 import { getLinuxGatewayPersistenceSnapshot } from "./gateway-persistence-linux.mjs";
@@ -1351,6 +1351,45 @@ export function deployWorkspaceHeartbeat(modeConfig) {
   return { deployed: true, skipped: false, source: src, dest };
 }
 
+/**
+ * Copy all files from skills/solana-trader/workspace/ into ~/.openclaw/workspace/.
+ * These are the bootstrap context files (AGENTS.md, SOUL.md, IDENTITY.md, TOOLS.md, etc.)
+ * that OpenClaw injects into the agent's system prompt at startup.
+ * Skips files that already exist and are non-empty so user customisations are preserved.
+ */
+export function deployWorkspaceBootstrapFiles(modeConfig) {
+  const npmRoot = getCommandOutput("npm root -g");
+  if (!npmRoot) return { deployed: [], skipped: [], failed: [], reason: "npm_root_g_failed" };
+
+  const srcDir = join(npmRoot, modeConfig.pluginPackage, "skills", "solana-trader", "workspace");
+  if (!existsSync(srcDir)) return { deployed: [], skipped: [], failed: [], reason: "source_dir_missing", srcDir };
+
+  const workspaceDir = resolveAgentWorkspaceDir(CONFIG_FILE);
+  mkdirSync(workspaceDir, { recursive: true });
+
+  const deployed = [];
+  const skipped = [];
+  const failed = [];
+
+  for (const file of readdirSync(srcDir)) {
+    const src = join(srcDir, file);
+    const dest = join(workspaceDir, file);
+    try {
+      if (existsSync(dest)) {
+        try {
+          if (statSync(dest).size > 0) { skipped.push(dest); continue; }
+        } catch {}
+      }
+      writeFileSync(dest, readFileSync(src, "utf-8"), "utf-8");
+      deployed.push(dest);
+    } catch (err) {
+      failed.push({ dest, error: err.message });
+    }
+  }
+
+  return { deployed, skipped, failed, workspaceDir };
+}
+
 function accessTokenEnvBase(agentId) {
   return `X_ACCESS_TOKEN_${agentId.toUpperCase().replace(/-/g, "_")}`;
 }
@@ -2651,6 +2690,29 @@ export class InstallerStepEngine {
             "warn",
             `Could not install HEARTBEAT.md automatically (${result.reason || "unknown"})${result.src ? `. Expected: ${result.src}` : ""}`,
           );
+        }
+        return result;
+      });
+
+      await this.runStep("workspace_bootstrap", "Installing workspace context files (AGENTS.md, SOUL.md, IDENTITY.md…)", async () => {
+        const result = deployWorkspaceBootstrapFiles(this.modeConfig);
+        if (result.reason) {
+          this.emitLog("workspace_bootstrap", "warn", `Could not install workspace bootstrap files (${result.reason})${result.srcDir ? `. Expected dir: ${result.srcDir}` : ""}`);
+          return result;
+        }
+        if (result.deployed.length) {
+          this.emitLog("workspace_bootstrap", "info", `Deployed to ${result.workspaceDir}:`);
+          for (const f of result.deployed) {
+            this.emitLog("workspace_bootstrap", "info", `  + ${basename(f)}`);
+          }
+        }
+        if (result.skipped.length) {
+          this.emitLog("workspace_bootstrap", "info", `Skipped (already present, user-customised): ${result.skipped.map(f => basename(f)).join(", ")}`);
+        }
+        if (result.failed.length) {
+          for (const { dest, error } of result.failed) {
+            this.emitLog("workspace_bootstrap", "warn", `Failed to write ${dest}: ${error}`);
+          }
         }
         return result;
       });
