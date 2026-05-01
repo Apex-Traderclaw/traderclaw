@@ -1866,8 +1866,59 @@ async function cmdConfig(subArgs) {
     }
 
     print("=".repeat(45));
+    print("  Tip: traderclaw config edit               open openclaw.json in $EDITOR (gateway auto-paused)");
     print("  Tip: traderclaw config set-llm cli-cloud <api_key>  to update your LLM provider");
-    print("  Tip: traderclaw gateway stop  →  edit openclaw.json  →  traderclaw gateway start");
+    print("");
+    return;
+  }
+
+  if (subCmd === "edit") {
+    const editor = process.env.EDITOR || process.env.VISUAL || "nano";
+
+    print(`\nTraderClaw — editing openclaw.json\n`);
+    printInfo(`  Editor: ${editor}  (set $EDITOR to change)`);
+    printInfo(`  File:   ${CONFIG_FILE}`);
+
+    // Ensure the file exists so the editor opens something valid.
+    const config = readConfig();
+    writeConfig(config);
+
+    // On Linux: stop the gateway so normalisation doesn't race the save.
+    let stoppedUnit = null;
+    try {
+      stoppedUnit = await gatewayStopStart("stop");
+      if (stoppedUnit) printInfo(`  Gateway paused — it will restart when you exit the editor.\n`);
+    } catch {}
+
+    let editOk = false;
+    try {
+      const res = spawnSync(editor, [CONFIG_FILE], { stdio: "inherit" });
+      editOk = res.status === 0;
+      if (!editOk) printWarn(`  Editor exited with code ${res.status}`);
+    } catch (err) {
+      printError(`  Could not launch editor '${editor}': ${err.message}`);
+      printInfo(`  Set $EDITOR to your preferred editor (e.g. export EDITOR=nano)`);
+    }
+
+    // Validate the JSON before restarting so the user gets a chance to fix it.
+    let jsonOk = false;
+    try {
+      JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
+      jsonOk = true;
+    } catch (err) {
+      printError(`  JSON syntax error in openclaw.json: ${err.message}`);
+      printWarn(`  Fix the file before the gateway restarts, otherwise OpenClaw may reject it.`);
+      printInfo(`  Re-run: traderclaw config edit`);
+    }
+
+    if (stoppedUnit) {
+      if (jsonOk) {
+        const started = await gatewayStopStart("start");
+        if (started) printSuccess(`\n  Gateway restarted with updated config.`);
+      } else {
+        printWarn(`\n  Gateway NOT restarted — fix the JSON first, then run: traderclaw gateway start`);
+      }
+    }
     print("");
     return;
   }
@@ -4474,6 +4525,7 @@ Login options:
 
 Config subcommands:
   config show                      Show current configuration
+  config edit                      Open openclaw.json in $EDITOR (gateway auto-paused on Linux)
   config set <k> <v>               Update a configuration value
   config set-llm <provider> <key>  Update LLM provider + api key (stops/restarts gateway safely)
   config reset                     Remove plugin configuration
@@ -4515,6 +4567,7 @@ Examples:
   traderclaw logout
   traderclaw status
   traderclaw config show
+  traderclaw config edit
   traderclaw config set apiTimeout 60000
   traderclaw config set-llm cli-cloud MY_API_KEY
   traderclaw gateway stop    # pause gateway to edit openclaw.json manually
