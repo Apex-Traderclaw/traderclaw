@@ -1520,6 +1520,26 @@ async function cmdSetup(args) {
   print("");
 }
 
+async function gatewayStopStart(action) {
+  const { isLinuxGatewayPersistenceEligible, resolveGatewayUnitNameFromStatusJson, readOpenclawGatewayStatusJson } =
+    await import("./gateway-persistence-linux.mjs");
+  if (!isLinuxGatewayPersistenceEligible()) {
+    printWarn("  Gateway stop/start via systemd is only available on Linux (non-WSL).");
+    printInfo("  Use: openclaw gateway " + (action === "stop" ? "--stop" : "--restart"));
+    return false;
+  }
+  let unitName = "openclaw-gateway.service";
+  try {
+    unitName = resolveGatewayUnitNameFromStatusJson(readOpenclawGatewayStatusJson());
+  } catch {}
+  const result = spawnSync("systemctl", ["--user", action, unitName], { stdio: "inherit" });
+  if (result.status !== 0) {
+    printWarn(`  systemctl --user ${action} ${unitName} exited ${result.status}`);
+    return false;
+  }
+  return unitName;
+}
+
 async function cmdGateway(args) {
   const sub = args[0];
   if (sub === "ensure-persistent") {
@@ -1542,7 +1562,26 @@ async function cmdGateway(args) {
     }
     return;
   }
-  printError("Unknown gateway subcommand. Try: traderclaw gateway ensure-persistent");
+
+  if (sub === "stop") {
+    print("\nTraderClaw — stopping gateway\n");
+    const unit = await gatewayStopStart("stop");
+    if (unit) {
+      printSuccess(`  ${unit} stopped.`);
+      printInfo(`  You can now safely edit ~/.openclaw/openclaw.json`);
+      printInfo(`  When done run: traderclaw gateway start`);
+    }
+    return;
+  }
+
+  if (sub === "start") {
+    print("\nTraderClaw — starting gateway\n");
+    const unit = await gatewayStopStart("start");
+    if (unit) printSuccess(`  ${unit} started.`);
+    return;
+  }
+
+  printError("Unknown gateway subcommand. Available: ensure-persistent, stop, start");
   process.exit(1);
 }
 
@@ -1814,7 +1853,21 @@ async function cmdConfig(subArgs) {
     print(`  Wallet Priv Key:  runtime-only via --wallet-private-key or ${WALLET_PRIVATE_KEY_ENV}`);
     print(`  Agent ID:         ${pluginConfig.agentId || "not set"}`);
     print(`  API Timeout:      ${pluginConfig.apiTimeout || 120000}ms`);
+
+    const llmPrimary = config?.agents?.defaults?.model?.primary;
+    const llmProviders = config?.models?.providers ? Object.keys(config.models.providers) : [];
+    print(`  LLM model:        ${llmPrimary || "not set"}`);
+    if (llmProviders.length) {
+      for (const prov of llmProviders) {
+        const pd = config.models.providers[prov];
+        const hasKey = !!(pd?.apiKey);
+        print(`  LLM provider:     ${prov}${pd?.baseUrl ? ` (${pd.baseUrl})` : ""}${hasKey ? " [api key set]" : ""}`);
+      }
+    }
+
     print("=".repeat(45));
+    print("  Tip: traderclaw config set-llm cli-cloud <api_key>  to update your LLM provider");
+    print("  Tip: traderclaw gateway stop  →  edit openclaw.json  →  traderclaw gateway start");
     print("");
     return;
   }
@@ -1867,6 +1920,75 @@ async function cmdConfig(subArgs) {
     const sensitiveKeys = ["apiKey", "refreshToken"];
     printSuccess(`Set ${key} = ${sensitiveKeys.includes(key) ? maskKey(value) : value}`);
     print("Restart the gateway for changes to take effect: openclaw gateway --restart");
+    return;
+  }
+
+  if (subCmd === "set-llm") {
+    const provider = subArgs[1];
+    const apiKey = subArgs[2];
+
+    const KNOWN_LLM_PROVIDERS = {
+      "cli-cloud": {
+        baseUrl: "https://app.cli.cloud/llm/v1",
+        envKey: "CLI_CLOUD_API_KEY",
+        models: ["gemma-e4b"],
+        defaultModel: "cli-cloud/gemma-e4b",
+      },
+    };
+
+    if (!provider || !apiKey) {
+      printError("Usage: traderclaw config set-llm <provider> <api_key>");
+      print("  Supported providers: " + Object.keys(KNOWN_LLM_PROVIDERS).join(", "));
+      print("  Example: traderclaw config set-llm cli-cloud MY_API_KEY");
+      process.exit(1);
+    }
+
+    const providerDef = KNOWN_LLM_PROVIDERS[provider];
+    if (!providerDef) {
+      printError(`Unknown LLM provider: ${provider}`);
+      print("  Supported: " + Object.keys(KNOWN_LLM_PROVIDERS).join(", "));
+      process.exit(1);
+    }
+
+    print(`\nTraderClaw — updating LLM provider: ${provider}\n`);
+
+    // On Linux: stop gateway so the config write is not immediately overwritten
+    // by the service normalizing on startup.
+    let stoppedUnit = null;
+    try {
+      stoppedUnit = await gatewayStopStart("stop");
+      if (stoppedUnit) printInfo(`  Gateway stopped temporarily for safe config update.`);
+    } catch {}
+
+    const config = readConfig();
+    if (!config.env) config.env = {};
+    config.env[providerDef.envKey] = apiKey;
+
+    if (!config.models) config.models = {};
+    if (!config.models.providers) config.models.providers = {};
+    config.models.providers[provider] = {
+      baseUrl: providerDef.baseUrl,
+      apiKey,
+      models: providerDef.models,
+    };
+
+    if (!config.agents) config.agents = {};
+    if (!config.agents.defaults) config.agents.defaults = {};
+    if (!config.agents.defaults.model) config.agents.defaults.model = {};
+    config.agents.defaults.model.primary = providerDef.defaultModel;
+
+    writeConfig(config);
+    printSuccess(`  ${provider} provider configured (api key: ${maskKey(apiKey)})`);
+    printInfo(`  Default model set to: ${providerDef.defaultModel}`);
+
+    // Restart the gateway now that the config is written.
+    if (stoppedUnit) {
+      const started = await gatewayStopStart("start");
+      if (started) printSuccess(`  Gateway restarted with new config.`);
+    } else {
+      printInfo("  Restart the gateway for changes to take effect: openclaw gateway restart");
+    }
+    print("");
     return;
   }
 
@@ -4351,9 +4473,15 @@ Login options:
   --force-reauth       Clear refresh token and run full API challenge (use after logout or to rotate session)
 
 Config subcommands:
-  config show        Show current configuration
-  config set <k> <v> Update a configuration value
-  config reset       Remove plugin configuration
+  config show                      Show current configuration
+  config set <k> <v>               Update a configuration value
+  config set-llm <provider> <key>  Update LLM provider + api key (stops/restarts gateway safely)
+  config reset                     Remove plugin configuration
+
+Gateway subcommands (Linux):
+  gateway stop                     Stop gateway so you can safely edit openclaw.json manually
+  gateway start                    Start gateway after manual edits
+  gateway ensure-persistent        Set up systemd linger + enable unit
 
 Install wizard (traderclaw install --wizard):
   --port                 Local port for the wizard (default 17890)
@@ -4388,6 +4516,9 @@ Examples:
   traderclaw status
   traderclaw config show
   traderclaw config set apiTimeout 60000
+  traderclaw config set-llm cli-cloud MY_API_KEY
+  traderclaw gateway stop    # pause gateway to edit openclaw.json manually
+  traderclaw gateway start   # resume after manual edit
   traderclaw test-session
   traderclaw test-session --wallet-private-key <base58_key>
   traderclaw update
