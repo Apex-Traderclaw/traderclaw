@@ -3596,7 +3596,10 @@ async function cmdInstall(args) {
 
   /** Guided Codex OAuth sessions keyed by sessionId. */
   const oauthSessions = new Map();
-  const OPENAI_OAUTH_AUTHORIZE_RE = /https:\/\/auth\.openai\.com\/oauth\/authorize\S*/;
+  // Matches the OAuth authorize URL from OpenClaw's output.
+  // The \S+ (non-whitespace) tail captures the full query string; see trySendUrl()
+  // for why we run this against a stripAnsi+CR-stripped copy of the output.
+  const OPENAI_OAUTH_AUTHORIZE_RE = /https:\/\/auth\.openai\.com\/(?:oauth\/authorize|authorize)[^\s"]*/;
   const oauthSessionTtlMs = 15 * 60 * 1000;
 
   // Long-lived callback proxy on port 1455. Bound at wizard startup so
@@ -3837,12 +3840,20 @@ async function cmdInstall(args) {
           message:
             "OpenClaw did not provide a ChatGPT sign-in URL in time. Try again.",
         });
-      }, 45_000);
+      }, 75_000);
 
       const trySendUrl = () => {
         if (responded) return;
-        const m = combined.match(OPENAI_OAUTH_AUTHORIZE_RE);
+        // Strip ANSI escape codes and carriage returns before matching.
+        // Newer OpenClaw uses rich terminal output (spinners, colors) and PTY
+        // column-wrapping inserts \r\n in the middle of long OAuth URLs, causing
+        // the regex to fail on the raw byte stream. Clean first, then match.
+        const cleanedForUrl = stripAnsi(combined).replace(/\r/g, "");
+        const m = cleanedForUrl.match(OPENAI_OAUTH_AUTHORIZE_RE);
         if (!m || !m[0]) return;
+        // Strip any trailing ANSI remnants that slipped through (e.g. \x1b[0m appended by colour reset)
+        const authUrl = m[0].replace(/\x1b[^a-zA-Z]*[a-zA-Z]?$/g, "").trim();
+        if (!authUrl.startsWith("https://")) return;
         clearTimeout(urlTimeout);
         responded = true;
         oauthSessions.set(sessionId, {
@@ -3850,13 +3861,13 @@ async function cmdInstall(args) {
           createdAt: Date.now(),
           updatedAt: Date.now(),
           status: "awaiting_browser_callback",
-          authUrl: m[0],
+          authUrl,
           message: "Sign in in this same browser. OpenClaw is waiting for callback...",
           detail: "",
           exitCode: null,
           submitted: false,
         });
-        respondJson(200, { ok: true, sessionId, authUrl: m[0] });
+        respondJson(200, { ok: true, sessionId, authUrl });
       };
 
       child.stdout?.on("data", (d) => {
