@@ -1982,7 +1982,7 @@ async function cmdConfig(subArgs) {
       "cli-cloud": {
         baseUrl: "https://app.cli.cloud/llm/v1",
         envKey: "CLI_CLOUD_API_KEY",
-        models: ["gemma-e4b"],
+        displayModels: ["gemma-e4b"],  // for info only
         defaultModel: "cli-cloud/gemma-e4b",
       },
     };
@@ -2020,7 +2020,7 @@ async function cmdConfig(subArgs) {
     config.models.providers[provider] = {
       baseUrl: providerDef.baseUrl,
       apiKey,
-      models: providerDef.models,
+      models: [],  // OpenClaw expects array of objects; leave empty for custom endpoints
     };
 
     if (!config.agents) config.agents = {};

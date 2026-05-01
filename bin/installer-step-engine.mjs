@@ -1739,7 +1739,7 @@ function configureOpenClawLlmProvider({ provider, model, credential }, configPat
   if (provider === "cli-cloud") {
     if (!config.models) config.models = {};
     if (!config.models.providers) config.models.providers = {};
-    config.models.providers["cli-cloud"] = { baseUrl: "https://app.cli.cloud/llm/v1", apiKey: credential, models: ["gemma-e4b"] };
+    config.models.providers["cli-cloud"] = { baseUrl: "https://app.cli.cloud/llm/v1", apiKey: credential, models: [] };
   }
 
   if (!config.agents) config.agents = {};
