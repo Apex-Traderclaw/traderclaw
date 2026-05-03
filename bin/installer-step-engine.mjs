@@ -1843,7 +1843,10 @@ export function spawnOpenClawCodexAuthLoginChild() {
     const cmdline = "openclaw models auth login --provider openai-codex";
     // --return propagates the inner command's exit code (util-linux 2.38+).
     // Without it, script may exit 0 even if openclaw fails.
-    return spawn("script", ["--return", "-q", "-c", cmdline, "/dev/null"], {
+    // -f/--flush: when the wizard reads script's stdout via a pipe, default
+    // block buffering can delay OAuth URLs until the buffer fills (e.g. 4KiB+),
+    // tripping the install wizard's URL detection timeout (OpenClaw 2026.4.x+).
+    return spawn("script", ["--return", "-f", "-q", "-c", cmdline, "/dev/null"], {
       stdio: ["pipe", "pipe", "pipe"],
       shell: false,
     });
