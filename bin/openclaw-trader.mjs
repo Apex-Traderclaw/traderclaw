@@ -1585,6 +1585,25 @@ async function cmdGateway(args) {
   process.exit(1);
 }
 
+async function cmdMaintenance(subArgs) {
+  const sub = subArgs[0];
+  if (sub !== "session-cleanup") {
+    printError("Usage: traderclaw maintenance session-cleanup");
+    print("");
+    printInfo("Archives bloated *.checkpoint.*.jsonl (and heartbeat session logs) under the OpenClaw agent sessions dir,");
+    printInfo("then runs systemctl --user stop / daemon-reload / start on the gateway unit (same as TraderClaw persistence).");
+    printInfo(`Env and cron examples: see ${join(PLUGIN_ROOT, "scripts", "openclaw-session-cleanup.sh")}`);
+    process.exit(sub ? 1 : 0);
+  }
+  const scriptPath = join(PLUGIN_ROOT, "scripts", "openclaw-session-cleanup.sh");
+  if (!existsSync(scriptPath)) {
+    printError(`Session cleanup script not found: ${scriptPath}`);
+    process.exit(1);
+  }
+  const r = spawnSync("bash", [scriptPath, ...subArgs.slice(1)], { stdio: "inherit", env: process.env });
+  process.exit(r.status === null ? 1 : r.status);
+}
+
 async function cmdLogin(args) {
   const config = readConfig();
   const pluginConfig = getPluginConfig(config);
@@ -4492,6 +4511,7 @@ Commands:
   install            Launch installer flows (--wizard for localhost GUI)
   repair-openclaw    Re-run npm install in the global openclaw package (fixes missing grammy / @buape/carbon; uses --ignore-scripts so @discordjs/opus does not require build tools)
   gateway            Gateway helpers (see subcommands below)
+  maintenance        Session disk hygiene (checkpoint archive + gateway restart)
   login              Re-authenticate (uses refresh token when valid; full challenge only if needed)
   logout             Revoke current session and clear tokens
   status             Check connection health and wallet status
@@ -4546,6 +4566,9 @@ Gateway subcommands (Linux):
   gateway start                    Start gateway after manual edits
   gateway ensure-persistent        Set up systemd linger + enable unit
 
+Maintenance:
+  maintenance session-cleanup      Archive large session checkpoints + restart gateway (see script header for OPENCLAW_STATE_DIR, STRIP_ALL_CHECKPOINTS, DRY_RUN, ARCHIVE_RETENTION_DAYS)
+
 Install wizard (traderclaw install --wizard):
   --port                 Local port for the wizard (default 17890)
   --llm-provider         e.g. openai, openai-codex, anthropic
@@ -4583,6 +4606,7 @@ Examples:
   traderclaw config set-llm cli-cloud MY_API_KEY
   traderclaw gateway stop    # pause gateway to edit openclaw.json manually
   traderclaw gateway start   # resume after manual edit
+  STRIP_ALL_CHECKPOINTS=1 OPENCLAW_STATE_DIR=/root/.openclaw traderclaw maintenance session-cleanup
   traderclaw test-session
   traderclaw test-session --wallet-private-key <base58_key>
   traderclaw update
@@ -4843,6 +4867,9 @@ async function main() {
       break;
     case "gateway":
       await cmdGateway(args.slice(1));
+      break;
+    case "maintenance":
+      await cmdMaintenance(args.slice(1));
       break;
     case "login":
       await cmdLogin(args.slice(1));
