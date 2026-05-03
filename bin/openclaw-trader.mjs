@@ -3873,15 +3873,25 @@ async function cmdInstall(args) {
 
       const trySendUrl = () => {
         if (responded) return;
-        // Strip ANSI escape codes and carriage returns before matching.
-        // Newer OpenClaw uses rich terminal output (spinners, colors) and PTY
-        // column-wrapping inserts \r\n in the middle of long OAuth URLs, causing
-        // the regex to fail on the raw byte stream. Clean first, then match.
-        const cleanedForUrl = stripAnsi(combined).replace(/\r/g, "");
-        const m = cleanedForUrl.match(OPENAI_OAUTH_AUTHORIZE_RE);
+        // Layer 1: strip ANSI codes and carriage returns, then join any URL continuation
+        // lines caused by PTY column-wrapping (e.g. at 80-col default). When the URL is
+        // split across lines the [^\s] tail of the regex stops at the newline and only the
+        // first fragment is captured. Removing newlines that are sandwiched between URL-safe
+        // characters reconnects all fragments before matching.
+        const cleanedForUrl = stripAnsi(combined)
+          .replace(/\r/g, "")
+          .replace(/([A-Za-z0-9%&=+?#:/@._~!$'()*,;-])\n([A-Za-z0-9%&=+?#:/@._~!$'()*,;-])/g, "$1$2");
+        let m = cleanedForUrl.match(OPENAI_OAUTH_AUTHORIZE_RE);
+        // Layer 2: try the raw combined buffer in case stripAnsi dropped a character that
+        // broke the URL detection (raw ANSI seqs don't include space so regex still works).
+        if (!m || !m[0]) {
+          const rawCleaned = combined.replace(/\r/g, "")
+            .replace(/([A-Za-z0-9%&=+?#:/@._~!$'()*,;-])\n([A-Za-z0-9%&=+?#:/@._~!$'()*,;-])/g, "$1$2");
+          m = rawCleaned.match(OPENAI_OAUTH_AUTHORIZE_RE);
+        }
         if (!m || !m[0]) return;
-        // Strip any trailing ANSI remnants that slipped through (e.g. \x1b[0m appended by colour reset)
-        const authUrl = m[0].replace(/\x1b[^a-zA-Z]*[a-zA-Z]?$/g, "").trim();
+        // Strip any trailing ANSI remnants (e.g. \x1b[0m appended by colour reset)
+        const authUrl = stripAnsi(m[0]).replace(/\r/g, "").trim();
         if (!authUrl.startsWith("https://")) return;
         clearTimeout(urlTimeout);
         responded = true;
