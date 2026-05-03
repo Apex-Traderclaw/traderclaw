@@ -1840,14 +1840,18 @@ export function spawnOpenClawCodexAuthLoginChild() {
     return spawn("unbuffer", ["openclaw", ...argv], { stdio: ["pipe", "pipe", "pipe"], shell: false });
   }
   if (commandExists("script")) {
-    const cmdline = "openclaw models auth login --provider openai-codex";
-    // --return propagates the inner command's exit code (util-linux 2.38+).
-    // Without it, script may exit 0 even if openclaw fails.
-    // -f/--flush: when the wizard reads script's stdout via a pipe, default
-    // block buffering can delay OAuth URLs until the buffer fills (e.g. 4KiB+),
-    // tripping the install wizard's URL detection timeout (OpenClaw 2026.4.x+).
+    // stty cols 32767: set an extremely wide PTY column so OpenClaw/Clack never
+    // wraps the OAuth URL across lines (default PTY width when spawned via pipe is 80).
+    // A wrapped URL causes the wizard's regex to only capture the first segment.
+    // --return propagates openclaw's exit code (util-linux 2.38+).
+    // -f/--flush: force immediate forwarding of each PTY write to the pipe so the
+    // wizard sees the URL as soon as OpenClaw prints it (default is block-buffered).
+    const cmdline = "stty cols 32767 rows 50 2>/dev/null; openclaw models auth login --provider openai-codex";
     return spawn("script", ["--return", "-f", "-q", "-c", cmdline, "/dev/null"], {
       stdio: ["pipe", "pipe", "pipe"],
+      // COLUMNS/LINES: belt-and-suspenders env fallback for programs that read env
+      // instead of ioctl(TIOCGWINSZ) to determine terminal dimensions.
+      env: { ...process.env, COLUMNS: "32767", LINES: "50" },
       shell: false,
     });
   }
