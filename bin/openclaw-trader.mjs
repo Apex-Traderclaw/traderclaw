@@ -67,6 +67,7 @@ const VERSION = CLI_VERSION || PLUGIN_VERSION;
 const PLUGIN_ID = "solana-trader";
 const LEGACY_PLUGIN_IDS = ["traderclaw-v1", "solana-traderclaw-v1", "solana-traderclaw"];
 const KAYBA_TRACING_PLUGIN_ID = "kayba-tracing";
+const OPENAI_PLUGIN_ALLOW_ID = "openai";
 const KAYBA_TRACING_NPM_PACKAGE = "@kayba_ai/openclaw-tracing";
 const KAYBA_TRACING_FOLDER_DEFAULT = "traderclaw-agent";
 const CONFIG_DIR = join(homedir(), ".openclaw");
@@ -463,6 +464,16 @@ function getPluginConfig(config) {
   return plugin.config || null;
 }
 
+function ensurePluginAllowId(config, pluginId) {
+  if (typeof pluginId !== "string" || !pluginId.trim()) return;
+  normalizePluginConfigShape(config);
+  if (!config.plugins) config.plugins = {};
+  if (!Array.isArray(config.plugins.allow)) config.plugins.allow = [];
+  if (!config.plugins.allow.includes(pluginId)) {
+    config.plugins.allow.push(pluginId);
+  }
+}
+
 function setPluginConfig(config, pluginConfig) {
   normalizePluginConfigShape(config);
   if (!config.plugins) config.plugins = {};
@@ -471,16 +482,15 @@ function setPluginConfig(config, pluginConfig) {
     enabled: true,
     config: pluginConfig,
   };
+  ensurePluginAllowId(config, OPENAI_PLUGIN_ALLOW_ID);
 }
 
 function setKaybaTracingPluginConfig(config, kaybaApiKey, folder) {
   normalizePluginConfigShape(config);
   if (!config.plugins) config.plugins = {};
   if (!config.plugins.entries) config.plugins.entries = {};
-  if (!Array.isArray(config.plugins.allow)) config.plugins.allow = [];
-  if (!config.plugins.allow.includes(KAYBA_TRACING_PLUGIN_ID)) {
-    config.plugins.allow.push(KAYBA_TRACING_PLUGIN_ID);
-  }
+  ensurePluginAllowId(config, KAYBA_TRACING_PLUGIN_ID);
+  ensurePluginAllowId(config, OPENAI_PLUGIN_ALLOW_ID);
   const prev = config.plugins.entries[KAYBA_TRACING_PLUGIN_ID];
   const prevConfig = prev && typeof prev.config === "object" && prev.config !== null ? prev.config : {};
   config.plugins.entries[KAYBA_TRACING_PLUGIN_ID] = {
