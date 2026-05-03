@@ -3869,7 +3869,7 @@ async function cmdInstall(args) {
           message:
             "OpenClaw did not provide a ChatGPT sign-in URL in time. Try again.",
         });
-      }, 75_000);
+      }, 120_000);
 
       const trySendUrl = () => {
         if (responded) return;
