@@ -12,6 +12,8 @@
     "skills/",
     "config/",
     "lib/",
+    "scripts/openclaw-session-cleanup.sh",
+    "openclaw-truncate.sh",
     "openclaw.plugin.json",
     "README.md"
   ],
