@@ -10,7 +10,6 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["orchestratorUrl"],
     "properties": {
       "orchestratorUrl": {
         "type": "string",
