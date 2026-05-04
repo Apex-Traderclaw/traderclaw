@@ -3043,7 +3043,11 @@ function wizardHtml(defaults) {
             setOauthStep(oauthStepOpen, "error");
             setOauthStep(oauthStepComplete, "error");
             setOauthStep(oauthStepVerify, "error");
-            setOauthStatus((data && (data.message || data.error)) || "Could not start OAuth sign-in.", true);
+            let msg = (data && (data.message || data.error)) || "Could not start OAuth sign-in.";
+            if (data && typeof data.detail === "string" && data.detail.trim()) {
+              msg += " " + data.detail.trim().slice(0, 1500);
+            }
+            setOauthStatus(msg, true);
             if (oauthRetryBtn) oauthRetryBtn.classList.remove("hidden");
             updateStartButtonState();
             return;
@@ -3629,6 +3633,27 @@ async function cmdInstall(args) {
   // The \S+ (non-whitespace) tail captures the full query string; see trySendUrl()
   // for why we run this against a stripAnsi+CR-stripped copy of the output.
   const OPENAI_OAUTH_AUTHORIZE_RE = /https:\/\/auth\.openai\.com\/(?:oauth\/authorize|authorize)[^\s"]*/;
+  const OPENAI_OAUTH_AUTHORIZE_RE_LOOSE =
+    /https:\/\/(?:[a-z0-9-]+\.)*openai\.com\/[^\s"]*?(?:oauth\/authorize|\/authorize[^\s"]*)/i;
+
+  /** Best-effort: primary regex, then subdomain/openai authorize URLs, then token-like query heuristics. */
+  function tryExtractOpenAiCodexAuthorizeUrl(cleaned) {
+    let m = cleaned.match(OPENAI_OAUTH_AUTHORIZE_RE);
+    if (m?.[0]) return m[0];
+    m = cleaned.match(OPENAI_OAUTH_AUTHORIZE_RE_LOOSE);
+    if (m?.[0]) return m[0];
+    const candidates = cleaned.match(/https:\/\/[^\s"]+/g) || [];
+    for (const u of candidates) {
+      if (
+        /openai\.com/i.test(u)
+        && /authorize/i.test(u)
+        && /oauth|response_type|client_id|redirect_uri|scope=/i.test(u)
+      ) {
+        return u;
+      }
+    }
+    return null;
+  }
   const oauthSessionTtlMs = 15 * 60 * 1000;
 
   // Long-lived callback proxy on port 1455. Bound at wizard startup so
@@ -3856,6 +3881,10 @@ async function cmdInstall(args) {
       const urlTimeout = setTimeout(() => {
         if (responded) return;
         responded = true;
+        const detail = stripAnsi(combined).slice(-4000);
+        if (process.env.TRADERCLAW_WIZARD_OAUTH_DEBUG === "1") {
+          printWarn(`[TRADERCLAW_WIZARD_OAUTH_DEBUG] OpenClaw output tail before oauth_url_timeout:\n${detail}`);
+        }
         try {
           child.kill("SIGTERM");
         } catch {
@@ -3868,6 +3897,7 @@ async function cmdInstall(args) {
           error: "oauth_url_timeout",
           message:
             "OpenClaw did not provide a ChatGPT sign-in URL in time. Try again.",
+          detail,
         });
       }, 120_000);
 
@@ -3881,17 +3911,17 @@ async function cmdInstall(args) {
         const cleanedForUrl = stripAnsi(combined)
           .replace(/\r/g, "")
           .replace(/([A-Za-z0-9%&=+?#:/@._~!$'()*,;-])\n([A-Za-z0-9%&=+?#:/@._~!$'()*,;-])/g, "$1$2");
-        let m = cleanedForUrl.match(OPENAI_OAUTH_AUTHORIZE_RE);
+        let authUrl = tryExtractOpenAiCodexAuthorizeUrl(cleanedForUrl);
         // Layer 2: try the raw combined buffer in case stripAnsi dropped a character that
         // broke the URL detection (raw ANSI seqs don't include space so regex still works).
-        if (!m || !m[0]) {
+        if (!authUrl) {
           const rawCleaned = combined.replace(/\r/g, "")
             .replace(/([A-Za-z0-9%&=+?#:/@._~!$'()*,;-])\n([A-Za-z0-9%&=+?#:/@._~!$'()*,;-])/g, "$1$2");
-          m = rawCleaned.match(OPENAI_OAUTH_AUTHORIZE_RE);
+          authUrl = tryExtractOpenAiCodexAuthorizeUrl(rawCleaned);
         }
-        if (!m || !m[0]) return;
+        if (!authUrl) return;
         // Strip any trailing ANSI remnants (e.g. \x1b[0m appended by colour reset)
-        const authUrl = stripAnsi(m[0]).replace(/\r/g, "").trim();
+        authUrl = stripAnsi(authUrl).replace(/\r/g, "").trim();
         if (!authUrl.startsWith("https://")) return;
         clearTimeout(urlTimeout);
         responded = true;
@@ -3954,7 +3984,7 @@ async function cmdInstall(args) {
             pending.status = "failed";
             pending.message =
               "OpenClaw exited OK but no auth tokens were saved. " +
-              "Run 'openclaw models auth login --provider openai-codex' in a terminal, " +
+              "Run 'openclaw models auth login --provider openai-codex --method oauth' in a terminal, " +
               "then re-run the wizard with the already-logged-in option.";
           } else {
             pending.status = "failed";

@@ -1827,12 +1827,13 @@ function configureOpenClawLlmModelPrimaryOnly({ provider, model }, configPath = 
 }
 
 /**
- * Spawns `openclaw models auth login --provider openai-codex` with a pseudo-TTY when possible.
+ * Spawns `openclaw models auth login --provider openai-codex --method oauth` with a pseudo-TTY when possible.
+ * `--method oauth` skips the interactive Browser vs Device pairing menu (OpenClaw 2026.4.29+); device flow is `device-code`.
  * The CLI often exits immediately when stdin/stdout are plain pipes (no TTY). On Unix, `script(1)`
  * allocates a PTY so the same flow works as in an interactive terminal.
  */
 export function spawnOpenClawCodexAuthLoginChild() {
-  const argv = ["models", "auth", "login", "--provider", "openai-codex"];
+  const argv = ["models", "auth", "login", "--provider", "openai-codex", "--method", "oauth"];
   if (process.platform === "win32") {
     return spawn("openclaw", argv, { stdio: ["pipe", "pipe", "pipe"], shell: false });
   }
@@ -1846,7 +1847,8 @@ export function spawnOpenClawCodexAuthLoginChild() {
     // --return propagates openclaw's exit code (util-linux 2.38+).
     // -f/--flush: force immediate forwarding of each PTY write to the pipe so the
     // wizard sees the URL as soon as OpenClaw prints it (default is block-buffered).
-    const cmdline = "stty cols 32767 rows 50 2>/dev/null; openclaw models auth login --provider openai-codex";
+    const cmdline =
+      "stty cols 32767 rows 50 2>/dev/null; openclaw models auth login --provider openai-codex --method oauth";
     return spawn("script", ["--return", "-f", "-q", "-c", cmdline, "/dev/null"], {
       stdio: ["pipe", "pipe", "pipe"],
       // COLUMNS/LINES: belt-and-suspenders env fallback for programs that read env
@@ -1859,7 +1861,7 @@ export function spawnOpenClawCodexAuthLoginChild() {
 }
 
 /**
- * Runs `openclaw models auth login --provider openai-codex` and feeds the pasted redirect URL or code on stdin
+ * Runs `openclaw models auth login --provider openai-codex --method oauth` and feeds the pasted redirect URL or code on stdin
  * when the CLI prompts (with a timed fallback for non-interactive / SSH).
  */
 function runOpenClawCodexOAuthLogin(paste, emitLog) {
@@ -2333,7 +2335,7 @@ export class InstallerStepEngine {
         } catch (err) {
           const tail = `${err?.stderr || ""}\n${err?.stdout || ""}\n${err?.message || ""}`.trim();
           throw new Error(
-            `${tail}\n\nIf OAuth cannot complete from the wizard, run in a shell: openclaw models auth login --provider openai-codex — then re-run the wizard with "already logged in" checked.`,
+            `${tail}\n\nIf OAuth cannot complete from the wizard, run in a shell: openclaw models auth login --provider openai-codex --method oauth — then re-run the wizard with "already logged in" checked.`,
           );
         }
       }
@@ -2347,7 +2349,7 @@ export class InstallerStepEngine {
         throw new Error(
           "No OAuth credentials found at " + authFile + ". " +
           "The wizard OAuth flow did not save tokens (the callback may not have reached the OpenClaw CLI). " +
-          "Run 'openclaw models auth login --provider openai-codex' in a terminal, " +
+          "Run 'openclaw models auth login --provider openai-codex --method oauth' in a terminal, " +
           "then re-run the wizard with the 'already logged in' option.",
         );
       }
