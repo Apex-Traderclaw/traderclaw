@@ -412,7 +412,7 @@ export class SessionManager {
         this.log.info(`[session] Session refreshed. Tier: ${this.tier}, Scopes: ${this.scopes.join(", ")}`);
         return;
       } catch (err: any) {
-        this.log.warn(`[session] Refresh failed: ${err.message}. Falling back to challenge flow.`);
+        this.log.warn(`[session] Refresh failed: ${err.message}. Trying recovery secret, then challenge flow.`);
       }
     }
 
@@ -580,12 +580,18 @@ export class SessionManager {
    * Schedule a repeating background token refresh. Uses setInterval so the
    * chain cannot silently break if a single cycle fails to re-schedule.
    *
-   * Interval = min(50% refresh-token TTL, accessTokenTtl - 2.5 min buffer),
+   * Interval = min(50% refresh-token TTL, 60% of access-token TTL),
    * clamped between 2 min and 20 min. Falls back to 10 min when TTLs unknown.
+   * Using 60% of access TTL (vs the old "TTL - 2.5 min") gives a much larger
+   * safety window — for a 15-min token the interval is 9 min, leaving 6 min
+   * of runway before expiry instead of the former 2.5 min.
    *
    * Goes through unifiedRefresh() so it shares the same mutex as on-demand
-   * callers and can fall back to the full challenge flow when refresh tokens
-   * are permanently revoked.
+   * callers and can fall back to the full challenge/recovery flow when refresh
+   * tokens are permanently revoked.
+   *
+   * On failure a one-shot 60-second retry is scheduled so a transient network
+   * hiccup does not leave the token to expire silently between setInterval ticks.
    */
   private scheduleProactiveRefresh(): void {
     if (this.proactiveRefreshTimer) {
@@ -596,6 +602,7 @@ export class SessionManager {
     const MIN_INTERVAL_MS = 2 * 60 * 1000;
     const MAX_INTERVAL_MS = 20 * 60 * 1000;
     const DEFAULT_INTERVAL_MS = 10 * 60 * 1000;
+    const RETRY_ON_FAILURE_MS = 60 * 1000;
 
     let intervalMs: number;
     if (this.refreshTokenTtlMs > 0) {
@@ -605,7 +612,9 @@ export class SessionManager {
     }
 
     if (this.accessTokenTtlMs > 0) {
-      const accessBasedMs = Math.max(MIN_INTERVAL_MS, this.accessTokenTtlMs - 150_000);
+      // Use 60% of access-token TTL so we have ~40% of the TTL as a safety margin.
+      // Previously this was `TTL - 150s` which left only 2.5 min for a 15-min token.
+      const accessBasedMs = Math.max(MIN_INTERVAL_MS, Math.floor(this.accessTokenTtlMs * 0.6));
       intervalMs = Math.min(intervalMs, accessBasedMs);
     }
 
@@ -619,7 +628,19 @@ export class SessionManager {
         await this.unifiedRefresh();
         this.log.info("[session] Proactive refresh succeeded — token chain extended.");
       } catch (err: any) {
-        this.log.warn(`[session] Proactive refresh failed: ${err.message}. Will retry next interval or on-demand.`);
+        this.log.warn(
+          `[session] Proactive refresh failed: ${err.message}. Scheduling retry in ${RETRY_ON_FAILURE_MS / 1000}s.`,
+        );
+        // One-shot retry so a transient failure doesn't leave the token to expire
+        // silently until the next full setInterval tick (which could be minutes away).
+        const retryTimer = setTimeout(() => {
+          this.unifiedRefresh().catch((retryErr: any) =>
+            this.log.warn(`[session] Proactive retry also failed: ${retryErr.message}. On-demand path will recover.`),
+          );
+        }, RETRY_ON_FAILURE_MS);
+        if (retryTimer && typeof retryTimer === "object" && "unref" in retryTimer) {
+          (retryTimer as NodeJS.Timeout).unref();
+        }
       } finally {
         this.proactiveRefreshRunning = false;
       }
