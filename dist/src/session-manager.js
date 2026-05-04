@@ -1,6 +1,6 @@
 import {
   SessionManager
-} from "../chunk-OXQX7Y2B.js";
+} from "../chunk-6IS5XPDB.js";
 export {
   SessionManager
 };
