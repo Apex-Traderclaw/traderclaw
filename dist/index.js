@@ -3,7 +3,7 @@ import {
 } from "./chunk-SBYHSJLU.js";
 import {
   SessionManager
-} from "./chunk-OXQX7Y2B.js";
+} from "./chunk-6IS5XPDB.js";
 import {
   looksLikeTelegramChatId,
   resolveTelegramRecipientToChatId
@@ -1005,12 +1005,13 @@ var solanaTraderPlugin = {
       onTokensRotated: (tokens) => {
         try {
           const current = readSessionSidecar() ?? {};
+          const walletEntry = tokens.walletPublicKey != null ? { walletPublicKey: tokens.walletPublicKey } : {};
           writeSessionSidecarAtomic({
             ...current,
             refreshToken: tokens.refreshToken,
             accessToken: tokens.accessToken,
             accessTokenExpiresAt: tokens.accessTokenExpiresAt,
-            walletPublicKey: tokens.walletPublicKey
+            ...walletEntry
           });
           api.logger.info(`[solana-trader] Persisted session tokens to ${sessionTokensPath}`);
         } catch (err) {
