@@ -374,12 +374,16 @@ const solanaTraderPlugin = {
       onTokensRotated: (tokens) => {
         try {
           const current = readSessionSidecar() ?? {};
+          // Only propagate walletPublicKey when defined — spreading undefined would cause
+          // JSON.stringify to silently drop the key from the sidecar on every rotation.
+          const walletEntry: Partial<SessionSidecar> =
+            tokens.walletPublicKey != null ? { walletPublicKey: tokens.walletPublicKey } : {};
           writeSessionSidecarAtomic({
             ...current,
             refreshToken: tokens.refreshToken,
             accessToken: tokens.accessToken,
             accessTokenExpiresAt: tokens.accessTokenExpiresAt,
-            walletPublicKey: tokens.walletPublicKey,
+            ...walletEntry,
           });
           api.logger.info(`[solana-trader] Persisted session tokens to ${sessionTokensPath}`);
         } catch (err: unknown) {
