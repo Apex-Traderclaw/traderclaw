@@ -2039,6 +2039,8 @@ export class InstallerStepEngine {
       skipInstallOpenClaw: options.skipInstallOpenClaw === true,
       skipInstallPlugin: options.skipInstallPlugin === true,
       skipTailscale: options.skipTailscale === true,
+      /** When true (e.g. EC2 bootstrap before Tailscale auth), gateway starts without `tailscale funnel`. */
+      skipFunnel: options.skipFunnel === true,
       skipGatewayBootstrap: options.skipGatewayBootstrap === true,
       skipGatewayConfig: options.skipGatewayConfig === true,
       // Wizard / CLI — must be preserved for seedXConfig
@@ -2600,6 +2602,14 @@ export class InstallerStepEngine {
             );
             await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "install"]);
             await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "restart"]);
+            if (this.options.skipFunnel) {
+              this.emitLog(
+                "gateway_bootstrap",
+                "info",
+                "Skipping Tailscale funnel (skipFunnel). After `tailscale up`, run: traderclaw install --headless --funnel-only",
+              );
+              return { funnelSkipped: true };
+            }
             return this.runFunnel();
           } catch (err) {
             const text = `${err?.message || ""}\n${err?.stderr || ""}\n${err?.stdout || ""}`.toLowerCase();
@@ -2615,6 +2625,9 @@ export class InstallerStepEngine {
             if (gatewayStartFailed || gatewayModeUnset) {
               const recovered = await this.tryAutoRecoverGatewayMode("gateway_bootstrap");
               if (recovered.success) {
+                if (this.options.skipFunnel) {
+                  return { funnelSkipped: true, recovered: true };
+                }
                 return this.runFunnel();
               }
               if (gatewayModeUnset) {
@@ -2804,6 +2817,28 @@ export class InstallerStepEngine {
       return this.state;
     }
   }
+}
+
+/**
+ * After Tailscale login (`tailscale up`), expose loopback gateway :18789 via funnel.
+ */
+export async function tailscaleFunnelOpenclaw18789(options = {}) {
+  const onEvt = typeof options.onEvent === "function" ? options.onEvent : () => {};
+  try {
+    await runCommandWithEvents(
+      "tailscale",
+      ["funnel", "--bg", "18789"],
+      { onEvent: (evt) => onEvt(evt) },
+    );
+  } catch (err) {
+    const details = `${err?.stderr || ""}\n${err?.stdout || ""}\n${err?.message || ""}`.toLowerCase();
+    if (details.includes("access denied") || details.includes("operator")) {
+      throw new Error(tailscalePermissionRemediation());
+    }
+    throw err;
+  }
+  const statusOut = getCommandOutput("tailscale funnel status") || "";
+  return { funnelUrl: firstUrl(statusOut) || null, rawStatus: statusOut };
 }
 
 export function assertWizardXCredentials(modeConfig, options = {}) {
