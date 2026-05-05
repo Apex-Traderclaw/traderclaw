@@ -3898,17 +3898,35 @@ const solanaTraderPlugin = {
         cachedSummary: null,
       };
 
-      api.registerContextEngine({
-        id: "solana-trader-v1-context",
-        name: "TraderClaw V1 Trading Context",
-
-        async assemble(context: { agentId?: string }) {
-          const assembleAgentId = sanitizeAgentId(context.agentId || agentId);
+      api.registerContextEngine("solana-trader-v1-context", async () => ({
+        info: {
+          id: "solana-trader-v1-context",
+          name: "TraderClaw V1 Trading Context",
+        },
+        async ingest() {
+          return { ingested: false };
+        },
+        async assemble(params: {
+          messages: import("@mariozechner/pi-agent-core").AgentMessage[];
+          sessionKey?: string;
+          agentId?: string;
+        }) {
+          const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey : "";
+          const fromSession =
+            sessionKey.startsWith("agent:") ? (sessionKey.split(":")[1] || "").trim() : "";
+          const directAgent =
+            typeof params.agentId === "string" && params.agentId.trim() ? params.agentId.trim() : "";
+          const assembleAgentId = sanitizeAgentId(directAgent || fromSession || agentId);
           const now = Date.now();
           const CACHE_TTL_MS = 30_000;
+          const { messages } = params;
 
           if (contextEngineState.cachedSummary && now - contextEngineState.lastAssembledAt < CACHE_TTL_MS) {
-            return { systemPromptAddition: contextEngineState.cachedSummary };
+            return {
+              messages,
+              estimatedTokens: 0,
+              systemPromptAddition: contextEngineState.cachedSummary,
+            };
           }
 
           const lines: string[] = ["[TraderClaw Trading Context]"];
@@ -3948,13 +3966,13 @@ const solanaTraderPlugin = {
           contextEngineState.cachedSummary = summary;
           contextEngineState.lastAssembledAt = now;
 
-          return summary ? { systemPromptAddition: summary } : {};
+          const base = { messages, estimatedTokens: 0 };
+          return summary ? { ...base, systemPromptAddition: summary } : base;
         },
-
-        async compact(_context: { agentId?: string; messages?: unknown[] }) {
-          return {};
+        async compact() {
+          return { ok: true, compacted: false };
         },
-      });
+      }));
 
       api.logger.info("[solana-trader] Context engine registered: solana-trader-v1-context");
     }
