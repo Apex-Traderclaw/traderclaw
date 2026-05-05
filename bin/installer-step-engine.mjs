@@ -284,6 +284,47 @@ function getCommandOutput(cmd, { timeoutMs = 0 } = {}) {
   }
 }
 
+/**
+ * First existing `skills/solana-trader` directory: local package → OpenClaw extension → global npm.
+ * @param {{ pluginId: string, pluginPackage: string }} modeConfig
+ * @returns {string|null}
+ */
+export function resolveSolanaTraderPackagedRoot(modeConfig) {
+  const candidates = [
+    join(PLUGIN_PACKAGE_ROOT, "skills", "solana-trader"),
+    join(homedir(), ".openclaw", "extensions", modeConfig.pluginId, "skills", "solana-trader"),
+  ];
+  const npmRoot = getCommandOutput("npm root -g");
+  if (npmRoot) {
+    candidates.push(join(npmRoot, modeConfig.pluginPackage, "skills", "solana-trader"));
+  }
+  for (const dir of candidates) {
+    if (existsSync(dir)) return dir;
+  }
+  return null;
+}
+
+/**
+ * First existing gateway template file under `config/{filename}`.
+ * @param {{ pluginId: string, pluginPackage: string }} modeConfig
+ * @param {string} gatewayConfigFilename
+ * @returns {string|null}
+ */
+function resolveGatewayConfigSourcePath(modeConfig, gatewayConfigFilename) {
+  const candidates = [
+    join(PLUGIN_PACKAGE_ROOT, "config", gatewayConfigFilename),
+    join(homedir(), ".openclaw", "extensions", modeConfig.pluginId, "config", gatewayConfigFilename),
+  ];
+  const npmRoot = getCommandOutput("npm root -g");
+  if (npmRoot) {
+    candidates.push(join(npmRoot, modeConfig.pluginPackage, "config", gatewayConfigFilename));
+  }
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
 function extractUrls(text = "") {
   const matches = text.match(/https?:\/\/[^\s"')]+/g);
   return matches ? [...new Set(matches)] : [];
@@ -1356,13 +1397,13 @@ export function resolveAgentWorkspaceDir(configPath = CONFIG_FILE) {
 }
 
 /**
- * Copy skills/solana-trader/HEARTBEAT.md from the globally installed npm package into the workspace root.
+ * Copy skills/solana-trader/HEARTBEAT.md from the plugin package, OpenClaw extension, or global npm into the workspace root.
  * Skips overwrite if a non-empty file already exists (user may have customized it).
  */
 export function deployWorkspaceHeartbeat(modeConfig) {
-  const npmRoot = getCommandOutput("npm root -g");
-  if (!npmRoot) return { deployed: false, reason: "npm_root_g_failed" };
-  const src = join(npmRoot, modeConfig.pluginPackage, "skills", "solana-trader", "HEARTBEAT.md");
+  const skillRoot = resolveSolanaTraderPackagedRoot(modeConfig);
+  if (!skillRoot) return { deployed: false, reason: "source_missing" };
+  const src = join(skillRoot, "HEARTBEAT.md");
   if (!existsSync(src)) return { deployed: false, reason: "source_missing", src };
 
   const workspaceDir = resolveAgentWorkspaceDir(CONFIG_FILE);
@@ -1389,10 +1430,10 @@ export function deployWorkspaceHeartbeat(modeConfig) {
  * Skips files that already exist and are non-empty so user customisations are preserved.
  */
 export function deployWorkspaceBootstrapFiles(modeConfig) {
-  const npmRoot = getCommandOutput("npm root -g");
-  if (!npmRoot) return { deployed: [], skipped: [], failed: [], reason: "npm_root_g_failed" };
+  const skillRoot = resolveSolanaTraderPackagedRoot(modeConfig);
+  if (!skillRoot) return { deployed: [], skipped: [], failed: [], reason: "source_dir_missing" };
 
-  const srcDir = join(npmRoot, modeConfig.pluginPackage, "skills", "solana-trader", "workspace");
+  const srcDir = join(skillRoot, "workspace");
   if (!existsSync(srcDir)) return { deployed: [], skipped: [], failed: [], reason: "source_dir_missing", srcDir };
 
   const workspaceDir = resolveAgentWorkspaceDir(CONFIG_FILE);
