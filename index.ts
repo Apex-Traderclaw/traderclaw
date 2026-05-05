@@ -3579,7 +3579,9 @@ const solanaTraderPlugin = {
     // AGENT BOOTSTRAP HOOK — Context Injection (Upgraded with Markdown Digests)
     // =========================================================================
 
-    api.registerHook("agent:bootstrap", async (context: { agentId?: string; bootstrapFiles?: { name: string; path: string; content: string; source: string }[] }) => {
+    api.registerHook(
+      "agent:bootstrap",
+      async (context: { agentId?: string; bootstrapFiles?: { name: string; path: string; content: string; source: string }[] }) => {
       const bootAgentId = sanitizeAgentId(context.agentId || agentId);
       if (!context.bootstrapFiles) context.bootstrapFiles = [];
 
@@ -3688,13 +3690,20 @@ const solanaTraderPlugin = {
       });
 
       api.logger.info(`[solana-trader] Bootstrap: injected ${context.bootstrapFiles.length} files for agent ${bootAgentId}`);
-    });
+    },
+      {
+        name: "solana-trader-agent-bootstrap",
+        description: "Inject Solana state, decisions, bulletin, snapshot, and entitlement digests into agent bootstrap context.",
+      },
+    );
 
     // =========================================================================
     // MEMORY FLUSH HOOK — Save Before Context Compaction
     // =========================================================================
 
-    api.registerHook("memory:flush", async (context: { agentId?: string }) => {
+    api.registerHook(
+      "memory:flush",
+      async (context: { agentId?: string }) => {
       const flushAgentId = sanitizeAgentId(context.agentId || agentId);
       api.logger.info(`[solana-trader] Memory flush triggered for agent ${flushAgentId}`);
       try {
@@ -3725,7 +3734,12 @@ const solanaTraderPlugin = {
       } catch (err) {
         api.logger.warn(`[solana-trader] Memory flush: failed to write daily log for ${flushAgentId}: ${err instanceof Error ? err.message : String(err)}`);
       }
-    });
+    },
+      {
+        name: "solana-trader-memory-flush",
+        description: "Sync STATE.md and append memory-flush entry to daily log before context compaction.",
+      },
+    );
 
     api.registerService({
       id: "solana-trader-session",
