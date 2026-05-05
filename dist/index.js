@@ -4112,152 +4112,166 @@ ${String(params.summary)}
         return { format, data, exportedAt: (/* @__PURE__ */ new Date()).toISOString() };
       })
     });
-    api.registerHook("agent:bootstrap", async (context) => {
-      const bootAgentId = sanitizeAgentId(context.agentId || agentId);
-      if (!context.bootstrapFiles) context.bootstrapFiles = [];
-      try {
-        const stateFile = path.join(stateDir, `${bootAgentId}.json`);
-        const stateData = readJsonFile(stateFile);
-        if (stateData) {
-          const stateMd = generateMemoryMd(bootAgentId, stateData.state || null);
-          context.bootstrapFiles.push({
-            name: `${bootAgentId}-state.md`,
-            path: `state/${bootAgentId}-state.md`,
-            content: stateMd,
-            source: "solana-trader:state-digest"
-          });
+    api.registerHook(
+      "agent:bootstrap",
+      async (context) => {
+        const bootAgentId = sanitizeAgentId(context.agentId || agentId);
+        if (!context.bootstrapFiles) context.bootstrapFiles = [];
+        try {
+          const stateFile = path.join(stateDir, `${bootAgentId}.json`);
+          const stateData = readJsonFile(stateFile);
+          if (stateData) {
+            const stateMd = generateMemoryMd(bootAgentId, stateData.state || null);
+            context.bootstrapFiles.push({
+              name: `${bootAgentId}-state.md`,
+              path: `state/${bootAgentId}-state.md`,
+              content: stateMd,
+              source: "solana-trader:state-digest"
+            });
+          }
+        } catch (err) {
+          api.logger.warn(`[solana-trader] Bootstrap: failed to load state for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
         }
-      } catch (err) {
-        api.logger.warn(`[solana-trader] Bootstrap: failed to load state for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      try {
-        const logFile = path.join(logsDir, bootAgentId, "decisions.jsonl");
-        const decisions = readJsonlFile(logFile, config.bootstrapDecisionCount || 10);
-        if (decisions.length > 0) {
-          const decisionMd = generateDecisionDigest(decisions, config.bootstrapDecisionCount || 10);
-          context.bootstrapFiles.push({
-            name: `${bootAgentId}-decisions.md`,
-            path: `logs/${bootAgentId}/decisions.md`,
-            content: decisionMd,
-            source: "solana-trader:decisions-digest"
-          });
+        try {
+          const logFile = path.join(logsDir, bootAgentId, "decisions.jsonl");
+          const decisions = readJsonlFile(logFile, config.bootstrapDecisionCount || 10);
+          if (decisions.length > 0) {
+            const decisionMd = generateDecisionDigest(decisions, config.bootstrapDecisionCount || 10);
+            context.bootstrapFiles.push({
+              name: `${bootAgentId}-decisions.md`,
+              path: `logs/${bootAgentId}/decisions.md`,
+              content: decisionMd,
+              source: "solana-trader:decisions-digest"
+            });
+          }
+        } catch (err) {
+          api.logger.warn(`[solana-trader] Bootstrap: failed to load decisions for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
         }
-      } catch (err) {
-        api.logger.warn(`[solana-trader] Bootstrap: failed to load decisions for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      try {
-        const bulletinFile = path.join(sharedLogsDir, "team-bulletin.jsonl");
-        const allEntries = readJsonlFile(bulletinFile);
-        const bulletinMd = generateBulletinDigest(allEntries, config.bootstrapBulletinWindowHours || 24);
-        if (allEntries.length > 0) {
-          context.bootstrapFiles.push({
-            name: "team-bulletin.md",
-            path: "logs/shared/team-bulletin.md",
-            content: bulletinMd,
-            source: "solana-trader:bulletin-digest"
-          });
+        try {
+          const bulletinFile = path.join(sharedLogsDir, "team-bulletin.jsonl");
+          const allEntries = readJsonlFile(bulletinFile);
+          const bulletinMd = generateBulletinDigest(allEntries, config.bootstrapBulletinWindowHours || 24);
+          if (allEntries.length > 0) {
+            context.bootstrapFiles.push({
+              name: "team-bulletin.md",
+              path: "logs/shared/team-bulletin.md",
+              content: bulletinMd,
+              source: "solana-trader:bulletin-digest"
+            });
+          }
+        } catch (err) {
+          api.logger.warn(`[solana-trader] Bootstrap: failed to load bulletin for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
         }
-      } catch (err) {
-        api.logger.warn(`[solana-trader] Bootstrap: failed to load bulletin for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      try {
-        const snapshotFile = path.join(stateDir, "context-snapshot.json");
-        const snapshot = readJsonFile(snapshotFile);
-        if (snapshot) {
-          context.bootstrapFiles.push({
-            name: "context-snapshot.json",
-            path: "state/context-snapshot.json",
-            content: JSON.stringify(snapshot, null, 2),
-            source: "solana-trader:snapshot"
-          });
+        try {
+          const snapshotFile = path.join(stateDir, "context-snapshot.json");
+          const snapshot = readJsonFile(snapshotFile);
+          if (snapshot) {
+            context.bootstrapFiles.push({
+              name: "context-snapshot.json",
+              path: "state/context-snapshot.json",
+              content: JSON.stringify(snapshot, null, 2),
+              source: "solana-trader:snapshot"
+            });
+          }
+        } catch (err) {
+          api.logger.warn(`[solana-trader] Bootstrap: failed to load snapshot for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
         }
-      } catch (err) {
-        api.logger.warn(`[solana-trader] Bootstrap: failed to load snapshot for ${bootAgentId}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      let entitlementData = null;
-      try {
-        const liveResult = await get(`/api/entitlements/current?walletId=${walletId}`);
-        if (liveResult && typeof liveResult === "object") {
-          entitlementData = { ...liveResult, source: "live-fetch", cachedAt: (/* @__PURE__ */ new Date()).toISOString() };
+        let entitlementData = null;
+        try {
+          const liveResult = await get(`/api/entitlements/current?walletId=${walletId}`);
+          if (liveResult && typeof liveResult === "object") {
+            entitlementData = { ...liveResult, source: "live-fetch", cachedAt: (/* @__PURE__ */ new Date()).toISOString() };
+            try {
+              writeJsonFile(path.join(stateDir, "entitlement-cache.json"), entitlementData);
+            } catch (_) {
+            }
+          }
+        } catch (fetchErr) {
+          api.logger.warn(`[solana-trader] Bootstrap: live entitlement fetch failed for ${bootAgentId}: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`);
+        }
+        if (!entitlementData) {
           try {
-            writeJsonFile(path.join(stateDir, "entitlement-cache.json"), entitlementData);
+            const cached = readJsonFile(path.join(stateDir, "entitlement-cache.json"));
+            if (cached && typeof cached === "object") {
+              entitlementData = { ...cached, source: "cache-fallback" };
+            }
           } catch (_) {
           }
         }
-      } catch (fetchErr) {
-        api.logger.warn(`[solana-trader] Bootstrap: live entitlement fetch failed for ${bootAgentId}: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`);
-      }
-      if (!entitlementData) {
-        try {
-          const cached = readJsonFile(path.join(stateDir, "entitlement-cache.json"));
-          if (cached && typeof cached === "object") {
-            entitlementData = { ...cached, source: "cache-fallback" };
+        if (!entitlementData) {
+          try {
+            const agentState = readJsonFile(path.join(stateDir, `${bootAgentId}.json`));
+            const s = agentState?.state;
+            if (s && typeof s === "object" && "tier" in s) {
+              entitlementData = { tier: s.tier, maxPositions: s.maxPositions, maxPositionSizeSol: s.maxPositionSizeSol, source: "durable-state-fallback", cachedAt: (/* @__PURE__ */ new Date()).toISOString() };
+            }
+          } catch (_) {
           }
-        } catch (_) {
         }
+        if (!entitlementData) {
+          entitlementData = { tier: "starter", maxPositions: 3, maxPositionSizeSol: 0.1, source: "conservative-default", cachedAt: (/* @__PURE__ */ new Date()).toISOString() };
+          api.logger.warn(`[solana-trader] Bootstrap: no entitlement source available for ${bootAgentId}, injecting conservative Starter defaults`);
+        }
+        const entitlementMd = generateEntitlementsDigest(entitlementData);
+        context.bootstrapFiles.push({
+          name: "entitlements.md",
+          path: "state/entitlements.md",
+          content: entitlementMd,
+          source: "solana-trader:entitlements-digest"
+        });
+        api.logger.info(`[solana-trader] Bootstrap: injected ${context.bootstrapFiles.length} files for agent ${bootAgentId}`);
+      },
+      {
+        name: "solana-trader-agent-bootstrap",
+        description: "Inject Solana state, decisions, bulletin, snapshot, and entitlement digests into agent bootstrap context."
       }
-      if (!entitlementData) {
+    );
+    api.registerHook(
+      "memory:flush",
+      async (context) => {
+        const flushAgentId = sanitizeAgentId(context.agentId || agentId);
+        api.logger.info(`[solana-trader] Memory flush triggered for agent ${flushAgentId}`);
         try {
-          const agentState = readJsonFile(path.join(stateDir, `${bootAgentId}.json`));
-          const s = agentState?.state;
-          if (s && typeof s === "object" && "tier" in s) {
-            entitlementData = { tier: s.tier, maxPositions: s.maxPositions, maxPositionSizeSol: s.maxPositionSizeSol, source: "durable-state-fallback", cachedAt: (/* @__PURE__ */ new Date()).toISOString() };
+          const stateFile = path.join(stateDir, `${flushAgentId}.json`);
+          const stateData = readJsonFile(stateFile);
+          if (stateData?.state) {
+            writeMemoryMd(flushAgentId, stateData.state);
+            api.logger.info(`[solana-trader] Memory flush: STATE.md updated from persisted state for ${flushAgentId}`);
+          } else {
+            api.logger.info(`[solana-trader] Memory flush: no persisted state found for ${flushAgentId} \u2014 STATE.md not updated`);
           }
-        } catch (_) {
+        } catch (err) {
+          api.logger.warn(`[solana-trader] Memory flush: failed to write STATE.md for ${flushAgentId}: ${err instanceof Error ? err.message : String(err)}`);
         }
-      }
-      if (!entitlementData) {
-        entitlementData = { tier: "starter", maxPositions: 3, maxPositionSizeSol: 0.1, source: "conservative-default", cachedAt: (/* @__PURE__ */ new Date()).toISOString() };
-        api.logger.warn(`[solana-trader] Bootstrap: no entitlement source available for ${bootAgentId}, injecting conservative Starter defaults`);
-      }
-      const entitlementMd = generateEntitlementsDigest(entitlementData);
-      context.bootstrapFiles.push({
-        name: "entitlements.md",
-        path: "state/entitlements.md",
-        content: entitlementMd,
-        source: "solana-trader:entitlements-digest"
-      });
-      api.logger.info(`[solana-trader] Bootstrap: injected ${context.bootstrapFiles.length} files for agent ${bootAgentId}`);
-    });
-    api.registerHook("memory:flush", async (context) => {
-      const flushAgentId = sanitizeAgentId(context.agentId || agentId);
-      api.logger.info(`[solana-trader] Memory flush triggered for agent ${flushAgentId}`);
-      try {
-        const stateFile = path.join(stateDir, `${flushAgentId}.json`);
-        const stateData = readJsonFile(stateFile);
-        if (stateData?.state) {
-          writeMemoryMd(flushAgentId, stateData.state);
-          api.logger.info(`[solana-trader] Memory flush: STATE.md updated from persisted state for ${flushAgentId}`);
-        } else {
-          api.logger.info(`[solana-trader] Memory flush: no persisted state found for ${flushAgentId} \u2014 STATE.md not updated`);
-        }
-      } catch (err) {
-        api.logger.warn(`[solana-trader] Memory flush: failed to write STATE.md for ${flushAgentId}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      try {
-        const now = /* @__PURE__ */ new Date();
-        ensureDir(memoryDir);
-        const logPath = getDailyLogPath(now);
-        const timeStr = now.toISOString().slice(11, 19);
-        const entry = `
+        try {
+          const now = /* @__PURE__ */ new Date();
+          ensureDir(memoryDir);
+          const logPath = getDailyLogPath(now);
+          const timeStr = now.toISOString().slice(11, 19);
+          const entry = `
 ### ${timeStr} \u2014 ${flushAgentId} [memory_flush]
 
 Context compaction triggered. STATE.md synced from last persisted state. Decision log entries are server-persisted (no local buffer to flush).
 `;
-        if (!fs.existsSync(logPath)) {
-          const dateStr = now.toISOString().slice(0, 10);
-          const header = `# Daily Log \u2014 ${dateStr}
+          if (!fs.existsSync(logPath)) {
+            const dateStr = now.toISOString().slice(0, 10);
+            const header = `# Daily Log \u2014 ${dateStr}
 
 > Auto-generated by solana_daily_log. OpenClaw loads today + yesterday into context automatically.
 `;
-          fs.writeFileSync(logPath, header + entry, "utf-8");
-        } else {
-          fs.appendFileSync(logPath, entry, "utf-8");
+            fs.writeFileSync(logPath, header + entry, "utf-8");
+          } else {
+            fs.appendFileSync(logPath, entry, "utf-8");
+          }
+        } catch (err) {
+          api.logger.warn(`[solana-trader] Memory flush: failed to write daily log for ${flushAgentId}: ${err instanceof Error ? err.message : String(err)}`);
         }
-      } catch (err) {
-        api.logger.warn(`[solana-trader] Memory flush: failed to write daily log for ${flushAgentId}: ${err instanceof Error ? err.message : String(err)}`);
+      },
+      {
+        name: "solana-trader-memory-flush",
+        description: "Sync STATE.md and append memory-flush entry to daily log before context compaction."
       }
-    });
+    );
     api.registerService({
       id: "solana-trader-session",
       start: async () => {
@@ -4397,15 +4411,28 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
         lastAssembledAt: 0,
         cachedSummary: null
       };
-      api.registerContextEngine({
-        id: "solana-trader-v1-context",
-        name: "TraderClaw V1 Trading Context",
-        async assemble(context) {
-          const assembleAgentId = sanitizeAgentId(context.agentId || agentId);
+      api.registerContextEngine("solana-trader-v1-context", async () => ({
+        info: {
+          id: "solana-trader-v1-context",
+          name: "TraderClaw V1 Trading Context"
+        },
+        async ingest() {
+          return { ingested: false };
+        },
+        async assemble(params) {
+          const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey : "";
+          const fromSession = sessionKey.startsWith("agent:") ? (sessionKey.split(":")[1] || "").trim() : "";
+          const directAgent = typeof params.agentId === "string" && params.agentId.trim() ? params.agentId.trim() : "";
+          const assembleAgentId = sanitizeAgentId(directAgent || fromSession || agentId);
           const now = Date.now();
           const CACHE_TTL_MS = 3e4;
+          const { messages } = params;
           if (contextEngineState.cachedSummary && now - contextEngineState.lastAssembledAt < CACHE_TTL_MS) {
-            return { systemPromptAddition: contextEngineState.cachedSummary };
+            return {
+              messages,
+              estimatedTokens: 0,
+              systemPromptAddition: contextEngineState.cachedSummary
+            };
           }
           const lines = ["[TraderClaw Trading Context]"];
           try {
@@ -4442,12 +4469,13 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
           const summary = lines.length > 1 ? lines.join("\n") : null;
           contextEngineState.cachedSummary = summary;
           contextEngineState.lastAssembledAt = now;
-          return summary ? { systemPromptAddition: summary } : {};
+          const base = { messages, estimatedTokens: 0 };
+          return summary ? { ...base, systemPromptAddition: summary } : base;
         },
-        async compact(_context) {
-          return {};
+        async compact() {
+          return { ok: true, compacted: false };
         }
-      });
+      }));
       api.logger.info("[solana-trader] Context engine registered: solana-trader-v1-context");
     }
     registerXTools(api, Type, config.xConfig, config.agentId || "cto", "[solana-trader]", { enableWriteTools: config.beta?.xPosting ?? false });
