@@ -798,6 +798,31 @@ async function installAndEnableOpenClawPlugin(modeConfig, onEvent, orchestratorU
   };
 }
 
+/**
+ * Idempotent: ensure OpenClaw discovers skills under ~/.openclaw/extensions/<pluginId>/skills (extraDirs).
+ * See OpenClaw workspace skill loader: config.skills.load.extraDirs → openclaw-extra.
+ * @param {Record<string, unknown>} config
+ * @param {string} pluginId
+ */
+function ensureTraderSkillsExtraDir(config, pluginId) {
+  const marker = `.openclaw/extensions/${pluginId}/skills`;
+  const tildeEntry = `~/.openclaw/extensions/${pluginId}/skills`;
+  if (!config.skills || typeof config.skills !== "object") config.skills = {};
+  if (!config.skills.load || typeof config.skills.load !== "object") config.skills.load = {};
+  const raw = config.skills.load.extraDirs;
+  const dirs = Array.isArray(raw) ? [...raw] : [];
+  const normalized = (d) => (typeof d === "string" ? d.replace(/\\/g, "/") : "");
+  const needle = normalized(tildeEntry);
+  const hasMarker = dirs.some((d) => {
+    const n = normalized(d);
+    return n.includes(marker) || n === needle;
+  });
+  if (!hasMarker) {
+    dirs.push(tildeEntry);
+    config.skills.load.extraDirs = dirs;
+  }
+}
+
 function seedPluginConfig(modeConfig, orchestratorUrl, configPath = CONFIG_FILE) {
   const defaultUrl = orchestratorUrl || "https://api.traderclaw.ai";
 
@@ -834,6 +859,8 @@ function seedPluginConfig(modeConfig, orchestratorUrl, configPath = CONFIG_FILE)
   };
 
   mergeOrchestratorForId(modeConfig.pluginId);
+
+  ensureTraderSkillsExtraDir(config, modeConfig.pluginId);
 
   // Do not set plugins.allow here: OpenClaw validates allow[] against the plugin registry, and
   // the id is not registered until after `openclaw plugins install`. Pre-seeding allow caused:
