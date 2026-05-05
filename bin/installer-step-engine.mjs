@@ -11,7 +11,7 @@ const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
 
 /** Pinned openclaw platform version — bump deliberately after testing, never use "latest". */
-export const OPENCLAW_VERSION = "2026.4.29";
+export const OPENCLAW_VERSION = "2026.5.4";
 
 /** Directory containing solana-traderclaw (openclaw.plugin.json) — works for plugin layout or traderclaw-cli + dependency. */
 const PLUGIN_PACKAGE_ROOT = resolvePluginPackageRoot(import.meta.url);
