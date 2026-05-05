@@ -268,9 +268,17 @@ function commandExists(cmd) {
   }
 }
 
-function getCommandOutput(cmd) {
+function getCommandOutput(cmd, { timeoutMs = 0 } = {}) {
   try {
-    return execSync(cmd, { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"], shell: true, maxBuffer: 50 * 1024 * 1024, env: NO_COLOR_ENV }).trim();
+    const opts = {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: true,
+      maxBuffer: 50 * 1024 * 1024,
+      env: NO_COLOR_ENV,
+    };
+    if (timeoutMs > 0) opts.timeout = timeoutMs;
+    return execSync(cmd, opts).trim();
   } catch {
     return null;
   }
@@ -511,12 +519,35 @@ export async function ensureOpenClawGlobalPackageDependencies() {
  * global from an older install causes `openclaw plugins install` to fail config validation with
  * "plugin requires OpenClaw >=… but this host is …".
  */
-async function installOpenClawPlatform() {
+/** Bound `openclaw --version` so a post-OAuth CLI that blocks on gateway/device init cannot hang the wizard. */
+const OPENCLAW_CLI_VERSION_TIMEOUT_MS = 25_000;
+
+async function installOpenClawPlatform(onEvent) {
   const hadOpenclaw = commandExists("openclaw");
-  const previousVersion = hadOpenclaw ? getCommandOutput("openclaw --version") : null;
-  await runCommandWithEvents("npm", ["install", "-g", "--ignore-scripts", "--registry", "https://registry.npmjs.org/", `openclaw@${OPENCLAW_VERSION}`]);
+  const previousVersion = hadOpenclaw ? getCommandOutput("openclaw --version", { timeoutMs: OPENCLAW_CLI_VERSION_TIMEOUT_MS }) : null;
+  if (hadOpenclaw && !previousVersion && typeof onEvent === "function") {
+    onEvent({
+      type: "stderr",
+      text: "openclaw --version did not return in time (or failed); continuing with npm install -g anyway.\n",
+      urls: [],
+    });
+  }
+  const npmCwd = getNpmGlobalInstallCwd();
+  await runCommandWithEvents("npm", ["install", "-g", "--ignore-scripts", "--registry", "https://registry.npmjs.org/", `openclaw@${OPENCLAW_VERSION}`], {
+    onEvent,
+    cwd: npmCwd,
+    shell: false,
+  });
   const available = commandExists("openclaw");
-  const version = available ? getCommandOutput("openclaw --version") : null;
+  let version = available ? getCommandOutput("openclaw --version", { timeoutMs: OPENCLAW_CLI_VERSION_TIMEOUT_MS }) : null;
+  if (available && !version && typeof onEvent === "function") {
+    onEvent({
+      type: "stderr",
+      text: "openclaw is on PATH but --version timed out; treating install as successful.\n",
+      urls: [],
+    });
+    version = "(version check timed out)";
+  }
   if (!available) {
     throw new Error(`npm install -g openclaw@${OPENCLAW_VERSION} finished but \`openclaw\` is not available on PATH`);
   }
@@ -2491,7 +2522,11 @@ export class InstallerStepEngine {
       }
 
       if (!this.options.skipInstallOpenClaw) {
-        await this.runStep("install_openclaw", "Installing or upgrading OpenClaw platform", async () => installOpenClawPlatform());
+        await this.runStep("install_openclaw", "Installing or upgrading OpenClaw platform", async () =>
+          installOpenClawPlatform((evt) =>
+            this.emitLog("install_openclaw", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
+          ),
+        );
       }
 
       // Non-fatal: warn when the CLI has devices in pending-approval or repair state.

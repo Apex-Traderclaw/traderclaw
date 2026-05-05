@@ -4353,6 +4353,10 @@ async function cmdInstall(args) {
         return;
       }
 
+      for (const id of [...oauthSessions.keys()]) {
+        killOauthSession(id);
+      }
+
       running = true;
       runtime.status = "running";
       runtime.logs = [];
