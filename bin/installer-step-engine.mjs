@@ -451,7 +451,25 @@ function isOpenClawConfigSchemaFailure(text) {
 
 function runCommandWithEvents(cmd, args = [], opts = {}) {
   return new Promise((resolve, reject) => {
-    const { onEvent, ...spawnOpts } = opts;
+    const {
+      onEvent,
+      timeoutMs = 0,
+      heartbeatMs = 0,
+      heartbeatText = "command still running…",
+      ...spawnOpts
+    } = opts;
+
+    let settled = false;
+    let timeoutId;
+    let heartbeatId;
+    const finish = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      if (heartbeatId) clearInterval(heartbeatId);
+      fn(arg);
+    };
+
     const isNpm = /(?:^|[\\/])npm(?:\.cmd)?$/.test(cmd) || cmd === "npm";
     if (isNpm && !spawnOpts.env?.NODE_OPTIONS?.includes("max-old-space-size")) {
       spawnOpts.env = {
@@ -471,6 +489,44 @@ function runCommandWithEvents(cmd, args = [], opts = {}) {
     const emitFn = typeof onEvent === "function" ? onEvent : null;
     const emit = (event) => emitFn && emitFn(event);
 
+    if (typeof timeoutMs === "number" && timeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          /* ignore */
+        }
+        setTimeout(() => {
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            /* ignore */
+          }
+        }, 12_000);
+        const tail = `${stdout}\n${stderr}`.trim().slice(-6000);
+        const err = new Error(
+          `Timed out after ${timeoutMs}ms: ${cmd} ${args.join(" ")}\n`
+            + `Last output:\n${tail || "(no output yet — possible npm registry or network stall; try again or run the same npm command in a terminal)"}`,
+        );
+        err.timedOut = true;
+        err.stdout = stdout;
+        err.stderr = stderr;
+        finish(reject, err);
+      }, timeoutMs);
+    }
+
+    if (typeof heartbeatMs === "number" && heartbeatMs > 0 && emitFn) {
+      const start = Date.now();
+      heartbeatId = setInterval(() => {
+        const sec = Math.floor((Date.now() - start) / 1000);
+        emitFn({
+          type: "stdout",
+          text: `[installer] ${heartbeatText} (${sec}s elapsed).\n`,
+          urls: [],
+        });
+      }, heartbeatMs);
+    }
+
     child.stdout?.on("data", (d) => {
       const text = d.toString();
       stdout += text;
@@ -484,8 +540,9 @@ function runCommandWithEvents(cmd, args = [], opts = {}) {
     });
 
     child.on("close", (code) => {
+      if (settled) return;
       const urls = [...new Set([...extractUrls(stdout), ...extractUrls(stderr)])];
-      if (code === 0) resolve({ stdout, stderr, code, urls });
+      if (code === 0) finish(resolve, { stdout, stderr, code, urls });
       else {
         const isOom = code === 137 || (stderr || stdout || "").includes("Killed");
         const raw = (stderr || "").trim();
@@ -500,10 +557,10 @@ function runCommandWithEvents(cmd, args = [], opts = {}) {
         err.stderr = stderr;
         err.urls = urls;
         err.oom = isOom;
-        reject(err);
+        finish(reject, err);
       }
     });
-    child.on("error", reject);
+    child.on("error", (e) => finish(reject, e));
   });
 }
 
@@ -535,7 +592,7 @@ export async function ensureOpenClawGlobalPackageDependencies() {
     return { skipped: true, reason: "global_openclaw_dir_not_found" };
   }
   const registry = "https://registry.npmjs.org/";
-  const installFlags = ["install", "--omit=dev", "--ignore-scripts", "--registry", registry];
+  const installFlags = ["install", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--registry", registry];
   await runCommandWithEvents("npm", installFlags, { cwd: dir, shell: false });
   await runCommandWithEvents(
     "npm",
@@ -544,6 +601,8 @@ export async function ensureOpenClawGlobalPackageDependencies() {
       "--omit=dev",
       "--no-save",
       "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
       "--registry",
       registry,
       "grammy",
@@ -574,11 +633,49 @@ async function installOpenClawPlatform(onEvent) {
     });
   }
   const npmCwd = getNpmGlobalInstallCwd();
-  await runCommandWithEvents("npm", ["install", "-g", "--ignore-scripts", "--registry", "https://registry.npmjs.org/", `openclaw@${OPENCLAW_VERSION}`], {
-    onEvent,
-    cwd: npmCwd,
-    shell: false,
-  });
+  const npmTimeoutMs = Number.parseInt(String(process.env.TRADERCLAW_OPENCLAW_NPM_TIMEOUT_MS || "").trim(), 10);
+  const effectiveTimeout = Number.isFinite(npmTimeoutMs) && npmTimeoutMs > 0 ? npmTimeoutMs : 1_800_000;
+  if (typeof onEvent === "function") {
+    onEvent({
+      type: "stdout",
+      text:
+        `Running: npm install -g openclaw@${OPENCLAW_VERSION} (cwd=${npmCwd}, --no-audit --no-fund). `
+        + "First-time or upgrade installs can take several minutes; live npm lines and heartbeats appear below. "
+        + `Also watch the terminal where you started \`traderclaw install --wizard\`. `
+        + `Override stall limit: TRADERCLAW_OPENCLAW_NPM_TIMEOUT_MS (ms), default ${effectiveTimeout}.\n`,
+      urls: [],
+    });
+  }
+  await runCommandWithEvents(
+    "npm",
+    [
+      "install",
+      "-g",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      "--loglevel",
+      "info",
+      "--registry",
+      "https://registry.npmjs.org/",
+      `openclaw@${OPENCLAW_VERSION}`,
+    ],
+    {
+      onEvent,
+      cwd: npmCwd,
+      shell: false,
+      timeoutMs: effectiveTimeout,
+      heartbeatMs: 60_000,
+      heartbeatText:
+        "npm still installing OpenClaw — if this repeats for a long time, check disk space, DNS, and outbound HTTPS to registry.npmjs.org",
+      env: {
+        ...process.env,
+        // Non-interactive / fewer slow npm side trips (fundraising prompts, audit).
+        ...(process.env.CI ? {} : { CI: "true" }),
+        npm_config_update_notifier: process.env.npm_config_update_notifier ?? "false",
+      },
+    },
+  );
   const available = commandExists("openclaw");
   let version = available ? getCommandOutput("openclaw --version", { timeoutMs: OPENCLAW_CLI_VERSION_TIMEOUT_MS }) : null;
   if (available && !version && typeof onEvent === "function") {
@@ -659,7 +756,7 @@ function isNpmFilesystemPackageSpec(spec) {
  * IMPORTANT: run with `{ shell: false }` — `spawn(..., { shell: true })` can drop argv on Unix and npm then mis-resolves the package name.
  */
 function npmGlobalInstallArgs(spec, { force = false } = {}) {
-  const args = ["install", "-g", "--ignore-scripts"];
+  const args = ["install", "-g", "--ignore-scripts", "--no-audit", "--no-fund"];
   if (force) args.push("--force");
   if (!isNpmFilesystemPackageSpec(spec)) {
     args.push("--registry", "https://registry.npmjs.org/");
@@ -2646,7 +2743,7 @@ export class InstallerStepEngine {
           }
           this.emitLog("install_qmd", "info", "Installing @tobilu/qmd globally for vector search memory...");
           try {
-            await runCommandWithEvents("npm", ["install", "-g", "--ignore-scripts", "--registry", "https://registry.npmjs.org/", "@tobilu/qmd"], {
+            await runCommandWithEvents("npm", ["install", "-g", "--ignore-scripts", "--no-audit", "--no-fund", "--registry", "https://registry.npmjs.org/", "@tobilu/qmd"], {
               onEvent: (evt) => this.emitLog("install_qmd", evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
             });
           } catch (err) {
