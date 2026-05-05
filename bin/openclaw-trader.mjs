@@ -4729,11 +4729,14 @@ Commands:
   config             View and manage configuration
   test-session       Test session auth flow (refresh, rotation, challenge) without reinstalling
   update             Update global traderclaw-cli, re-sync the OpenClaw plugin (openclaw.json), force-install solana-traderclaw, and restart the gateway
+  update --deep      Same as update, then re-run installer bootstrap (pinned OpenClaw, scheduling, workspace, gateway template, persistence) without LLM/Tailscale
 
 Update options (traderclaw update):
   --beta             Use the npm dist-tag "beta" for traderclaw-cli and solana-traderclaw (default: "latest")
   --dry-run          Show / simulate actions without fully applying (where supported)
-  --skip-plugins     Do not run openclaw "plugins update" or "plugins install --force" (only npm + gateway restart)
+  --deep             After npm/plugin sync, run installer reconciliation (OpenClaw pin, scheduling, workspace…); omits LLM/Tailscale
+  --skip-plugins     Do not run openclaw "plugins update" or "plugins install --force" (only npm + gateway restart).
+                       With --deep: skips TraderClaw CLI npm reinstall + plugin activate inside deep sync (pinned OpenClaw upgrade still runs)
 
 Setup options:
   --api-key, -k      API key (skip interactive prompt)
@@ -4836,6 +4839,7 @@ Examples:
   traderclaw update
   traderclaw update --beta
   traderclaw update --dry-run
+  traderclaw update --deep
 `);
 }
 
@@ -4843,11 +4847,15 @@ async function cmdUpdate(args) {
   const tag = args.includes("--beta") ? "beta" : "latest";
   const dryRun = args.includes("--dry-run");
   const skipPlugins = args.includes("--skip-plugins");
+  const deep = args.includes("--deep");
 
   print("\nTraderClaw — Update\n");
   print("=".repeat(45));
   if (dryRun) {
     printInfo("  (dry-run: npm install and gateway restart are simulated where noted)\n");
+  }
+  if (deep && !dryRun) {
+    printInfo("  (--deep: full installer reconciliation will run after npm/plugin sync)\n");
   }
 
   let currentVersion = "unknown";
@@ -4988,6 +4996,45 @@ async function cmdUpdate(args) {
     printWarn(
       `\n  --skip-plugins: skipped "openclaw plugins update ${PLUGIN_ID}" and "openclaw plugins install ${NPM_PACKAGE_NAME}@… --force"; openclaw.json / extension may stay on an old version.`,
     );
+  }
+
+  if (deep) {
+    /** Matches wizard / headless install (TraderClaw v1 multi-agent gateway profile). */
+    const deepModeConfig = {
+      pluginPackage: "solana-traderclaw",
+      pluginId: "solana-trader",
+      cliName: "traderclaw",
+      gatewayConfig: "gateway-v1.json5",
+      agents: ["cto", "onchain-analyst", "alpha-signal-analyst", "risk-officer", "strategy-researcher"],
+    };
+    if (dryRun) {
+      print(
+        `\n  [dry-run] Would run installer reconciliation (--deep): pinned OpenClaw platform, config normalize + validate, systemd linger, ` +
+          `responses endpoint, heartbeat/cron/hooks, workspace bootstrap, gateway template, optional Telegram from env, gateway restart, verify.` +
+          `${skipPlugins ? " (--skip-plugins: skip TraderClaw CLI npm + plugin activate inside deep)" : ""}\n`,
+      );
+    } else {
+      print("\n  Deep update — installer reconciliation (LLM / Tailscale unchanged)...\n");
+      try {
+        const { runTraderClawDeepUpdate } = await import("./installer-step-engine.mjs");
+        await runTraderClawDeepUpdate({
+          modeConfig: deepModeConfig,
+          skipPluginTarballSync: skipPlugins,
+          hooks: {
+            onLog: ({ text }) => {
+              if (text) print(String(text));
+            },
+            onStepEvent: ({ stepId, status, detail }) => {
+              print(`[deep] ${stepId} ${status}${detail ? ` — ${detail}` : ""}`);
+            },
+          },
+        });
+        printSuccess("\n  Deep reconciliation finished.");
+      } catch (err) {
+        printError(err?.message || String(err));
+        process.exit(1);
+      }
+    }
   }
 
   if (dryRun) {

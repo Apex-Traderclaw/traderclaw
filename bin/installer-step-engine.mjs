@@ -1630,6 +1630,29 @@ function getAccessPairForAgent(wizardOpts, agentId) {
   return { at, ats };
 }
 
+function readPluginOrchestratorUrl(pluginId) {
+  try {
+    const config = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
+    const entry = config?.plugins?.entries?.[pluginId];
+    const u = entry?.config?.orchestratorUrl;
+    if (typeof u === "string" && u.trim()) return u.trim().replace(/\/+$/, "");
+  } catch {
+    /* keep default */
+  }
+  return "https://api.traderclaw.ai";
+}
+
+function readPluginApiKeyForVerify(pluginId) {
+  try {
+    const config = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
+    const entry = config?.plugins?.entries?.[pluginId];
+    const k = entry?.config?.apiKey;
+    return typeof k === "string" ? k.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
 function seedXConfig(modeConfig, configPath = CONFIG_FILE, wizardOpts = {}) {
   let config = {};
   try {
@@ -3051,6 +3074,230 @@ export async function tailscaleFunnelOpenclaw18789(options = {}) {
   }
   const statusOut = getCommandOutput("tailscale funnel status") || "";
   return { funnelUrl: firstUrl(statusOut) || null, rawStatus: statusOut };
+}
+
+/**
+ * Re-run installer bootstrap steps (pinned OpenClaw platform, dependency repair, plugin activation,
+ * gateway persistence, scheduling, workspace bootstrap, gateway templates) without LLM or Tailscale flows.
+ * Intended for `traderclaw update --deep` after npm/plugin sync.
+ */
+export async function runTraderClawDeepUpdate(options = {}) {
+  const modeConfig = options.modeConfig;
+  if (!modeConfig?.pluginId || !modeConfig?.pluginPackage || !modeConfig?.gatewayConfig || !modeConfig?.cliName) {
+    throw new Error("runTraderClawDeepUpdate: modeConfig must include pluginId, pluginPackage, gatewayConfig, cliName");
+  }
+  const skipPluginTarballSync = options.skipPluginTarballSync === true;
+  const onLog = typeof options.hooks?.onLog === "function" ? options.hooks.onLog : () => {};
+  const onStep = typeof options.hooks?.onStepEvent === "function" ? options.hooks.onStepEvent : () => {};
+
+  const emitLog = (stepId, level, text) => {
+    const clean = typeof text === "string" ? stripAnsi(text) : text;
+    onLog({ at: nowIso(), stepId, level, text: clean, urls: [] });
+  };
+
+  async function runDeepStep(stepId, title, handler) {
+    onStep({ at: nowIso(), stepId, status: "in_progress", detail: title });
+    try {
+      const result = await handler();
+      onStep({ at: nowIso(), stepId, status: "completed", detail: title });
+      return result;
+    } catch (err) {
+      const detail = stripAnsi(err?.message || String(err));
+      onStep({ at: nowIso(), stepId, status: "failed", detail });
+      throw err;
+    }
+  }
+
+  await runDeepStep("deep_preflight", "Checking prerequisites", async () => {
+    if (!commandExists("node") || !commandExists("npm")) {
+      throw new Error("node and npm are required for deep update");
+    }
+    return { node: true, npm: true };
+  });
+
+  await runDeepStep("deep_install_openclaw", "Installing or upgrading OpenClaw platform (pinned)", async () =>
+    installOpenClawPlatform((evt) =>
+      emitLog("deep_install_openclaw", evt.type === "stderr" ? "warn" : "info", evt.text),
+    ),
+  );
+
+  await runDeepStep("deep_device_approval_check", "Checking OpenClaw device approval status", async () => {
+    const check = checkOpenClawDeviceApproval();
+    if (!check.ran) {
+      emitLog("deep_device_approval_check", "info", "Device approval check skipped (openclaw CLI unavailable).");
+      return { ran: false };
+    }
+    const needsAction = check.pendingIds.length > 0 || check.repairDetected;
+    if (!needsAction) {
+      emitLog("deep_device_approval_check", "info", "No pending or repair-state devices found.");
+      return { ran: true, ok: true };
+    }
+    const lines = [
+      "ACTION REQUIRED — OpenClaw device approval needed.",
+      "Run: openclaw devices list",
+      ...(check.pendingIds.length > 0
+        ? check.pendingIds.map((id) => `  openclaw devices approve ${id}`)
+        : ["  openclaw devices approve <requestId>"]),
+    ];
+    emitLog("deep_device_approval_check", "warn", lines.join("\n"));
+    return { ran: true, ok: false, pendingIds: check.pendingIds };
+  });
+
+  if (!skipPluginTarballSync) {
+    await runDeepStep("deep_install_traderclaw_cli", "Ensuring TraderClaw CLI npm package", async () =>
+      installPlugin(modeConfig, (evt) =>
+        emitLog("deep_install_traderclaw_cli", evt.type === "stderr" ? "warn" : "info", evt.text),
+      ),
+    );
+    await runDeepStep("deep_openclaw_global_deps", "Ensuring OpenClaw global package dependencies", async () =>
+      ensureOpenClawGlobalPackageDependencies(),
+    );
+    await runDeepStep("deep_install_qmd", "Installing QMD memory engine (vector search)", async () => {
+      if (commandExists("qmd")) {
+        const ver = getCommandOutput("qmd --version");
+        emitLog("deep_install_qmd", "info", `QMD already installed: ${ver}`);
+        return { alreadyInstalled: true, version: ver };
+      }
+      emitLog("deep_install_qmd", "info", "Installing @tobilu/qmd globally...");
+      try {
+        await runCommandWithEvents(
+          "npm",
+          ["install", "-g", "--ignore-scripts", "--no-audit", "--no-fund", "--registry", "https://registry.npmjs.org/", "@tobilu/qmd"],
+          {
+            onEvent: (evt) =>
+              emitLog("deep_install_qmd", evt.type === "stderr" ? "warn" : "info", evt.text),
+          },
+        );
+      } catch (err) {
+        emitLog(
+          "deep_install_qmd",
+          "warn",
+          `QMD install failed (non-fatal): ${err?.message || err}. Install manually: npm install -g @tobilu/qmd`,
+        );
+        return { installed: false, error: err?.message || String(err) };
+      }
+      const available = commandExists("qmd");
+      return { installed: available, version: available ? getCommandOutput("qmd --version") : null };
+    });
+
+    const orchUrl = readPluginOrchestratorUrl(modeConfig.pluginId);
+    await runDeepStep("deep_activate_openclaw_plugin", "Installing and enabling TraderClaw inside OpenClaw", async () =>
+      installAndEnableOpenClawPlugin(
+        modeConfig,
+        (evt) =>
+          emitLog("deep_activate_openclaw_plugin", evt.type === "stderr" ? "warn" : "info", evt.text),
+        orchUrl,
+      ),
+    );
+  } else {
+    emitLog(
+      "deep_plugin_sync",
+      "warn",
+      'Skipping TraderClaw CLI npm install, QMD bootstrap, and plugin activate (--skip-plugins). OpenClaw platform upgrade still ran.',
+    );
+  }
+
+  normalizeOpenClawConfigFileShape(CONFIG_FILE);
+
+  await runDeepStep("deep_gateway_bootstrap_defaults", "Ensuring gateway bootstrap defaults in openclaw.json", async () => {
+    ensureGatewayBootstrapDefaults(CONFIG_FILE, (msg) => emitLog("deep_gateway_bootstrap_defaults", "info", msg));
+    return { ok: true };
+  });
+
+  await runDeepStep("deep_openclaw_config_validate", "Validating OpenClaw config", async () => {
+    try {
+      await runCommandWithEvents("openclaw", ["config", "validate"], {
+        onEvent: (evt) =>
+          emitLog("deep_openclaw_config_validate", evt.type === "stderr" ? "warn" : "info", evt.text),
+      });
+    } catch (err) {
+      const blob = `${err?.message || ""}\n${err?.stderr || ""}\n${err?.stdout || ""}`;
+      if (isOpenClawConfigSchemaFailure(blob)) {
+        throw new Error(gatewayConfigValidationRemediation());
+      }
+      throw err;
+    }
+    return { ok: true };
+  });
+
+  const { ensureLinuxGatewayPersistence } = await import("./gateway-persistence-linux.mjs");
+  await runDeepStep("deep_gateway_persistence", "SSH-safe gateway (systemd user linger)", async () =>
+    ensureLinuxGatewayPersistence({
+      emitLog: (level, text) => emitLog("deep_gateway_persistence", level, text),
+      runPrivileged: (cmd, args) =>
+        runCommandWithEvents(cmd, args, {
+          onEvent: (evt) =>
+            emitLog("deep_gateway_persistence", evt.type === "stderr" ? "warn" : "info", evt.text),
+        }),
+    }),
+  );
+
+  await runDeepStep("deep_enable_responses", "Enabling /v1/responses endpoint", async () => {
+    const configPath = ensureOpenResponsesEnabled(CONFIG_FILE);
+    return { configPath };
+  });
+
+  await runDeepStep("deep_gateway_scheduling", "Configuring heartbeat and cron schedules", async () => {
+    const result = configureGatewayScheduling(modeConfig, CONFIG_FILE);
+    emitLog("deep_gateway_scheduling", "info", `Agents configured: ${result.agentsConfigured}`);
+    if (result.removedLegacyCronJobs) {
+      emitLog("deep_gateway_scheduling", "warn", "Removed legacy 'cron.jobs' from openclaw.json for schema compatibility.");
+    }
+    return result;
+  });
+
+  await runDeepStep("deep_workspace_heartbeat", "Installing HEARTBEAT.md into agent workspace", async () =>
+    deployWorkspaceHeartbeat(modeConfig),
+  );
+
+  await runDeepStep("deep_workspace_bootstrap", "Installing workspace context files", async () =>
+    deployWorkspaceBootstrapFiles(modeConfig),
+  );
+
+  await runDeepStep("deep_gateway_config", "Deploying gateway config template", async () =>
+    deployGatewayConfig(modeConfig),
+  );
+
+  await runDeepStep("deep_x_credentials", "Merging X/Twitter credentials from environment", async () =>
+    seedXConfig(modeConfig, CONFIG_FILE, {}),
+  );
+
+  const telegramEnv =
+    String(process.env.TRADERCLAW_HEADLESS_TELEGRAM_TOKEN || "").trim()
+    || String(process.env.OPENCLAW_TELEGRAM_BOT_TOKEN || "").trim();
+  if (telegramEnv) {
+    await runDeepStep("deep_telegram_env", "Applying Telegram bot token from environment", async () => {
+      writeTelegramChannelConfig(telegramEnv, CONFIG_FILE);
+      const policy = ensureTelegramGroupPolicyOpenForWizard();
+      if (policy.changed) {
+        emitLog("deep_telegram_env", "info", "Set channels.telegram.groupPolicy=open for wizard-compatible groups.");
+      }
+      return { configured: true };
+    });
+  }
+
+  await runDeepStep("deep_openclaw_config_validate_final", "Re-validating OpenClaw config", async () => {
+    normalizeOpenClawConfigFileShape(CONFIG_FILE);
+    await runCommandWithEvents("openclaw", ["config", "validate"], {
+      onEvent: (evt) =>
+        emitLog("deep_openclaw_config_validate_final", evt.type === "stderr" ? "warn" : "info", evt.text),
+    });
+    return { ok: true };
+  });
+
+  await runDeepStep("deep_restart_gateway", "Restarting gateway", async () => restartGateway());
+
+  await runDeepStep("deep_verify", "Verifying installation", async () => {
+    const apiKey = readPluginApiKeyForVerify(modeConfig.pluginId);
+    const checks = verifyInstallation(modeConfig, apiKey);
+    for (const c of checks) {
+      const prefix = c.ok ? "ok" : "warn";
+      emitLog("deep_verify", c.ok ? "info" : "warn", `${prefix}: ${c.label}${c.note ? ` — ${c.note}` : ""}`);
+    }
+    return { checks };
+  });
+
+  return { status: "completed" };
 }
 
 export function assertWizardXCredentials(modeConfig, options = {}) {
