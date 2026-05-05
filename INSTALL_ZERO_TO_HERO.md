@@ -51,6 +51,10 @@ Restart gateway:
 openclaw gateway restart
 ```
 
+**Skill paths (extension-only installs):** The installer copies `HEARTBEAT.md` and workspace bootstrap files from the local plugin package, from `~/.openclaw/extensions/solana-trader`, or from the global `solana-traderclaw` npm install—whichever exists first. Setup also seeds `skills.load.extraDirs` in `~/.openclaw/openclaw.json` so OpenClaw discovers the `solana-trader` skill when the plugin lives only under extensions.
+
+**Manual plugin upgrade from a git/build tree:** The build output is split across `dist/index.js` and hashed `dist/chunk-*.js` files. Copy the **entire** `dist/` directory (e.g. `rsync -a --delete ./dist/ ~/.openclaw/extensions/solana-trader/dist/`) or reinstall with `openclaw plugins install solana-traderclaw@<version>`—never replace only `index.js`.
+
 ---
 
 ## 3) Event-Driven Setup (Required)
