@@ -2135,6 +2135,10 @@ function parseInstallWizardArgs(args) {
     if ((key === "--gateway-token" || key === "-t") && next) out.gatewayToken = args[++i];
     if (key === "--with-telegram") out.enableTelegram = true;
     if (key === "--telegram-token" && next) out.telegramToken = args[++i];
+    if (key === "--x-consumer-key" && next) out.xConsumerKey = args[++i];
+    if (key === "--x-consumer-secret" && next) out.xConsumerSecret = args[++i];
+    if (key === "--x-access-token-main" && next) out.xAccessTokenMain = args[++i];
+    if (key === "--x-access-token-main-secret" && next) out.xAccessTokenMainSecret = args[++i];
   }
   return out;
 }
@@ -3598,10 +3602,163 @@ function wizardHtml(defaults) {
 </html>`;
 }
 
+function traderclawHeadlessEnv(name) {
+  return String(process.env[name] || "").trim();
+}
+
+function parseInstallHeadlessMeta(args) {
+  const funnelOnly = args.includes("--funnel-only");
+  const skipTailscale =
+    args.includes("--skip-tailscale") || traderclawHeadlessEnv("TRADERCLAW_INSTALL_SKIP_TAILSCALE") === "1";
+  let skipFunnel = args.includes("--skip-funnel") || traderclawHeadlessEnv("TRADERCLAW_INSTALL_SKIP_FUNNEL") === "1";
+  if (skipTailscale) skipFunnel = true;
+  return { funnelOnly, skipTailscale, skipFunnel };
+}
+
+function filterHeadlessArgv(args) {
+  const strip = new Set(["--headless", "--funnel-only", "--skip-tailscale", "--skip-funnel"]);
+  return args.filter((a) => !strip.has(a));
+}
+
+async function cmdInstallHeadless(args) {
+  const meta = parseInstallHeadlessMeta(args);
+  const { tailscaleFunnelOpenclaw18789, createInstallerStepEngine, assertWizardXCredentials } = await import(
+    "./installer-step-engine.mjs",
+  );
+
+  if (meta.funnelOnly) {
+    print("\nTraderClaw install — Tailscale funnel (public HTTPS → gateway loopback :18789)\n");
+    try {
+      const r = await tailscaleFunnelOpenclaw18789({
+        onEvent: (evt) => {
+          const t = typeof evt?.text === "string" ? evt.text : "";
+          if (t.trim()) printInfo(t.trimEnd());
+        },
+      });
+      if (r.funnelUrl) printSuccess(`Public gateway URL (Tailscale funnel): ${r.funnelUrl}`);
+      else printWarn("Could not parse funnel URL — on the VPS run: tailscale funnel status");
+      print("");
+    } catch (err) {
+      printError(err?.message || String(err));
+      process.exit(1);
+    }
+    printInfo(
+      "Use this URL as gatewayBaseUrl when running: traderclaw setup --gateway-base-url <url> --gateway-token <token>",
+    );
+    return;
+  }
+
+  let w = parseInstallWizardArgs(filterHeadlessArgv(args));
+  w.llmProvider = w.llmProvider || traderclawHeadlessEnv("TRADERCLAW_HEADLESS_LLM_PROVIDER");
+  w.llmModel = w.llmModel || traderclawHeadlessEnv("TRADERCLAW_HEADLESS_LLM_MODEL");
+  w.llmCredential =
+    w.llmCredential
+    || traderclawHeadlessEnv("TRADERCLAW_HEADLESS_LLM_API_KEY")
+    || traderclawHeadlessEnv("TRADERCLAW_LLM_API_KEY");
+  w.telegramToken =
+    w.telegramToken
+    || traderclawHeadlessEnv("TRADERCLAW_HEADLESS_TELEGRAM_TOKEN")
+    || traderclawHeadlessEnv("OPENCLAW_TELEGRAM_BOT_TOKEN");
+  w.apiKey =
+    w.apiKey
+    || traderclawHeadlessEnv("TRADERCLAW_HEADLESS_ORCHESTRATOR_API_KEY")
+    || traderclawHeadlessEnv("TRADERCLAW_API_KEY");
+  if (!(w.orchestratorUrl || "").trim()) {
+    w.orchestratorUrl = traderclawHeadlessEnv("TRADERCLAW_ORCHESTRATOR_URL") || "https://api.traderclaw.ai";
+  }
+  w.xConsumerKey = w.xConsumerKey || traderclawHeadlessEnv("X_CONSUMER_KEY");
+  w.xConsumerSecret = w.xConsumerSecret || traderclawHeadlessEnv("X_CONSUMER_SECRET");
+  w.xAccessTokenMain = w.xAccessTokenMain || traderclawHeadlessEnv("X_ACCESS_TOKEN_MAIN");
+  w.xAccessTokenMainSecret =
+    w.xAccessTokenMainSecret || traderclawHeadlessEnv("X_ACCESS_TOKEN_MAIN_SECRET");
+
+  if (w.llmAuthMode === "oauth") {
+    printError("traderclaw install --headless does not support LLM OAuth — use traderclaw install --wizard");
+    process.exit(1);
+  }
+  if (!w.llmProvider || !w.llmModel || !w.llmCredential) {
+    printError(
+      "Headless install requires --llm-provider, --llm-model, --llm-api-key (env: TRADERCLAW_HEADLESS_LLM_* ).",
+    );
+    process.exit(1);
+  }
+  if (!w.telegramToken) {
+    printError("Headless install requires --telegram-token (env: TRADERCLAW_HEADLESS_TELEGRAM_TOKEN).");
+    process.exit(1);
+  }
+
+  const modeConfig = {
+    pluginPackage: "solana-traderclaw",
+    pluginId: "solana-trader",
+    cliName: "traderclaw",
+    gatewayConfig: "gateway-v1.json5",
+    agents: ["cto", "onchain-analyst", "alpha-signal-analyst", "risk-officer", "strategy-researcher"],
+  };
+
+  const xErr = assertWizardXCredentials(modeConfig, w);
+  if (xErr) {
+    printError(xErr);
+    process.exit(1);
+  }
+
+  print("\nTraderClaw install — headless (non-interactive)\n");
+  const engine = createInstallerStepEngine(
+    modeConfig,
+    {
+      lane: w.lane === "quick-local" ? "quick-local" : "event-driven",
+      llmAuthMode: "api_key",
+      llmProvider: w.llmProvider,
+      llmModel: w.llmModel,
+      llmCredential: w.llmCredential,
+      apiKey: w.apiKey || "",
+      orchestratorUrl: String(w.orchestratorUrl || "https://api.traderclaw.ai").replace(/\/+$/, ""),
+      gatewayBaseUrl: w.gatewayBaseUrl || "",
+      gatewayToken: w.gatewayToken || "",
+      enableTelegram: true,
+      telegramToken: w.telegramToken,
+      skipTailscale: meta.skipTailscale,
+      skipFunnel: meta.skipFunnel,
+      xConsumerKey: w.xConsumerKey,
+      xConsumerSecret: w.xConsumerSecret,
+      xAccessTokenMain: w.xAccessTokenMain,
+      xAccessTokenMainSecret: w.xAccessTokenMainSecret,
+    },
+    {
+      onLog: ({ text }) => {
+        if (text) print(String(text));
+      },
+      onStepEvent: ({ stepId, status, detail }) => {
+        print(`[install] ${stepId} ${status}${detail ? ` — ${detail}` : ""}`);
+      },
+    },
+  );
+
+  const state = await engine.runAll();
+  if (state.status !== "completed") {
+    printError("Headless install failed.");
+    process.exit(1);
+  }
+
+  printSuccess("\nHeadless install completed.");
+  if (state.setupHandoff?.command) {
+    printInfo(`CLI hand-off: ${state.setupHandoff.command}`);
+  }
+  if (meta.skipFunnel) {
+    printWarn(
+      "Funnel skipped — run `tailscale up` then `traderclaw install --headless --funnel-only`, then traderclaw setup with --gateway-base-url.",
+    );
+  }
+}
+
 async function cmdInstall(args) {
+  const headless = args.includes("--headless");
+  if (headless) {
+    await cmdInstallHeadless(args);
+    return;
+  }
   const wizard = args.includes("--wizard");
   if (!wizard) {
-    printError("Only wizard mode is currently supported. Use: traderclaw install --wizard");
+    printError('Use: traderclaw install --wizard  or  traderclaw install --headless (--help)');
     process.exit(1);
   }
 
@@ -4628,6 +4785,16 @@ Install wizard (traderclaw install --wizard):
   --llm-oauth-paste    Paste redirect URL or code for Codex OAuth (non-skip)
   --llm-oauth-skip-login       Skip login when you already ran openclaw models auth login
 
+Headless VPS / CI (traderclaw install --headless):
+  Requires API-key LLM (no OAuth): --llm-provider, --llm-model, --llm-api-key, --telegram-token
+  Same flags as wizard for --api-key/-k, --url/-u, --gateway-base-url/-g, X/Twitter (optional, all-or-none):
+  --x-consumer-key ... --x-consumer-secret ... --x-access-token-main ... --x-access-token-main-secret ...
+  --skip-tailscale       Skip Tailscale install/up (implies --skip-funnel unless overridden)
+  --skip-funnel          Do not run tailscale funnel after gateway restart
+  --funnel-only          After manual tailscale up: publish gateway :18789 via funnel only
+  Env: TRADERCLAW_HEADLESS_LLM_PROVIDER/MODEL/API_KEY, TRADERCLAW_HEADLESS_TELEGRAM_TOKEN,
+       TRADERCLAW_HEADLESS_ORCHESTRATOR_API_KEY, TRADERCLAW_INSTALL_SKIP_TAILSCALE/FUNNEL, X_* etc.
+
 Examples:
   traderclaw signup
   traderclaw setup
@@ -4638,6 +4805,9 @@ Examples:
   traderclaw install --wizard
   traderclaw install --wizard --lane quick-local
   traderclaw install --wizard --llm-auth oauth --llm-provider openai-codex --llm-oauth-skip-login
+  traderclaw install --headless --skip-tailscale --llm-provider anthropic --llm-model anthropic/claude-sonnet-4-6 \\
+    --llm-api-key \"$ANTHROPIC_KEY\" --telegram-token \"$TG\" --skip-funnel
+  traderclaw install --headless --funnel-only
   traderclaw repair-openclaw
   traderclaw gateway ensure-persistent
   traderclaw setup --signup --user-id my_agent_001 --referral-code ABCD1234
