@@ -1378,8 +1378,16 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   if (!config.channels.telegram || typeof config.channels.telegram !== "object") {
     config.channels.telegram = {};
   }
-  if (config.channels.telegram.streaming === undefined) {
-    config.channels.telegram.streaming = "partial";
+  // OpenClaw ≥2026.5 expects channels.telegram.streaming as an object ({ mode, chunkMode, preview, block }).
+  // Legacy scalar ("partial"|"off"|...) was valid briefly but now fails validation ("must be object").
+  const tgStream = config.channels.telegram.streaming;
+  const telegramStreamingModes = new Set(["off", "partial", "block", "progress"]);
+  if (tgStream === undefined) {
+    config.channels.telegram.streaming = { mode: "partial" };
+  } else if (typeof tgStream === "string") {
+    config.channels.telegram.streaming = telegramStreamingModes.has(tgStream)
+      ? { mode: tgStream }
+      : { mode: "partial" };
   }
 
   if (!config.commands || typeof config.commands !== "object") config.commands = {};
