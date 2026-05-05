@@ -654,8 +654,9 @@ async function installOpenClawPlatform(onEvent) {
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",
+      "--prefer-offline",
       "--loglevel",
-      "info",
+      "warn",
       "--registry",
       "https://registry.npmjs.org/",
       `openclaw@${OPENCLAW_VERSION}`,
@@ -665,9 +666,9 @@ async function installOpenClawPlatform(onEvent) {
       cwd: npmCwd,
       shell: false,
       timeoutMs: effectiveTimeout,
-      heartbeatMs: 60_000,
+      heartbeatMs: 30_000,
       heartbeatText:
-        "npm still installing OpenClaw — if this repeats for a long time, check disk space, DNS, and outbound HTTPS to registry.npmjs.org",
+        "npm still installing OpenClaw (extract/link phase — this is normal silence). Check disk space and outbound HTTPS to registry.npmjs.org if this repeats many times",
       env: {
         ...process.env,
         // Non-interactive / fewer slow npm side trips (fundraising prompts, audit).
@@ -676,12 +677,17 @@ async function installOpenClawPlatform(onEvent) {
       },
     },
   );
+  if (typeof onEvent === "function") {
+    onEvent({ type: "stdout", text: "npm install -g openclaw completed. Verifying binary on PATH…\n", urls: [] });
+  }
   const available = commandExists("openclaw");
-  let version = available ? getCommandOutput("openclaw --version", { timeoutMs: OPENCLAW_CLI_VERSION_TIMEOUT_MS }) : null;
+  // Version check is informational only — cap it tightly so a blocking CLI startup never stalls the step.
+  const VERSION_TIMEOUT_MS = 8_000;
+  let version = available ? getCommandOutput("openclaw --version", { timeoutMs: VERSION_TIMEOUT_MS }) : null;
   if (available && !version && typeof onEvent === "function") {
     onEvent({
       type: "stderr",
-      text: "openclaw is on PATH but --version timed out; treating install as successful.\n",
+      text: `openclaw is on PATH but --version did not respond within ${VERSION_TIMEOUT_MS}ms; treating install as successful.\n`,
       urls: [],
     });
     version = "(version check timed out)";
