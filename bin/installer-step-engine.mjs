@@ -1357,10 +1357,8 @@ function deployGatewayConfig(modeConfig) {
   const gatewayDir = join(CONFIG_DIR, "gateway");
   mkdirSync(gatewayDir, { recursive: true });
   const destFile = join(gatewayDir, modeConfig.gatewayConfig);
-  const npmRoot = getCommandOutput("npm root -g");
-  if (!npmRoot) return { deployed: false, dest: destFile };
-  const src = join(npmRoot, modeConfig.pluginPackage, "config", modeConfig.gatewayConfig);
-  if (!existsSync(src)) return { deployed: false, dest: destFile };
+  const src = resolveGatewayConfigSourcePath(modeConfig, modeConfig.gatewayConfig);
+  if (!src) return { deployed: false, dest: destFile };
   writeFileSync(destFile, readFileSync(src));
   return { deployed: true, source: src, dest: destFile };
 }
