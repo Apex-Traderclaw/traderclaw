@@ -18,9 +18,16 @@ interface WSMessage {
   [key: string]: unknown;
 }
 
-const RECONNECT_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
+const RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 const PING_INTERVAL_MS = 30_000;
 const PONG_TIMEOUT_MS = 10_000;
+
+/** After this many failed cycles without reaching subscribed, apply {@link CIRCUIT_BACKOFF_MS}. */
+const CIRCUIT_UNHEALTHY_THRESHOLD = 12;
+/** Long backoff when the orchestrator/WebSocket path is persistently unhealthy (reduces CPU/log storms). */
+const CIRCUIT_BACKOFF_MS = 300_000;
+
+const ERROR_LOG_THROTTLE_MS = 60_000;
 
 /** No alpha_signal for this long after grace → treat ingestion as stale (watchdog may recover). */
 export const ALPHA_INGESTION_STALE_MS = 20 * 60 * 1000;
@@ -33,6 +40,8 @@ export class AlphaStreamManager {
   private subscribed = false;
   private authenticated = false;
   private reconnectAttempt = 0;
+  /** Closes where we were not in subscribed state (e.g. handshake failures) — drives circuit backoff. */
+  private unhealthyStreak = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private intentionalClose = false;
   private messageCount = 0;
@@ -41,6 +50,7 @@ export class AlphaStreamManager {
   private tier = "";
   private premiumAccess = false;
   private currentAccessToken = "";
+  private lastErrorLogAt = new Map<string, number>();
 
   constructor(config: AlphaWSConfig) {
     this.config = config;
@@ -137,6 +147,8 @@ export class AlphaStreamManager {
   async unsubscribe(): Promise<{ unsubscribed: boolean }> {
     this.intentionalClose = true;
     this.subscribed = false;
+    this.unhealthyStreak = 0;
+    this.reconnectAttempt = 0;
 
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -174,13 +186,25 @@ export class AlphaStreamManager {
     return this.subscribed && this.ws !== null && this.ws.readyState === 1;
   }
 
-  getStats(): { subscribed: boolean; messageCount: number; lastEventTs: number; connectedAt: number; uptimeSeconds: number } {
+  getStats(): {
+    subscribed: boolean;
+    messageCount: number;
+    lastEventTs: number;
+    connectedAt: number;
+    uptimeSeconds: number;
+    reconnectAttempt: number;
+    unhealthyStreak: number;
+    circuitBackoff: boolean;
+  } {
     return {
       subscribed: this.isSubscribed(),
       messageCount: this.messageCount,
       lastEventTs: this.lastEventTs,
       connectedAt: this.connectedAt,
       uptimeSeconds: this.connectedAt ? Math.floor((Date.now() - this.connectedAt) / 1000) : 0,
+      reconnectAttempt: this.reconnectAttempt,
+      unhealthyStreak: this.unhealthyStreak,
+      circuitBackoff: this.unhealthyStreak >= CIRCUIT_UNHEALTHY_THRESHOLD,
     };
   }
 
@@ -265,17 +289,24 @@ export class AlphaStreamManager {
       this.ws.on("close", () => {
         clearTimeout(connectTimeout);
         clearKeepalive();
+        const wasHealthy = this.subscribed;
         this.subscribed = false;
         this.authenticated = false;
         this.log("info", "WebSocket closed");
         if (!this.intentionalClose) {
+          if (wasHealthy) {
+            this.unhealthyStreak = 0;
+          } else {
+            this.unhealthyStreak++;
+          }
+          // Single reconnect path (close). Do not also schedule from connect() catch — avoids timer storms.
           this.scheduleReconnect();
         }
       });
 
       this.ws.on("error", (err: Error) => {
         clearTimeout(connectTimeout);
-        this.log("error", `WebSocket error: ${err.message}`);
+        this.logThrottledError(`ws:${err.message}`, `WebSocket error: ${err.message}`);
         if (this.ws && this.ws.readyState !== 1) {
           reject(err);
         }
@@ -305,6 +336,7 @@ export class AlphaStreamManager {
 
       case "alpha_stream_subscribed":
         this.subscribed = true;
+        this.unhealthyStreak = 0;
         this.tier = (msg.tier as string) || this.tier;
         this.premiumAccess = (msg.premiumAccess as boolean) || false;
         this.log("info", `Subscribed to alpha stream: tier=${this.tier}, premium=${this.premiumAccess}`);
@@ -366,17 +398,56 @@ export class AlphaStreamManager {
 
   private scheduleReconnect(): void {
     if (this.intentionalClose) return;
-    const delay = RECONNECT_DELAYS[Math.min(this.reconnectAttempt, RECONNECT_DELAYS.length - 1)];
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    const idx = Math.min(this.reconnectAttempt, RECONNECT_DELAYS_MS.length - 1);
+    let delay = RECONNECT_DELAYS_MS[idx];
+    if (this.unhealthyStreak >= CIRCUIT_UNHEALTHY_THRESHOLD) {
+      delay = Math.max(delay, CIRCUIT_BACKOFF_MS);
+    }
+
     this.reconnectAttempt++;
-    this.log("info", `Reconnecting in ${delay}ms (attempt ${this.reconnectAttempt})`);
+
+    if (this.shouldLogReconnectPlan()) {
+      const circuitNote =
+        this.unhealthyStreak >= CIRCUIT_UNHEALTHY_THRESHOLD
+          ? ` (circuit: ${Math.round(CIRCUIT_BACKOFF_MS / 1000)}s backoff — orchestrator path unhealthy)`
+          : "";
+      this.log("info", `Reconnecting in ${delay}ms (attempt ${this.reconnectAttempt}, unhealthyStreak=${this.unhealthyStreak})${circuitNote}`);
+    }
+
     this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
       try {
         await this.connect();
       } catch (err) {
-        this.log("error", `Reconnect failed: ${err instanceof Error ? err.message : String(err)}`);
-        this.scheduleReconnect();
+        // close handler schedules reconnect; avoid duplicate timers / attempt inflation.
+        this.logThrottledError(
+          "reconnect-failed",
+          `Reconnect failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }, delay);
+  }
+
+  /** Reduce log spam when wedged (CPU + disk heavy with JSON file logging). */
+  private shouldLogReconnectPlan(): boolean {
+    const n = this.reconnectAttempt;
+    if (n <= 3) return true;
+    if (n <= 30 && n % 5 === 0) return true;
+    return n % 25 === 0;
+  }
+
+  private logThrottledError(key: string, msg: string): void {
+    const now = Date.now();
+    const last = this.lastErrorLogAt.get(key) ?? 0;
+    if (now - last < ERROR_LOG_THROTTLE_MS) return;
+    this.lastErrorLogAt.set(key, now);
+    this.log("error", msg);
   }
 
   private log(level: "info" | "warn" | "error", msg: string): void {
