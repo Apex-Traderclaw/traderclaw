@@ -18,7 +18,7 @@ import {
 } from "./chunk-3UQIQJPQ.js";
 import {
   AlphaStreamManager
-} from "./chunk-KNJVODJC.js";
+} from "./chunk-ZUY36F4Q.js";
 import {
   BitqueryStreamManager
 } from "./chunk-S2DLZKMQ.js";

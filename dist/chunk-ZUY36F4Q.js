@@ -1,7 +1,10 @@
 // src/alpha-ws.ts
-var RECONNECT_DELAYS = [1e3, 2e3, 4e3, 8e3, 16e3, 3e4];
+var RECONNECT_DELAYS_MS = [1e3, 2e3, 4e3, 8e3, 16e3, 3e4];
 var PING_INTERVAL_MS = 3e4;
 var PONG_TIMEOUT_MS = 1e4;
+var CIRCUIT_UNHEALTHY_THRESHOLD = 12;
+var CIRCUIT_BACKOFF_MS = 3e5;
+var ERROR_LOG_THROTTLE_MS = 6e4;
 var ALPHA_INGESTION_STALE_MS = 20 * 60 * 1e3;
 var ALPHA_STALE_GRACE_AFTER_CONNECT_MS = 3 * 60 * 1e3;
 var AlphaStreamManager = class {
@@ -10,6 +13,8 @@ var AlphaStreamManager = class {
   subscribed = false;
   authenticated = false;
   reconnectAttempt = 0;
+  /** Closes where we were not in subscribed state (e.g. handshake failures) — drives circuit backoff. */
+  unhealthyStreak = 0;
   reconnectTimer = null;
   intentionalClose = false;
   messageCount = 0;
@@ -18,6 +23,7 @@ var AlphaStreamManager = class {
   tier = "";
   premiumAccess = false;
   currentAccessToken = "";
+  lastErrorLogAt = /* @__PURE__ */ new Map();
   constructor(config) {
     this.config = config;
   }
@@ -104,6 +110,8 @@ var AlphaStreamManager = class {
   async unsubscribe() {
     this.intentionalClose = true;
     this.subscribed = false;
+    this.unhealthyStreak = 0;
+    this.reconnectAttempt = 0;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -138,7 +146,10 @@ var AlphaStreamManager = class {
       messageCount: this.messageCount,
       lastEventTs: this.lastEventTs,
       connectedAt: this.connectedAt,
-      uptimeSeconds: this.connectedAt ? Math.floor((Date.now() - this.connectedAt) / 1e3) : 0
+      uptimeSeconds: this.connectedAt ? Math.floor((Date.now() - this.connectedAt) / 1e3) : 0,
+      reconnectAttempt: this.reconnectAttempt,
+      unhealthyStreak: this.unhealthyStreak,
+      circuitBackoff: this.unhealthyStreak >= CIRCUIT_UNHEALTHY_THRESHOLD
     };
   }
   sendAlphaSubscribe() {
@@ -221,16 +232,22 @@ var AlphaStreamManager = class {
       this.ws.on("close", () => {
         clearTimeout(connectTimeout);
         clearKeepalive();
+        const wasHealthy = this.subscribed;
         this.subscribed = false;
         this.authenticated = false;
         this.log("info", "WebSocket closed");
         if (!this.intentionalClose) {
+          if (wasHealthy) {
+            this.unhealthyStreak = 0;
+          } else {
+            this.unhealthyStreak++;
+          }
           this.scheduleReconnect();
         }
       });
       this.ws.on("error", (err) => {
         clearTimeout(connectTimeout);
-        this.log("error", `WebSocket error: ${err.message}`);
+        this.logThrottledError(`ws:${err.message}`, `WebSocket error: ${err.message}`);
         if (this.ws && this.ws.readyState !== 1) {
           reject(err);
         }
@@ -257,6 +274,7 @@ var AlphaStreamManager = class {
         break;
       case "alpha_stream_subscribed":
         this.subscribed = true;
+        this.unhealthyStreak = 0;
         this.tier = msg.tier || this.tier;
         this.premiumAccess = msg.premiumAccess || false;
         this.log("info", `Subscribed to alpha stream: tier=${this.tier}, premium=${this.premiumAccess}`);
@@ -308,17 +326,45 @@ var AlphaStreamManager = class {
   }
   scheduleReconnect() {
     if (this.intentionalClose) return;
-    const delay = RECONNECT_DELAYS[Math.min(this.reconnectAttempt, RECONNECT_DELAYS.length - 1)];
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    const idx = Math.min(this.reconnectAttempt, RECONNECT_DELAYS_MS.length - 1);
+    let delay = RECONNECT_DELAYS_MS[idx];
+    if (this.unhealthyStreak >= CIRCUIT_UNHEALTHY_THRESHOLD) {
+      delay = Math.max(delay, CIRCUIT_BACKOFF_MS);
+    }
     this.reconnectAttempt++;
-    this.log("info", `Reconnecting in ${delay}ms (attempt ${this.reconnectAttempt})`);
+    if (this.shouldLogReconnectPlan()) {
+      const circuitNote = this.unhealthyStreak >= CIRCUIT_UNHEALTHY_THRESHOLD ? ` (circuit: ${Math.round(CIRCUIT_BACKOFF_MS / 1e3)}s backoff \u2014 orchestrator path unhealthy)` : "";
+      this.log("info", `Reconnecting in ${delay}ms (attempt ${this.reconnectAttempt}, unhealthyStreak=${this.unhealthyStreak})${circuitNote}`);
+    }
     this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
       try {
         await this.connect();
       } catch (err) {
-        this.log("error", `Reconnect failed: ${err instanceof Error ? err.message : String(err)}`);
-        this.scheduleReconnect();
+        this.logThrottledError(
+          "reconnect-failed",
+          `Reconnect failed: ${err instanceof Error ? err.message : String(err)}`
+        );
       }
     }, delay);
+  }
+  /** Reduce log spam when wedged (CPU + disk heavy with JSON file logging). */
+  shouldLogReconnectPlan() {
+    const n = this.reconnectAttempt;
+    if (n <= 3) return true;
+    if (n <= 30 && n % 5 === 0) return true;
+    return n % 25 === 0;
+  }
+  logThrottledError(key, msg) {
+    const now = Date.now();
+    const last = this.lastErrorLogAt.get(key) ?? 0;
+    if (now - last < ERROR_LOG_THROTTLE_MS) return;
+    this.lastErrorLogAt.set(key, now);
+    this.log("error", msg);
   }
   log(level, msg) {
     if (this.config.logger) {

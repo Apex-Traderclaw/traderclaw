@@ -17,7 +17,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "solana-traderclaw": "^1.0.124"
+    "solana-traderclaw": "^1.0.125"
   },
   "keywords": [
     "traderclaw",
