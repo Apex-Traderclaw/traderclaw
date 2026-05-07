@@ -75,6 +75,10 @@
         "type": "string",
         "description": "Override workspace directory path. Defaults to ~/.openclaw/workspace/ when unset."
       },
+      "dataDir": {
+        "type": "string",
+        "description": "Absolute path for session sidecar (session-tokens.json), state, and logs. Defaults to ~/.traderclaw-v1-data when unset. Set explicitly on VPS so CLI and gateway agree."
+      },
       "bootstrapDecisionCount": {
         "type": "integer",
         "minimum": 1,
@@ -213,6 +217,11 @@
     "workspaceDir": {
       "label": "Workspace Directory",
       "placeholder": "~/.openclaw/workspace",
+      "advanced": true
+    },
+    "dataDir": {
+      "label": "TraderClaw data directory",
+      "placeholder": "/root/.traderclaw-v1-data",
       "advanced": true
     },
     "bootstrapDecisionCount": {
