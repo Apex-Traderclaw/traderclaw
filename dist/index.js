@@ -1,5 +1,7 @@
 import {
-  readRecoverySecretFromDisk
+  readRecoverySecretFromDisk,
+  writeRefreshTokenToOpenclawAtomic,
+  writeRecoverySecretToOpenclawAtomic
 } from "./chunk-SBYHSJLU.js";
 import {
   SessionManager
@@ -995,7 +997,15 @@ var solanaTraderPlugin = {
           api.logger.info("[solana-trader] Persisted rotated recovery secret to session-tokens.json");
         } catch (err) {
           api.logger.warn(
-            `[solana-trader] Failed to write rotated recovery secret: ${err instanceof Error ? err.message : String(err)}`
+            `[solana-trader] Failed to write rotated recovery secret to sidecar: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+        try {
+          writeRecoverySecretToOpenclawAtomic(newSecret);
+          api.logger.info("[solana-trader] Persisted rotated recovery secret to openclaw.json");
+        } catch (err) {
+          api.logger.warn(
+            `[solana-trader] Failed to write rotated recovery secret to openclaw.json: ${err instanceof Error ? err.message : String(err)}`
           );
         }
       },
@@ -1018,6 +1028,14 @@ var solanaTraderPlugin = {
         } catch (err) {
           api.logger.warn(
             `[solana-trader] Failed to persist session sidecar: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+        try {
+          writeRefreshTokenToOpenclawAtomic(tokens.refreshToken);
+          api.logger.info("[solana-trader] Persisted rotated refresh token to openclaw.json");
+        } catch (err) {
+          api.logger.warn(
+            `[solana-trader] Failed to write rotated refresh token to openclaw.json: ${err instanceof Error ? err.message : String(err)}`
           );
         }
       },

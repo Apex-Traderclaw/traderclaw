@@ -18,6 +18,33 @@ function readRecoverySecretFromDisk() {
     return void 0;
   }
 }
+function writeRefreshTokenToOpenclawAtomic(newToken) {
+  const p = getOpenclawConfigPath();
+  const dir = path.dirname(p);
+  let config = {};
+  if (fs.existsSync(p)) {
+    try {
+      config = JSON.parse(fs.readFileSync(p, "utf-8"));
+    } catch {
+      config = {};
+    }
+  }
+  if (!config.plugins || typeof config.plugins !== "object") config.plugins = {};
+  const plugins = config.plugins;
+  if (!plugins.entries || typeof plugins.entries !== "object") plugins.entries = {};
+  const entries = plugins.entries;
+  const prev = entries[PLUGIN_ID];
+  const entry = prev && typeof prev === "object" ? { ...prev } : { enabled: true, config: {} };
+  if (!entry.config || typeof entry.config !== "object") entry.config = {};
+  const cfg = entry.config;
+  cfg.refreshToken = newToken;
+  entry.enabled = true;
+  entries[PLUGIN_ID] = entry;
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = `${p}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  fs.renameSync(tmp, p);
+}
 function writeRecoverySecretToOpenclawAtomic(newSecret) {
   const p = getOpenclawConfigPath();
   const dir = path.dirname(p);
@@ -49,5 +76,6 @@ function writeRecoverySecretToOpenclawAtomic(newSecret) {
 export {
   getOpenclawConfigPath,
   readRecoverySecretFromDisk,
+  writeRefreshTokenToOpenclawAtomic,
   writeRecoverySecretToOpenclawAtomic
 };
