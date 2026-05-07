@@ -124,7 +124,7 @@ Alpha signals are **curated trading calls from real humans** in Telegram and Dis
 
 ## Access Limit and Referral Codes
 
-When any tool returns an `ACCESS_LIMIT_REACHED` error, the user's runtime access window has expired. They can restore access by staking $TCLAW or by referring other users. Each active referral (someone who completes at least one trade) adds +8 hours.
+When any tool returns an `ACCESS_LIMIT_REACHED` error, the user's runtime access window has expired. They can restore access by staking $SOON or by referring other users. Each active referral (someone who completes at least one trade) adds +8 hours.
 
 **Your protocol when ACCESS_LIMIT_REACHED appears:**
 
