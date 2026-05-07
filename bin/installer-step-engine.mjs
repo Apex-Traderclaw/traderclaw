@@ -342,6 +342,7 @@ function buildCommandString(cmd, args = []) {
 
 function isPrivilegeError(err) {
   const text = `${err?.message || ""}\n${err?.stderr || ""}\n${err?.stdout || ""}`.toLowerCase();
+  // Do not match bare "sudo" — OpenClaw prints "try sudo loginctl" in hints; that is not a priv-denied signal.
   return (
     text.includes("permission denied")
     || text.includes("eacces")
@@ -349,7 +350,8 @@ function isPrivilegeError(err) {
     || text.includes("operation not permitted")
     || text.includes("must be root")
     || text.includes("requires root")
-    || text.includes("sudo")
+    || text.includes("sudo: a password is required")
+    || text.includes("a terminal is required to read the password")
     || text.includes("authentication is required")
   );
 }
@@ -364,6 +366,16 @@ function canUseSudoWithoutPrompt() {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** User systemd (openclaw gateway) expects XDG_RUNTIME_DIR under /run/user/<uid> once linger is on. */
+function primeLinuxUserRuntimeEnv() {
+  if (process.platform !== "linux" || typeof process.getuid !== "function") return;
+  const uid = process.getuid();
+  if (uid === 0) return;
+  if (!process.env.XDG_RUNTIME_DIR) {
+    process.env.XDG_RUNTIME_DIR = `/run/user/${uid}`;
   }
 }
 
@@ -2307,11 +2319,33 @@ export class InstallerStepEngine {
   }
 
   async runWithPrivilegeGuidance(stepId, cmd, args = [], customLines = []) {
+    primeLinuxUserRuntimeEnv();
+    const onEvent = (evt) =>
+      this.emitLog(stepId, evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []);
+    const tryRun = (c, a) => runCommandWithEvents(c, a, { onEvent });
+
     try {
-      return await runCommandWithEvents(cmd, args, {
-        onEvent: (evt) => this.emitLog(stepId, evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
-      });
+      return await tryRun(cmd, args);
     } catch (err) {
+      const sudoOpenclawGateway =
+        cmd === "openclaw" &&
+        Array.isArray(args) &&
+        args[0] === "gateway" &&
+        !isRootUser() &&
+        canUseSudoWithoutPrompt();
+      if (sudoOpenclawGateway) {
+        const bin = getCommandOutput("command -v openclaw")?.trim();
+        if (bin) {
+          try {
+            return await tryRun("sudo", ["-n", bin, ...args]);
+          } catch (e2) {
+            if (isPrivilegeError(e2)) {
+              throw new Error(privilegeRemediationMessage(cmd, args, customLines));
+            }
+            throw e2;
+          }
+        }
+      }
       if (isPrivilegeError(err)) {
         throw new Error(privilegeRemediationMessage(cmd, args, customLines));
       }
@@ -2490,7 +2524,18 @@ export class InstallerStepEngine {
           // best effort; gateway install may still surface a clearer error
         }
       }
+      if (!isRootUser() && canUseSudoWithoutPrompt() && typeof process.getuid === "function") {
+        const uid = process.getuid();
+        try {
+          await runCommandWithEvents("sudo", ["-n", "systemctl", "start", `user@${uid}.service`], {
+            onEvent: (evt) => this.emitLog(stepId, evt.type === "stderr" ? "warn" : "info", evt.text, evt.urls || []),
+          });
+        } catch {
+          // best effort
+        }
+      }
     }
+    primeLinuxUserRuntimeEnv();
 
     try {
       await this.runWithPrivilegeGuidance(stepId, "openclaw", ["gateway", "stop"]);
@@ -2862,7 +2907,29 @@ export class InstallerStepEngine {
                   lingerSnap.username,
                 ]);
               }
+              // Linger alone does not always create /run/user/<uid> until user@uid.service runs (SSH-less bootstrap).
+              if (!isRootUser() && canUseSudoWithoutPrompt() && typeof process.getuid === "function") {
+                const uid = process.getuid();
+                try {
+                  await runCommandWithEvents("sudo", ["-n", "systemctl", "start", `user@${uid}.service`], {
+                    onEvent: (evt) =>
+                      this.emitLog(
+                        "gateway_bootstrap",
+                        evt.type === "stderr" ? "warn" : "info",
+                        evt.text,
+                        evt.urls || [],
+                      ),
+                  });
+                } catch {
+                  this.emitLog(
+                    "gateway_bootstrap",
+                    "warn",
+                    `Could not start user@${uid}.service (non-fatal); gateway install may still work if session exists.`,
+                  );
+                }
+              }
             }
+            primeLinuxUserRuntimeEnv();
             await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "install"]);
             await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "restart"]);
             if (this.options.skipFunnel) {
