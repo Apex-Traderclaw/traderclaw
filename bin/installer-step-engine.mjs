@@ -369,6 +369,21 @@ function canUseSudoWithoutPrompt() {
   }
 }
 
+/**
+ * NodeSource/deb npm defaults to a root-owned global tree (/usr/lib/node_modules). Non-root
+ * `npm install -g` must target a user prefix; `NPM_CONFIG_PREFIX` is applied to every npm child.
+ */
+function ensureNpmUserGlobalPrefixForNonRoot() {
+  if (typeof process.getuid !== "function" || process.getuid() === 0) return;
+  const prefix = join(homedir(), ".npm-global");
+  try {
+    mkdirSync(prefix, { recursive: true });
+  } catch {
+    /* ignore */
+  }
+  process.env.NPM_CONFIG_PREFIX = prefix;
+}
+
 /** User systemd (openclaw gateway) expects XDG_RUNTIME_DIR under /run/user/<uid> once linger is on. */
 function primeLinuxUserRuntimeEnv() {
   if (process.platform !== "linux" || typeof process.getuid !== "function") return;
@@ -599,6 +614,7 @@ function getGlobalOpenClawPackageDir() {
  */
 /** Runs `npm install` in the global `openclaw` package directory (fixes missing `grammy` etc.). */
 export async function ensureOpenClawGlobalPackageDependencies() {
+  ensureNpmUserGlobalPrefixForNonRoot();
   const dir = getGlobalOpenClawPackageDir();
   if (!dir) {
     return { skipped: true, reason: "global_openclaw_dir_not_found" };
@@ -2770,6 +2786,7 @@ export class InstallerStepEngine {
     this.state.status = "running";
     this.state.startedAt = nowIso();
     try {
+      ensureNpmUserGlobalPrefixForNonRoot();
       if (!this.options.skipPreflight) {
         await this.runStep("preflight", "Checking prerequisites", async () => {
           if (!commandExists("node") || !commandExists("npm")) throw new Error("node and npm are required");
@@ -3189,6 +3206,8 @@ export async function runTraderClawDeepUpdate(options = {}) {
     const clean = typeof text === "string" ? stripAnsi(text) : text;
     onLog({ at: nowIso(), stepId, level, text: clean, urls: [] });
   };
+
+  ensureNpmUserGlobalPrefixForNonRoot();
 
   async function runDeepStep(stepId, title, handler) {
     onStep({ at: nowIso(), stepId, status: "in_progress", detail: title });
