@@ -20,7 +20,7 @@ import {
 } from "./src/runtime-layout.js";
 import { IntelligenceLab } from "./src/intelligence-lab.js";
 import { scrubUntrustedText } from "./src/prompt-scrub.js";
-import { readRecoverySecretFromDisk, writeRecoverySecretToOpenclawAtomic } from "./src/recovery-secret-config.js";
+import { readRecoverySecretFromDisk, writeRecoverySecretToOpenclawAtomic, writeRefreshTokenToOpenclawAtomic } from "./src/recovery-secret-config.js";
 import { looksLikeTelegramChatId, resolveTelegramRecipientToChatId } from "./src/telegram-resolve.js";
 import * as fs from "fs";
 import * as path from "path";
@@ -363,7 +363,15 @@ const solanaTraderPlugin = {
           api.logger.info("[solana-trader] Persisted rotated recovery secret to session-tokens.json");
         } catch (err: unknown) {
           api.logger.warn(
-            `[solana-trader] Failed to write rotated recovery secret: ${err instanceof Error ? err.message : String(err)}`,
+            `[solana-trader] Failed to write rotated recovery secret to sidecar: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        try {
+          writeRecoverySecretToOpenclawAtomic(newSecret);
+          api.logger.info("[solana-trader] Persisted rotated recovery secret to openclaw.json");
+        } catch (err: unknown) {
+          api.logger.warn(
+            `[solana-trader] Failed to write rotated recovery secret to openclaw.json: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       },
@@ -389,6 +397,14 @@ const solanaTraderPlugin = {
         } catch (err: unknown) {
           api.logger.warn(
             `[solana-trader] Failed to persist session sidecar: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        try {
+          writeRefreshTokenToOpenclawAtomic(tokens.refreshToken);
+          api.logger.info("[solana-trader] Persisted rotated refresh token to openclaw.json");
+        } catch (err: unknown) {
+          api.logger.warn(
+            `[solana-trader] Failed to write rotated refresh token to openclaw.json: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       },
