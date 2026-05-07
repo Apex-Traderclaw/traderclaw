@@ -47,6 +47,7 @@ import { Type } from "@sinclair/typebox";
 import kayba, { SpanType } from "@kayba_ai/tracing";
 import * as fs from "fs";
 import * as path from "path";
+import { homedir } from "os";
 
 // lib/x-client.mjs
 import { createHmac, randomBytes } from "crypto";
@@ -941,7 +942,7 @@ var solanaTraderPlugin = {
         api.logger.warn(`[solana-trader] Kayba tracing init failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    const dataDir = config.dataDir || path.join(process.cwd(), ".traderclaw-v1-data");
+    const dataDir = config.dataDir || path.join(homedir(), ".traderclaw-v1-data");
     const sessionTokensPath = path.join(dataDir, "session-tokens.json");
     const readSessionSidecar = () => {
       try {
