@@ -24,7 +24,7 @@ Plugin (this package)
   │              (market data)   (on-chain execution)
   │
   ├── Local persistence (state, decisions, bulletin, patterns)
-  │     └── .traderclaw-v1-data/
+  │     └── ~/.traderclaw-v1-data/   (or explicit plugins.entries.solana-trader.config.dataDir)
   │
   └── OpenClaw native memory (auto-loaded every session)
         ├── MEMORY.md (durable facts — always in context)
@@ -191,7 +191,7 @@ If you prefer to configure manually instead of using the CLI, add to `~/.opencla
           walletId: 1,
           apiKey: "sk_live_your_key_here",
           apiTimeout: 30000,  // optional, default 30s
-          dataDir: "/path/to/data"  // optional, default: <cwd>/.traderclaw-v1-data
+          dataDir: "/path/to/data"  // optional, default: ~/.traderclaw-v1-data; VPS: set explicit absolute path
         }
       }
     }
@@ -243,8 +243,10 @@ Entitlement fallback chain: live API fetch → cached file → durable state →
 
 ### Local Data Directory
 
+Default location is **`~/.traderclaw-v1-data`** when `dataDir` is not set in `openclaw.json` (older releases used `<cwd>/.traderclaw-v1-data`). For production/VPS hosts, set **`plugins.entries.solana-trader.config.dataDir`** to an absolute path so the CLI and OpenClaw gateway always share the same session sidecar.
+
 ```
-.traderclaw-v1-data/
+~/.traderclaw-v1-data/   (or your explicit dataDir)
 ├── state/                  # Durable agent state, snapshot, entitlement cache, patterns
 ├── logs/
 │   ├── <agentId>/          # Per-agent decision logs (JSONL)
@@ -580,8 +582,20 @@ I'll monitor this position and review after exit.
 - Check if kill switch is enabled
 - Verify your wallet has sufficient SOL balance
 
+**Session / wallet-proof loop (CLI login succeeds but OpenClaw gateway tools keep failing):**
+
+This usually means a stale `session-tokens.json` sidecar is overriding the refresh token in `openclaw.json`, and/or the CLI and gateway resolved a different `dataDir` when one process used a different working directory.
+
+1. Stop the gateway (`systemctl --user stop openclaw-gateway.service` or equivalent).
+2. Back up then remove `session-tokens.json` under your session data directory (see `dataDir` in `openclaw.json`; default is `~/.traderclaw-v1-data` for new installs — older installs may still use a legacy `<cwd>/.traderclaw-v1-data` folder).
+3. In `~/.openclaw/openclaw.json`, set **`plugins.entries.solana-trader.config.dataDir`** to a **single absolute path** (for example `/root/.traderclaw-v1-data` when running as `root`) so the CLI and gateway always agree.
+4. Run `traderclaw login` (use `--wallet-private-key` or env if the server requires wallet proof).
+5. Start the gateway again, then run `traderclaw test-session` and a quick tool smoke test.
+
+New `traderclaw setup` runs persist explicit `dataDir`, and `traderclaw login` writes the session sidecar so it matches `openclaw.json` after login.
+
 **Memory/state not persisting:**
 - Check that the `dataDir` config points to a writable location
-- Default is `<cwd>/.traderclaw-v1-data` — verify permissions
+- Default is `~/.traderclaw-v1-data` (older releases used `<cwd>/.traderclaw-v1-data`) — verify permissions
 - Check `MEMORY.md` exists at project root after first `solana_state_save` call
 - Check `memory/` directory for daily log files

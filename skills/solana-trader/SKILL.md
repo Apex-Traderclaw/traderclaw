@@ -36,6 +36,7 @@ https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-aut
 - **`traderclaw login`** refreshes the session when possible and runs the challenge flow when needed; the gateway process itself cannot prompt for a signing key.
 - **OpenClaw gateway ≠ your SSH shell.** The human must re-auth on the gateway host and restart the gateway so new tokens are loaded.
 - **Plugin id vs npm name:** `solana-traderclaw` is the npm package name, while `solana-trader` is the OpenClaw plugin id used in `plugins.entries` and `plugins.allow`.
+- **Stale sidecar vs login:** Session tokens also live in `session-tokens.json` under `dataDir` (defaults to `~/.traderclaw-v1-data`). If `traderclaw login` fixed the CLI but the gateway still errors, set **`plugins.entries.solana-trader.config.dataDir`** to one absolute path on the host, remove the stale `session-tokens.json`, then `traderclaw login` and **`openclaw gateway restart`**. Current CLI+plugin releases sync the sidecar on login; see repo README troubleshooting.
 
 ---
 

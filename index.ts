@@ -281,7 +281,7 @@ const solanaTraderPlugin = {
       }
     }
 
-    const dataDir = config.dataDir || path.join(process.cwd(), ".traderclaw-v1-data");
+    const dataDir = config.dataDir || path.join(homedir(), ".traderclaw-v1-data");
     const sessionTokensPath = path.join(dataDir, "session-tokens.json");
 
     interface SessionSidecar {
