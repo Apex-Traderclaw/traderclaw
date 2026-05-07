@@ -5,7 +5,7 @@ import { homedir, tmpdir } from "os";
 import { basename, dirname, join } from "path";
 import { resolvePluginPackageRoot } from "./resolve-plugin-root.mjs";
 import { choosePreferredProviderModel } from "./llm-model-preference.mjs";
-import { getLinuxGatewayPersistenceSnapshot } from "./gateway-persistence-linux.mjs";
+import { getLinuxGatewayPersistenceSnapshot, isLinuxGatewayPersistenceEligible } from "./gateway-persistence-linux.mjs";
 
 const CONFIG_DIR = join(homedir(), ".openclaw");
 const CONFIG_FILE = join(CONFIG_DIR, "openclaw.json");
@@ -2481,6 +2481,17 @@ export class InstallerStepEngine {
     this.state.autoRecovery.backupPath = backupPath;
     this.emitLog(stepId, "warn", `Auto-recovery: applied ${changed.join(", ")} with backup at ${backupPath}`);
 
+    if (isLinuxGatewayPersistenceEligible()) {
+      const lingerSnap = getLinuxGatewayPersistenceSnapshot();
+      if (lingerSnap.linger !== true) {
+        try {
+          await this.runWithPrivilegeGuidance(stepId, "sudo", ["loginctl", "enable-linger", lingerSnap.username]);
+        } catch {
+          // best effort; gateway install may still surface a clearer error
+        }
+      }
+    }
+
     try {
       await this.runWithPrivilegeGuidance(stepId, "openclaw", ["gateway", "stop"]);
     } catch {
@@ -2835,6 +2846,23 @@ export class InstallerStepEngine {
             ensureGatewayBootstrapDefaults(CONFIG_FILE, (msg) =>
               this.emitLog("gateway_bootstrap", "info", msg),
             );
+            // `openclaw gateway install` uses user systemd; linger must be enabled before install
+            // (gateway_persistence runs later — too late). VPS userdata may already do this as root.
+            if (isLinuxGatewayPersistenceEligible()) {
+              const lingerSnap = getLinuxGatewayPersistenceSnapshot();
+              if (lingerSnap.linger !== true) {
+                this.emitLog(
+                  "gateway_bootstrap",
+                  "info",
+                  "Enabling systemd user linger before openclaw gateway install (required for headless/SSH).",
+                );
+                await this.runWithPrivilegeGuidance("gateway_bootstrap", "sudo", [
+                  "loginctl",
+                  "enable-linger",
+                  lingerSnap.username,
+                ]);
+              }
+            }
             await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "install"]);
             await this.runWithPrivilegeGuidance("gateway_bootstrap", "openclaw", ["gateway", "restart"]);
             if (this.options.skipFunnel) {
