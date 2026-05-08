@@ -1143,6 +1143,7 @@ function mergePluginsAllowlist(modeConfig, configPath = CONFIG_FILE) {
   allowSet.add(modeConfig.pluginId);
   config.plugins.allow = [...allowSet];
   ensureAgentsDefaultsSchemaCompat(config);
+  ensurePrimaryModelInAgentsDefaultsAllowlist(config);
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
@@ -1150,8 +1151,11 @@ function mergePluginsAllowlist(modeConfig, configPath = CONFIG_FILE) {
 /**
  * Managed cron jobs with prescriptive tool chains (VPS report 2026-03-24).
  * Schedules are staggered (minutes :00 / :15 / :30 / :45) where possible to avoid pile-ups.
+ *
+ * No per-job payload.model — OpenClaw uses the user's default (`agents.defaults.model.primary`).
+ *
  * @param {string} agentId
- * @returns {Array<{ id: string, schedule: string, agentId: string, message: string, enabled: boolean }>}
+ * @returns {Array<{ id: string, schedule: string, agentId: string, message: string, enabled?: boolean }>}
  */
 function traderCronPrescriptiveJobs(agentId) {
   return [
@@ -1161,7 +1165,6 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: alpha_scan\n\nScan new launches, filter, score, log alpha. Tools: solana_scan_launches → filter (vol>30K, mcap>10K, liq>5K) → solana_token_snapshot for survivors → quality filter (top10 <50%, deployer <3 abandoned, has social) → score 0-100 → solana_alpha_log for 65+. Summarize results.",
-      model: "anthropic/claude-sonnet-4-20250514",
       thinking: false,
       lightContext: true,
       delivery: { mode: "announce", channel: "last", bestEffort: true },
@@ -1173,7 +1176,6 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: portfolio_health\n\nCombined dead-money + whale + risk audit. solana_capital_status + solana_positions → solana_token_snapshot per position → dead money exit (loss>40% or 90min+down+low vol) → whale flags (>5% supply moves) → risk checks (concentration/drawdown/exposure) → sell if CRITICAL → solana_memory_write tag 'portfolio_health'.",
-      model: "anthropic/claude-sonnet-4-20250514",
       thinking: false,
       lightContext: true,
       delivery: { mode: "announce", channel: "last", bestEffort: true },
@@ -1185,7 +1187,6 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: trust_refresh\n\nCombined source + deployer trust. solana_source_trust_refresh + solana_deployer_trust_refresh → solana_alpha_sources + solana_trades for win rates → solana_source_trust_get + solana_deployer_trust_get, flag <30 → solana_memory_write tag 'trust_refresh'.",
-      model: "anthropic/claude-haiku-4-5",
       thinking: false,
       lightContext: true,
       delivery: { mode: "none" },
@@ -1197,7 +1198,6 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: meta_rotation_analysis\n\nx_search_tweets trending topics → solana_scan_launches → categorize by narrative cluster → per-cluster metrics → compare vs solana_memory_search tag 'meta_rotation' → declare hot/fading clusters → solana_memory_write tag 'meta_rotation'.",
-      model: "anthropic/claude-sonnet-4-20250514",
       thinking: false,
       lightContext: true,
       delivery: { mode: "announce", channel: "last", bestEffort: true },
@@ -1209,7 +1209,6 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: strategy_evolution\n\nDaily strategy review. solana_journal_summary — if <10 closed trades since last evolution, log 'insufficient data' and stop. Otherwise: solana_trades to bucket by confidence tier → solana_strategy_state for current weights → analyze tier performance → solana_strategy_update with conservative adjustments (max 10% per weight per cycle) → solana_memory_write tag 'strategy_evolution'.",
-      model: "anthropic/claude-sonnet-4-20250514",
       thinking: true,
       lightContext: false,
       delivery: { mode: "announce", channel: "last", bestEffort: true },
@@ -1221,7 +1220,6 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: subscription_cleanup\n\nsolana_positions for open CAs → solana_bitquery_subscriptions for active subs (if AUTH_SCOPE_MISSING, log and stop) → match subs to positions → solana_bitquery_unsubscribe orphaned subs → solana_memory_write tag 'subscription_cleanup'. Summarize before/after counts.",
-      model: "anthropic/claude-haiku-4-5",
       thinking: false,
       lightContext: true,
       delivery: { mode: "announce", channel: "last", bestEffort: true },
@@ -1233,7 +1231,6 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: daily_performance_report\n\nCompile 24h report. solana_journal_summary + solana_capital_status + solana_positions + solana_trades + solana_strategy_state → sections: Portfolio Summary, Trading Activity (count/win rate/PnL), Best/Worst Trades, Strategy State, Risk Metrics, Recommendations → solana_memory_write tag 'daily_report'. Deliver full report.",
-      model: "anthropic/claude-sonnet-4-20250514",
       thinking: false,
       lightContext: false,
       delivery: { mode: "announce", channel: "telegram" },
@@ -1245,7 +1242,6 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: intelligence_lab_eval\n\nsolana_candidate_get — if <20 labeled candidates, log 'insufficient data' and exit. Otherwise: solana_evaluation_report → solana_model_registry for challengers → solana_replay_eval if challenger exists → solana_model_promote if challenger beats champion by >5% F1 → solana_memory_write tag 'intelligence_lab'.",
-      model: "anthropic/claude-sonnet-4-20250514",
       thinking: true,
       lightContext: false,
       delivery: { mode: "none" },
@@ -1257,7 +1253,6 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "CRON_JOB: memory_trim\n\nsolana_memory_trim dryRun:true first → review → solana_memory_trim retentionDays:2 → solana_memory_write tag 'memory_trim' with summary.",
-      model: "anthropic/claude-haiku-4-5",
       thinking: false,
       lightContext: true,
       delivery: { mode: "none" },
@@ -1269,7 +1264,6 @@ function traderCronPrescriptiveJobs(agentId) {
       agentId,
       message:
         "Balance watchdog. 1) solana_capital_status 2) solana_positions 3) solana_context_snapshot_read 4) Compare real vs believed. If mismatch: solana_context_snapshot_write with corrected state, summarize changes. If match: reply WATCHDOG_OK.",
-      model: "anthropic/claude-haiku-4-5",
       thinking: false,
       lightContext: true,
       delivery: { mode: "announce", channel: "telegram" },
@@ -1429,6 +1423,8 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
   config.agents.defaults.heartbeat = { ...defaultHeartbeat };
 
   ensureAgentsDefaultsSchemaCompat(config);
+  ensurePrimaryModelInAgentsDefaultsAllowlist(config);
+
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 
@@ -1924,6 +1920,33 @@ function ensureAgentsDefaultsSchemaCompat(config) {
   }
 }
 
+/**
+ * When `agents.defaults.models` exists, OpenClaw uses it as an allowlist — the user's configured primary model must appear there (same ref cron and chat use).
+ * Does nothing when `agents.defaults.models` is absent so we do not introduce a restrictive allowlist.
+ */
+function ensurePrimaryModelInAgentsDefaultsAllowlist(config) {
+  if (!config || typeof config !== "object") return;
+  if (!config.agents || typeof config.agents !== "object") return;
+  if (!config.agents.defaults || typeof config.agents.defaults !== "object") return;
+  const rawBucket = config.agents.defaults.models;
+  if (rawBucket === undefined) return;
+  if (typeof rawBucket !== "object" || rawBucket === null || Array.isArray(rawBucket)) return;
+
+  const primary =
+    typeof config.agents.defaults.model?.primary === "string" ? config.agents.defaults.model.primary.trim() : "";
+  if (!primary.includes("/")) return;
+  const pk = primary.toLowerCase();
+
+  const next = {};
+  for (const [key, meta] of Object.entries(rawBucket)) {
+    if (typeof key !== "string" || !key.includes("/")) continue;
+    const k = key.toLowerCase();
+    next[k] = typeof meta === "object" && meta !== null && !Array.isArray(meta) ? meta : {};
+  }
+  if (!next[pk]) next[pk] = {};
+  config.agents.defaults.models = next;
+}
+
 /** Re-read config from disk and re-apply defaults shape before gateway/plugin commands that validate the file. */
 /**
  * Proactively writes the minimum gateway fields required for OpenClaw to start.
@@ -2048,6 +2071,8 @@ function configureOpenClawLlmProvider({ provider, model, credential }, configPat
   }
   config.agents.defaults.model.primary = model;
 
+  ensurePrimaryModelInAgentsDefaultsAllowlist(config);
+
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
   return { configPath, provider, model };
@@ -2079,6 +2104,8 @@ function configureOpenClawLlmModelPrimaryOnly({ provider, model }, configPath = 
     config.agents.defaults.model = {};
   }
   config.agents.defaults.model.primary = model;
+
+  ensurePrimaryModelInAgentsDefaultsAllowlist(config);
 
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
