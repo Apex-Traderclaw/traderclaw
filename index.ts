@@ -2381,12 +2381,13 @@ const solanaTraderPlugin = {
 
     api.registerTool({
       name: "solana_alpha_submit",
-      description: "Submit a candidate token to the alpha buffer for evaluation in the next heartbeat cycle. Used by cron alpha_scan to queue discovered tokens with thesis data.",
+      description:
+        "Submit a candidate token to the alpha buffer for evaluation in the next heartbeat cycle. Use from isolated sessions or manual workflows to queue a token with thesis data (default install: discovery runs in heartbeat STEP 1, not a separate cron).",
       parameters: Type.Object({
         tokenAddress: Type.String({ description: "Solana token mint address" }),
         symbol: Type.Optional(Type.String({ description: "Token symbol" })),
         thesis: Type.Optional(Type.String({ description: "Thesis summary for why this token qualifies (volume, holders, risk flags, narrative)" })),
-        source: Type.Optional(Type.String({ description: "Signal source (e.g., cron_alpha_scan, manual)" })),
+        source: Type.Optional(Type.String({ description: "Signal source label (e.g., alpha_submit, manual, isolated_session)" })),
         confidence: Type.Optional(Type.Number({ description: "Confidence score 0-100" })),
       }),
       execute: wrapExecute("solana_alpha_submit", async (_id, params) =>

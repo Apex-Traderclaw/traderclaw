@@ -160,7 +160,7 @@ Use `solana_alpha_history` for:
 
 ## Alpha Submission (Cron → Heartbeat Pipeline)
 
-Use `solana_alpha_submit` to queue a candidate token into the alpha buffer after cron-based scanning (alpha_scan job). The heartbeat cycle then evaluates buffered candidates. Include: tokenAddress, symbol, thesis (volume, holders, risk, narrative), source, confidence.
+Use `solana_alpha_submit` to queue a candidate token into the alpha buffer for evaluation on the next heartbeat (e.g. after deep research outside the fast loop). Launch and pair discovery runs in **STEP 1: SCAN** on each heartbeat — there is no separate alpha_scan cron in the default presets. Include: tokenAddress, symbol, thesis (volume, holders, risk, narrative), source, confidence.
 
 ## Firehose Configuration
 

@@ -20,7 +20,7 @@ If MEMORY.md contains a **User Preferences** section, those values override defa
 
 | Preference key | What it overrides |
 |---|---|
-| `volumeMinUsd` | Min 24h volume filter in STEP 1 SCAN and alpha_scan cron (default: 50000) |
+| `volumeMinUsd` | Min 24h volume filter in STEP 1 SCAN (default: 50000) |
 | `marketCapMinUsd` | Min market cap filter (default: 10000) |
 | `maxPositionSizeSol` | Max position size in SOL (overrides entitlement cap if lower) |
 | `scanMode` | `"conservative"` / `"standard"` / `"aggressive"` — adjusts confidence thresholds |
@@ -365,5 +365,5 @@ NEXT CYCLE: [1 sentence — what you're watching for]
 | API endpoint reference | refs/api-reference.md |
 | Wallet proof vs signup | SKILL.md § Wallet proof vs signup |
 | Strategy evolution details | refs/strategy-evolution.md |
-| Cron job definitions | refs/cron-jobs.md (10 consolidated jobs, ~39 sessions/day) |
+| Cron job definitions | refs/cron-jobs.md (11 preset jobs; see Schedule Summary for runs/day) |
 | Position management details | refs/position-management.md |
