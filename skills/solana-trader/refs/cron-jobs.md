@@ -19,6 +19,24 @@ At start of every cron job, check whether sufficient new data exists since last 
 
 ---
 
+## Job: `alpha_stream_resubscribe`
+
+**Schedule:** Every 20 minutes (`*/20 * * * *`) — 72 runs/day
+
+**Purpose:** Recover from dropped or zombie alpha WebSocket subscriptions (signals stop buffering). Complements plugin watchdog; explicit cron ensures reconnect even across process edge cases.
+
+**Tools:** `solana_runtime_status`, `solana_alpha_subscribe`
+
+**Workflow:** Call `solana_runtime_status`. If `alphaStream.subscribed` is false, call `solana_alpha_subscribe`. If subscribed but `alphaStream.ingestionStale`, call `solana_alpha_subscribe` with `force: true`. Otherwise reply `ALPHA_KEEPALIVE_OK`.
+
+**Configuration:**
+- Model: Haiku (branch on flags, single tool calls)
+- Thinking: off
+- lightContext: on
+- Delivery: none
+
+---
+
 ## Job: `alpha_scan`
 
 **Schedule:** Every 3 hours (`0 */3 * * *`) — 8 runs/day
@@ -222,14 +240,15 @@ At start of every cron job, check whether sufficient new data exists since last 
 ## Schedule Summary
 
 | # | Job ID | Cron Expression | Runs/Day | Model | Thinking | lightContext | Delivery |
-|---|--------|----------------|----------|-------|----------|-------------|----------|
-| 1 | `portfolio-health` | `0 */4 * * *` | 6 | Sonnet | off | on | announce/last |
-| 2 | `trust-refresh` | `0 */8 * * *` | 3 | Haiku | off | on | none |
-| 3 | `meta-rotation` | `30 */8 * * *` | 3 | Sonnet | off | on | announce/last |
-| 4 | `strategy-evolution` | `0 6 * * *` | 1 | Sonnet | **on** | **off** | announce/last |
-| 5 | `subscription-cleanup` | `15 */8 * * *` | 3 | Haiku | off | on | announce/last |
-| 6 | `daily-performance-report` | `0 4 * * *` | 1 | Sonnet | off | **off** | announce/telegram |
-| 7 | `intelligence-lab-eval` | `0 16 * * *` | 1 | Sonnet | **on** | **off** | none |
-| 8 | `memory-trim` | `0 3 * * *` | 1 | Haiku | off | on | none |
-| 9 | `balance-watchdog` | `0 */2 * * *` | 12 | Haiku | off | on | announce/telegram |
-| | **Total** | | **39** | | | | |
+|---|--------|-----------------|----------|-------|----------|-------------|----------|
+| 1 | `alpha-stream-resubscribe` | `*/20 * * * *` | 72 | Haiku | off | on | none |
+| 2 | `portfolio-health` | `0 */4 * * *` | 6 | Sonnet | off | on | announce/last |
+| 3 | `trust-refresh` | `0 */8 * * *` | 3 | Haiku | off | on | none |
+| 4 | `meta-rotation` | `30 */8 * * *` | 3 | Sonnet | off | on | announce/last |
+| 5 | `strategy-evolution` | `0 6 * * *` | 1 | Sonnet | **on** | **off** | announce/last |
+| 6 | `subscription-cleanup` | `15 */8 * * *` | 3 | Haiku | off | on | announce/last |
+| 7 | `daily-performance-report` | `0 4 * * *` | 1 | Sonnet | off | **off** | announce/telegram |
+| 8 | `intelligence-lab-eval` | `0 16 * * *` | 1 | Sonnet | **on** | **off** | none |
+| 9 | `memory-trim` | `0 3 * * *` | 1 | Haiku | off | on | none |
+| 10 | `balance-watchdog` | `0 */2 * * *` | 12 | Haiku | off | on | announce/telegram |
+| | **Total** | | **103** | | | | |

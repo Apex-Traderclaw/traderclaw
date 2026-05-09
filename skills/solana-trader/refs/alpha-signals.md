@@ -22,6 +22,8 @@ Subsequent heartbeats:
   → Returns only new signals since last check
 ```
 
+Installer / Gateway preset **`alpha_stream_resubscribe`** (every 20 minutes) calls `solana_runtime_status` and re-invokes `solana_alpha_subscribe` when the subscription dropped or ingestion is stale. See refs/cron-jobs.md.
+
 If buffered signals stay empty for multiple cycles:
 ```
 solana_gateway_forward_probe({ agentId: "main", source: "heartbeat_recovery" })
