@@ -1,6 +1,6 @@
 // OpenClaw Gateway Configuration — TraderClaw V1 (Single Agent)
-// Single "main" agent with 5-minute heartbeat + 10 consolidated cron jobs.
-// Consolidated from 13 → 10: portfolio-health (dead-money+whale+risk-audit),
+// Single "main" agent with 5-minute heartbeat + 11 preset TraderClaw cron jobs.
+// alpha-stream-resubscribe (every 20m WS keepalive); portfolio-health (dead-money+whale+risk-audit);
 // trust-refresh (source-reputation+deployer-trust). Shortened prompts.
 {
   agents: {
@@ -22,6 +22,17 @@
       keepLines: 2000
     },
     jobs: [
+      // ── Alpha stream keepalive ────────────────────────────────────────
+      {
+        id: "alpha-stream-resubscribe",
+        schedule: "*/20 * * * *",
+        agentId: "main",
+        sessionTarget: "isolated",
+        delivery: { mode: "none" },
+        message: "CRON_JOB: alpha_stream_resubscribe\n\nKeep alpha WebSocket subscription healthy. solana_runtime_status — if subscribed is false: solana_alpha_subscribe. If subscribed but ingestionStale: solana_alpha_subscribe force:true (zombie heal). Else: reply ALPHA_KEEPALIVE_OK.",
+        enabled: true
+      },
+
       // ── Portfolio Health (combined dead-money + whale + risk audit) ──
       {
         id: "portfolio-health",
