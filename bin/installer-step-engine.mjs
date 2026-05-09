@@ -1160,17 +1160,6 @@ function mergePluginsAllowlist(modeConfig, configPath = CONFIG_FILE) {
 function traderCronPrescriptiveJobs(agentId) {
   return [
     {
-      id: "alpha-scan",
-      schedule: "0 */3 * * *",
-      agentId,
-      message:
-        "CRON_JOB: alpha_scan\n\nScan new launches, filter, score, log alpha. Tools: solana_scan_launches → filter (vol>30K, mcap>10K, liq>5K) → solana_token_snapshot for survivors → quality filter (top10 <50%, deployer <3 abandoned, has social) → score 0-100 → solana_alpha_log for 65+. Summarize results.",
-      thinking: false,
-      lightContext: true,
-      delivery: { mode: "announce", channel: "last", bestEffort: true },
-      enabled: true,
-    },
-    {
       id: "portfolio-health",
       schedule: "0 */4 * * *",
       agentId,
