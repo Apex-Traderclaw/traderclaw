@@ -316,7 +316,7 @@ Do NOT skip these. They feed the bootstrap digest that loads into your next sess
 HEARTBEAT REPORT — [timestamp UTC]
 
 Capital: X.XXX SOL | Positions: N open | Holdings verified: [yes/no via solana_wallet_token_balance]
-Scanned: N launches, N hot pairs | Alpha: N signals (top score: XX)
+Alpha: N signals (top score: XX)
 
 DEEP ANALYSIS:
 Bitquery: [N templates run on N tokens | "none — no FRESH tokens"]
