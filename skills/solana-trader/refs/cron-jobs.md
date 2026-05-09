@@ -4,7 +4,7 @@ Cron jobs run in **isolated sessions** separate from the trading loop. Each job 
 
 If a cron job fails, the fast loop continues unaffected — failures are retried on the next scheduled run.
 
-When you receive a `CRON_JOB:` message, execute ONLY the specified job. Do not run the trading loop.
+When you receive a `CRON_JOB:` message, execute ONLY the specified job. Do not run the trading loop. **Launch and pair scanning** is heartbeat **STEP 1: SCAN**, not a cron — there is no default `alpha_scan` job.
 
 ## Memory Context Load (mandatory for every cron job)
 
@@ -34,24 +34,6 @@ At start of every cron job, check whether sufficient new data exists since last 
 - Thinking: off
 - lightContext: on
 - Delivery: none
-
----
-
-## Job: `alpha_scan`
-
-**Schedule:** Every 3 hours (`0 */3 * * *`) — 8 runs/day
-
-**Purpose:** Scan new token launches, filter candidates, score quality, log alpha signals.
-
-**Tools:** `solana_scan_launches`, `solana_token_snapshot`, `solana_token_holders`, `solana_token_risk`, `solana_alpha_log`, `solana_memory_write`
-
-**Workflow:** Scan launches → filter (vol>30K, mcap>10K, liq>5K) → snapshot survivors → quality filter (top10 <50%, deployer <3 abandoned, has social) → score 0-100 → log 65+ via alpha_log.
-
-**Configuration:**
-- Model: Sonnet (judgment — scoring candidates, filtering quality signals)
-- Thinking: off
-- lightContext: on
-- Delivery: announce/last/bestEffort
 
 ---
 
