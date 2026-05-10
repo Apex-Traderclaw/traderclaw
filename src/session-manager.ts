@@ -216,6 +216,8 @@ export class SessionManager {
   private tokenGeneration = 0;
   private proactiveRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private proactiveRefreshRunning = false;
+  private lastChallengeAttemptAt = 0;
+  private static readonly CHALLENGE_COOLDOWN_MS = 5 * 60 * 1000;
 
   constructor(config: SessionManagerConfig) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, "");
@@ -438,6 +440,16 @@ export class SessionManager {
     }
 
     this.log.info("[session] Starting challenge flow...");
+    const nowMs = Date.now();
+    const sinceLastChallenge = nowMs - this.lastChallengeAttemptAt;
+    if (this.lastChallengeAttemptAt > 0 && sinceLastChallenge < SessionManager.CHALLENGE_COOLDOWN_MS) {
+      const waitSec = Math.ceil((SessionManager.CHALLENGE_COOLDOWN_MS - sinceLastChallenge) / 1000);
+      throw new Error(
+        `[session] Challenge cooldown active — skipping to prevent server flood. ` +
+          `Retry in ${waitSec}s. Last attempt: ${new Date(this.lastChallengeAttemptAt).toISOString()}`,
+      );
+    }
+    this.lastChallengeAttemptAt = nowMs;
     const challenge = await this.requestChallenge();
 
     let walletPubKey: string | undefined;
