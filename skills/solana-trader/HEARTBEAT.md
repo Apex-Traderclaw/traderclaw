@@ -365,5 +365,5 @@ NEXT CYCLE: [1 sentence — what you're watching for]
 | API endpoint reference | refs/api-reference.md |
 | Wallet proof vs signup | SKILL.md § Wallet proof vs signup |
 | Strategy evolution details | refs/strategy-evolution.md |
-| Cron job definitions | refs/cron-jobs.md (11 preset jobs; see Schedule Summary for runs/day) |
+| Cron job definitions | refs/cron-jobs.md (10 preset jobs; see Schedule Summary for runs/day) |
 | Position management details | refs/position-management.md |

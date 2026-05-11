@@ -101,7 +101,7 @@ Every tool has a mandatory trigger — when the trigger condition is met, you MU
 ### Alpha Signals (5)
 | Tool | Purpose | When to Call |
 |---|---|---|
-| `solana_alpha_subscribe` | Subscribe to alpha stream (`force: true` forces reconnect) | Startup sequence; `alpha_stream_resubscribe` cron (every 20m); when stream disconnects or ingestion stalls |
+| `solana_alpha_subscribe` | Subscribe to alpha stream (`force: true` forces reconnect) | Startup sequence; when stream disconnects or ingestion stalls |
 | `solana_alpha_signals` | Poll buffered signals | Step 1.5 every heartbeat |
 | `solana_alpha_history` | Historical signal data | Step 1.5 to check prior calls on a token; Step 7 to check source accuracy after exit |
 | `solana_alpha_sources` | Per-source performance stats | Step 1.5 to check source win rates; `source_reputation_recalc` cron |
@@ -191,7 +191,7 @@ Every tool has a mandatory trigger — when the trigger condition is met, you MU
 ### Runtime (3)
 | Tool | Purpose | When to Call |
 |---|---|---|
-| `solana_runtime_status` | Plugin runtime health (startup gate cache, alpha stream subscription + ingestionStale) | `alpha_stream_resubscribe` cron; diagnostics when tools behave unexpectedly |
+| `solana_runtime_status` | Plugin runtime health | Diagnostics; when tools behave unexpectedly |
 | `solana_agent_sessions` | List agent sessions | Diagnostics; when checking session state |
 | `solana_classify_deployer_risk` | Deployer risk (alias) | Same as `solana_compute_deployer_risk` — use either |
 

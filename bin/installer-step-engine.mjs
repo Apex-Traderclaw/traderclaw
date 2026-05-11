@@ -1160,17 +1160,6 @@ function mergePluginsAllowlist(modeConfig, configPath = CONFIG_FILE) {
 function traderCronPrescriptiveJobs(agentId) {
   return [
     {
-      id: "alpha-stream-resubscribe",
-      schedule: "*/20 * * * *",
-      agentId,
-      message:
-        "CRON_JOB: alpha_stream_resubscribe\n\nKeep alpha WebSocket subscription healthy. solana_runtime_status — if subscribed is false: solana_alpha_subscribe. If subscribed but ingestionStale: solana_alpha_subscribe force:true (zombie heal). Else: reply ALPHA_KEEPALIVE_OK.",
-      thinking: false,
-      lightContext: true,
-      delivery: { mode: "none" },
-      enabled: true,
-    },
-    {
       id: "portfolio-health",
       schedule: "0 */4 * * *",
       agentId,
@@ -1344,7 +1333,7 @@ function configureGatewayScheduling(modeConfig, configPath = CONFIG_FILE) {
 
   const mainAgent = isV2 ? "cto" : "main";
 
-  /** Prescriptive managed cron presets (including alpha stream keepalive); v2 assigns the same set to the CTO agent. */
+  /** Six prescriptive managed jobs (VPS report); v2 assigns the same set to the CTO agent. */
   const targetJobs = traderCronPrescriptiveJobs(mainAgent);
 
   let removedLegacyCronJobs = false;
