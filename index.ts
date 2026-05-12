@@ -3823,7 +3823,7 @@ const solanaTraderPlugin = {
 
         // Background health watchdog: alpha ingestion staleness, subscription,
         // gateway credentials, and rate-limited orchestrator→gateway forward probe.
-        const WATCHDOG_INTERVAL_MS = 90_000;
+        const WATCHDOG_INTERVAL_MS = 20 * 60 * 1_000;
         const FORWARD_PROBE_WATCHDOG_MS = 7 * 60 * 1000;
         const STARTUP_GATE_AFTER_PROBE_FAIL_COOLDOWN_MS = 10 * 60 * 1000;
         let alphaStalePhase: 0 | 1 = 0;

@@ -60,7 +60,7 @@ Call `solana_scan_launches` for new launches and `solana_scan_hot_pairs` for hot
 
 ## STEP 1.5: ALPHA SIGNALS
 
-Call `solana_alpha_signals` to poll the buffer. Score and classify each signal by priority. Check `calledAgainCount` — multiple independent callers on same token = high conviction. If buffer stays empty while live, `solana_runtime_status` then `solana_alpha_subscribe({ force: true })` or unsub+subscribe.
+Call `solana_alpha_signals` to poll the buffer. Score and classify each signal by priority. Check `calledAgainCount` — multiple independent callers on same token = high conviction. If buffer stays empty while live, call `solana_runtime_status` and note the status in the cycle report. The plugin watchdog manages reconnection automatically — do NOT call `solana_alpha_subscribe` manually.
 
 **Source trust check (mandatory before acting on any signal):**
 ```
