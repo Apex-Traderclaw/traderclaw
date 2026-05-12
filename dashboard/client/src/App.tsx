@@ -21,6 +21,8 @@ import Positions from "@/pages/positions";
 import TradeLog from "@/pages/trade-log";
 import RuntimePage from "@/pages/runtime";
 import StakingPage from "@/pages/staking";
+import StakingComingSoonPage from "@/pages/staking-coming-soon";
+import { dashboardStakingComingSoon } from "@/lib/feature-flags";
 import ReferralPage from "@/pages/referral";
 import SettingsPage from "@/pages/settings";
 import WalletSetupPage from '@/pages/wallet-setup';
@@ -32,6 +34,10 @@ import BuyStrategy from "@/pages/buy-strategy";
 import NotFound from "@/pages/not-found";
 
 type WalletPresence = { id: string };
+
+function StakingRouter() {
+  return dashboardStakingComingSoon() ? <StakingComingSoonPage /> : <StakingPage />;
+}
 
 function Router() {
   const { data: wallets, isLoading } = useQuery<WalletPresence[]>({
@@ -61,7 +67,7 @@ function Router() {
       <Route path="/positions" component={Positions} />
       <Route path="/trade-log" component={TradeLog} />
       <Route path="/runtime" component={RuntimePage} />
-      <Route path="/staking" component={StakingPage} />
+      <Route path="/staking" component={StakingRouter} />
       <Route path="/referral" component={ReferralPage} />
       <Route path="/entitlements" component={RuntimePage} />
       <Route path="/settings" component={SettingsPage} />

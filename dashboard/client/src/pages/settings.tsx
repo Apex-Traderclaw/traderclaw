@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import {
   apiRequest,
-  logoutUserSession,
+  logoutDashboardSession,
   queryClient,
   provisionDashboardApiKey,
   getStoredApiKey,
@@ -298,14 +298,17 @@ export default function Settings() {
         queryKey: killSwitchQueryKey,
       });
       const previous = queryClient.getQueryData<KillSwitch>(killSwitchQueryKey);
+      const walletId = wallet?.id ?? 0;
       queryClient.setQueryData<KillSwitch>(killSwitchQueryKey, (current) => ({
-        ...(current || {
-          walletId: wallet?.id || '',
-          updatedAt: new Date().toISOString(),
+        ...(current ?? {
+          walletId,
+          mode: "TRADES_ONLY",
+          enabled: false,
+          updatedAt: new Date(),
         }),
         enabled: nextState.enabled,
         mode: nextState.mode,
-        updatedAt: new Date().toISOString(),
+        updatedAt: new Date(),
       }));
       return {
         previous,
@@ -490,26 +493,6 @@ export default function Settings() {
                   }
                 />
               </div>
-              <div className="space-y-2">
-                <div className="text-xs text-muted-foreground">Kill Switch Mode</div>
-                <Select
-                  value={killSwitch?.mode ?? 'TRADES_ONLY'}
-                  disabled={killSwitchMutation.isPending}
-                  onValueChange={(mode) =>
-                    killSwitchMutation.mutate({
-                      enabled: killSwitch?.enabled ?? false,
-                      mode,
-                    })
-                  }
-                >
-                  <SelectTrigger data-testid="select-killswitch-mode-settings" className="text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="TRADES_ONLY">Trades Only — blocks buy/sell, keeps data streams</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
               {killSwitchMutation.isPending ? (
                 <div className="text-xs text-muted-foreground">Syncing kill switch…</div>
               ) : null}
@@ -641,7 +624,8 @@ export default function Settings() {
             size="sm"
             variant="outline"
             onClick={async () => {
-              await logoutUserSession();
+              await logoutDashboardSession();
+              queryClient.clear();
               window.location.reload();
             }}
             data-testid="button-signout"

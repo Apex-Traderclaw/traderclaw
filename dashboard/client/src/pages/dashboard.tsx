@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "framer-motion";
-import { apiRequest, isAdminSession, queryClient } from "@/lib/queryClient";
+import { apiRequest, getAccessToken, isAdminSession, queryClient } from "@/lib/queryClient";
 import {
   Wallet, TrendingUp, TrendingDown, Activity,
   Zap, Rocket, Flame, ArrowUpRight, Crown,
@@ -15,12 +15,13 @@ import { Switch } from "@/components/ui/switch";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SolAmount, SolanaMark } from "@/components/ui/solana-mark";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { unlimitedRuntimeExplanation, unlimitedRuntimePlanLabel as formatUnlimitedRuntimePlanLabel } from "@/lib/runtime-hold-copy";
 import type { Wallet as WalletType, Position, KillSwitch, StrategyState } from "@shared/schema";
+import { TOKEN_TICKER, TOKEN_TICKER_DOLLAR, formatReferralCodeForDisplay } from "@/lib/token-config";
 
 const TITLE_FONT = { fontFamily: "var(--font-display)" };
 const BODY_FONT = { fontFamily: "var(--font-sans)" };
@@ -44,9 +45,14 @@ type ReferralPreviewResponse = {
   referralPercentage: number;
   referralProgramEnabled: boolean;
   waitlistSyncedAt: string | null;
+  accessUntil?: string | null;
+  stakingUnlimitedRuntime?: boolean;
+  holdTclawUnlimitedRuntime?: boolean;
+  runtimeUnlimited?: boolean;
+  runtimeHoldMinTclaw?: number | null;
+  runtimeHoldSplWalletPublicKey?: string | null;
 };
 
-const RUNTIME_PREVIEW_FALLBACK_SECONDS = (2 * 24 * 60 * 60) + (9 * 60 * 60) + (28 * 60) + 14;
 const RUNTIME_PREVIEW_UNITS = [
   { label: "mo", seconds: 60 * 60 * 24 * 30 },
   { label: "w", seconds: 60 * 60 * 24 * 7 },
@@ -305,10 +311,49 @@ function ThesisPackageView({ data }: { data: any }) {
 export default function Dashboard() {
   const { toast } = useToast();
   const [thesisToken, setThesisToken] = useState("");
-  const [runtimePreviewPaused, setRuntimePreviewPaused] = useState(false);
+  const accessRuntimeQueryKey = ["/api/access/runtime"] as const;
   const [runtimePreviewNow, setRuntimePreviewNow] = useState(() => Date.now());
-  const [runtimePreviewStartedAt] = useState(() => Date.now());
   const isAdmin = isAdminSession();
+
+  const { data: accessRuntime, isLoading: accessRuntimeLoading } = useQuery<{
+    ok?: boolean;
+    paused?: boolean;
+    accessUntil?: string | null;
+    accessEndsAt?: string | null;
+    remainingSecondsFrozen?: number | null;
+    pausedAt?: string | null;
+  }>({
+    queryKey: accessRuntimeQueryKey,
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/access/runtime");
+      return res.json();
+    },
+    enabled: Boolean(getAccessToken()),
+    retry: false,
+  });
+  const runtimePreviewPaused = Boolean(accessRuntime?.paused);
+
+  const runtimePauseMutation = useMutation({
+    mutationFn: async (nextPaused: boolean) => {
+      const res = await apiRequest("PUT", "/api/access/runtime-pause", { paused: nextPaused });
+      return res.json();
+    },
+    onSuccess: (_data, nextPaused) => {
+      queryClient.invalidateQueries({ queryKey: accessRuntimeQueryKey });
+      queryClient.invalidateQueries({ queryKey: ["/api/referral/me"] });
+      void queryClient.invalidateQueries({ queryKey: ["/api/wallets"] });
+      void queryClient.invalidateQueries({ queryKey: ["/api/capital/status"] });
+      toast({
+        title: nextPaused ? "Runtime paused" : "Runtime resumed",
+        description: nextPaused
+          ? "Agent and API access are blocked until you resume."
+          : "Agent access is active again when your session and limits allow.",
+      });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Could not update pause", description: err.message, variant: "destructive" });
+    },
+  });
 
   const { data: wallets, isLoading: walletsLoading } = useQuery<WalletType[]>({
     queryKey: ["/api/wallets"],
@@ -522,37 +567,89 @@ export default function Dashboard() {
   const activeRuntimePreview = Array.isArray(entitlementData?.activeEntitlements)
     ? entitlementData.activeEntitlements[0]
     : null;
-  const activeRuntimeExpiryMs = activeRuntimePreview?.expiresAt
+  const entitlementExpiryMs = activeRuntimePreview?.expiresAt
     ? new Date(activeRuntimePreview.expiresAt).getTime()
     : Number.NaN;
-  const activeRuntimeInfinite = !!activeRuntimePreview && !Number.isFinite(activeRuntimeExpiryMs);
-  const fallbackRuntimeSecondsRemaining = Math.max(
-    0,
-    RUNTIME_PREVIEW_FALLBACK_SECONDS - Math.floor((runtimePreviewNow - runtimePreviewStartedAt) / 1000)
+  const stakingUnlimitedRuntime = Boolean(referralPreview?.stakingUnlimitedRuntime);
+  const holdTclawUnlimitedRuntime = Boolean(referralPreview?.holdTclawUnlimitedRuntime);
+  const runtimeUnlimited = Boolean(
+    referralPreview?.runtimeUnlimited ?? (stakingUnlimitedRuntime || holdTclawUnlimitedRuntime),
   );
-  const runtimePreviewSecondsRemaining = activeRuntimePreview
-    ? activeRuntimeInfinite
-      ? null
-      : Math.max(0, Math.floor((activeRuntimeExpiryMs - runtimePreviewNow) / 1000))
-    : fallbackRuntimeSecondsRemaining;
+  const activeRuntimeInfinite =
+    runtimeUnlimited || (!!activeRuntimePreview && !Number.isFinite(entitlementExpiryMs));
+  const frozenRemainSeconds =
+    runtimePreviewPaused
+    && accessRuntime?.remainingSecondsFrozen != null
+    && Number.isFinite(Number(accessRuntime.remainingSecondsFrozen))
+      ? Math.max(0, Math.floor(Number(accessRuntime.remainingSecondsFrozen)))
+      : null;
+  const clientAccessUntilIso = accessRuntime?.accessUntil ?? referralPreview?.accessUntil ?? null;
+  const clientAccessUntilMs = clientAccessUntilIso ? new Date(clientAccessUntilIso).getTime() : Number.NaN;
+  /** Prefer wallet entitlement expiry; else API client access window (same gate as server). */
+  const canonicalExpiryMs = Number.isFinite(entitlementExpiryMs) ? entitlementExpiryMs : clientAccessUntilMs;
+  const hasFiniteLiveWindow =
+    !activeRuntimeInfinite
+    && frozenRemainSeconds == null
+    && Number.isFinite(canonicalExpiryMs)
+    && canonicalExpiryMs > runtimePreviewNow;
+  const runtimePreviewSecondsRemaining = activeRuntimeInfinite
+    ? null
+    : frozenRemainSeconds != null
+      ? frozenRemainSeconds
+      : hasFiniteLiveWindow
+        ? Math.max(0, Math.floor((canonicalExpiryMs - runtimePreviewNow) / 1000))
+        : 0;
+  const unlimitedRuntimePlanLabel = formatUnlimitedRuntimePlanLabel({
+    stakingUnlimitedRuntime,
+    holdTclawUnlimitedRuntime,
+  });
   const runtimePreviewPlanLabel = activeRuntimePreview?.planCode
     ? String(activeRuntimePreview.planCode).replace(/_/g, " ")
-    : "Runtime preview";
+    : runtimeUnlimited
+      ? unlimitedRuntimePlanLabel
+      : hasFiniteLiveWindow || frozenRemainSeconds != null
+        ? "Account access"
+        : "—";
+  const countdownEndsMs =
+    frozenRemainSeconds != null && accessRuntime?.accessEndsAt
+      ? new Date(accessRuntime.accessEndsAt).getTime()
+      : Number.isFinite(canonicalExpiryMs)
+        ? canonicalExpiryMs
+        : Number.NaN;
   const runtimePreviewCountdown = formatRuntimePreviewCountdown(runtimePreviewSecondsRemaining);
   const runtimePreviewStateLabel = runtimePreviewPaused
     ? "Paused"
-    : activeRuntimePreview
+    : activeRuntimeInfinite || hasFiniteLiveWindow
       ? "Live"
-      : "Simulated";
+      : "No runtime";
   const runtimePreviewStateTone = runtimePreviewPaused
     ? "hsl(var(--muted-foreground))"
-    : "hsl(var(--primary))";
-  const runtimePreviewSupportCopy = activeRuntimePreview
-    ? activeRuntimeInfinite
-      ? "Active runtime is open-ended on this wallet right now."
-      : `Ends ${new Date(activeRuntimePreview.expiresAt).toLocaleString()}.`
-    : "Using a staged dashboard timer until a runtime plan is attached.";
-  const referralPreviewCode = referralPreview?.referralCode?.trim().toUpperCase() || "TCLAW-INVITE";
+    : activeRuntimeInfinite || hasFiniteLiveWindow
+      ? "hsl(var(--primary))"
+      : "hsl(var(--muted-foreground))";
+  const runtimePreviewSupportCopy = runtimePreviewPaused
+    ? "Agent and API access are paused (same gate as exhausted runtime). Resume playback to reconnect."
+    : activeRuntimeInfinite
+      ? stakingUnlimitedRuntime || holdTclawUnlimitedRuntime
+        ? unlimitedRuntimeExplanation({
+            stakingUnlimitedRuntime,
+            holdTclawUnlimitedRuntime,
+          })
+        : "Active runtime is open-ended on this wallet right now."
+      : Number.isFinite(countdownEndsMs)
+        ? `Access ends ${new Date(countdownEndsMs).toLocaleString()}.`
+        : "No active access window from the API. Buy runtime or redeem access to start the live countdown.";
+  const runtimeModeLabel = runtimePreviewPaused
+    ? "Countdown paused"
+    : hasFiniteLiveWindow || frozenRemainSeconds != null
+      ? "Runtime ticking"
+      : activeRuntimeInfinite
+        ? "Unlimited access"
+        : "Not active";
+  const referralPreviewCanonical =
+    referralPreview?.referralCode?.replace(/^\$+/, '').trim().toUpperCase()
+    || `${TOKEN_TICKER}-INVITE`;
+  const referralPreviewCode = formatReferralCodeForDisplay(referralPreviewCanonical);
   const referralPreviewStatus = referralPreview
     ? referralPreview.referralProgramEnabled
       ? "Active"
@@ -561,7 +658,7 @@ export default function Dashboard() {
   const referralPreviewTier = referralPreview?.referralTier || "Operator";
   const referralPreviewFeeShare = Number.isFinite(referralPreview?.referralPercentage)
     ? `${referralPreview?.referralPercentage}%`
-    : "5%";
+    : "10%";
   const referralPreviewWaitlist = referralPreview?.waitlistSyncedAt
     ? `Linked ${new Date(referralPreview.waitlistSyncedAt).toLocaleDateString()}`
     : "Link open";
@@ -742,7 +839,7 @@ export default function Dashboard() {
                     Mode
                   </div>
                   <div className="text-sm text-foreground" style={BODY_FONT}>
-                    {runtimePreviewPaused ? "Countdown paused" : "Runtime ticking"}
+                    {runtimeModeLabel}
                   </div>
                 </div>
                 <div className="space-y-1">
@@ -753,7 +850,7 @@ export default function Dashboard() {
                     Buy rail
                   </div>
                   <div className="text-sm text-foreground" style={BODY_FONT}>
-                    SOL live / $TCLAW staged
+                    SOL live / {TOKEN_TICKER_DOLLAR} staged
                   </div>
                 </div>
               </div>
@@ -762,9 +859,14 @@ export default function Dashboard() {
                 <button
                   type="button"
                   data-testid="button-dashboard-runtime-toggle"
-                  className="inline-flex min-h-9 items-center justify-center gap-2 border border-border bg-muted/15 px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-foreground transition-colors hover:border-primary/30 hover:bg-primary/6"
+                  className="inline-flex min-h-9 items-center justify-center gap-2 border border-border bg-muted/15 px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-foreground transition-colors hover:border-primary/30 hover:bg-primary/6 disabled:pointer-events-none disabled:opacity-50"
                   style={MONO_FONT}
-                  onClick={() => setRuntimePreviewPaused((value) => !value)}
+                  disabled={
+                    !getAccessToken()
+                    || accessRuntimeLoading
+                    || runtimePauseMutation.isPending
+                  }
+                  onClick={() => runtimePauseMutation.mutate(!runtimePreviewPaused)}
                 >
                   {runtimePreviewPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
                   {runtimePreviewPaused ? "Play" : "Pause"}
@@ -1181,21 +1283,6 @@ export default function Dashboard() {
                     })}
                   />
                 </div>
-                <Select
-                  value={killSwitch?.mode ?? "TRADES_ONLY"}
-                  disabled={killSwitchMutation.isPending}
-                  onValueChange={(mode) => killSwitchMutation.mutate({
-                    enabled: killSwitch?.enabled ?? false,
-                    mode,
-                  })}
-                >
-                  <SelectTrigger data-testid="select-killswitch-mode" className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="TRADES_ONLY">Trades Only</SelectItem>
-                  </SelectContent>
-                </Select>
                 {killSwitchMutation.isPending ? (
                   <div className="text-xs text-muted-foreground tracking-[0.12em] uppercase" style={MONO_FONT}>
                     Syncing…

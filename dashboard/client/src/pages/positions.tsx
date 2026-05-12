@@ -360,7 +360,7 @@ export default function Positions() {
             </Card>
           ) : (
             openPositions?.map(pos => (
-              <PositionRow key={pos.id} pos={pos as any} walletId={wallet?.id ?? ""} />
+              <PositionRow key={pos.id} pos={pos as any} walletId={wallet?.id != null ? String(wallet.id) : ""} />
             ))
           )}
         </TabsContent>
@@ -394,7 +394,7 @@ export default function Positions() {
             </Card>
           ) : (
             closedPositions.map(pos => (
-              <PositionRow key={pos.id} pos={pos as any} walletId={wallet?.id ?? ""} />
+              <PositionRow key={pos.id} pos={pos as any} walletId={wallet?.id != null ? String(wallet.id) : ""} />
             ))
           )}
         </TabsContent>

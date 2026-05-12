@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import {
@@ -7,6 +7,7 @@ import {
   CaretDoubleLeft,
   CaretDoubleRight,
   ChartLineUp,
+  CheckCircle,
   Clock,
   Gauge,
   Gift,
@@ -16,17 +17,18 @@ import {
   Receipt,
   Settings,
   ShieldCheckered,
+  SignOut,
   SlidersHorizontal,
   Storefront,
   Wallet,
   Waveform,
 } from "@/components/ui/icons";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SyncSessionDialog } from "@/components/sync-session-dialog";
 import { useWebSocket } from "@/hooks/use-websocket";
-import { dashboardSocketFeatureEnabled } from "@/lib/feature-flags";
+import { dashboardSocketFeatureEnabled, dashboardStakingComingSoon } from "@/lib/feature-flags";
 import { cn } from "@/lib/utils";
+import { logoutDashboardSession, queryClient } from "@/lib/queryClient";
 import type { StrategyState, Wallet as WalletType } from "@shared/schema";
 
 const dashboardNav = { path: "/", label: "Dashboard", icon: Gauge };
@@ -38,12 +40,6 @@ const signalsNav = [{ path: "/alpha", label: "Alpha", icon: Waveform }];
 const strategyNav = [
   { path: "/risk-strategy", label: "Risk Strategy", icon: ShieldCheckered },
   { path: "/buy-strategy", label: "Buy Strategy", icon: SlidersHorizontal },
-];
-const accessNav = [
-  { path: "/runtime", label: "Runtime", icon: Clock },
-  { path: "/staking", label: "Staking", icon: Lock },
-  { path: "/referral", label: "Referral", icon: Gift },
-  { path: "/store", label: "Store", icon: Storefront },
 ];
 const agentLogsNav = { path: "/agent-logs", label: "Agent logs", icon: Notebook };
 const docsNav = { href: "https://docs.traderclaw.ai", label: "Docs", icon: BookOpen, external: true };
@@ -72,6 +68,14 @@ export function AppSidebar({ mobile = false, onNavigate }: AppSidebarProps) {
     queryKey: ["/api/wallets"],
   });
   const wallet = wallets?.[0];
+  const sessionAuthenticated = Array.isArray(wallets);
+  const accountSyncedWithWallet = sessionAuthenticated && wallets.length > 0;
+
+  const handleSidebarLogOut = async () => {
+    await logoutDashboardSession();
+    queryClient.clear();
+    window.location.reload();
+  };
   const { data: strategyState } = useQuery<StrategyState>({
     queryKey: ["/api/strategy/state", wallet?.id ? `?walletId=${wallet.id}` : ""],
     enabled: !!wallet?.id,
@@ -90,15 +94,28 @@ export function AppSidebar({ mobile = false, onNavigate }: AppSidebarProps) {
       return false;
     }
   });
-  const navSections = [
-    { items: [dashboardNav] },
-    { title: "Trading", items: tradingNav },
-    { title: "Signals", items: signalsNav },
-    { title: "Strategy", items: strategyNav },
-    { title: "Access", items: accessNav },
-    ...(dashboardSocketFeatureEnabled() ? [{ title: "Monitoring", items: [agentLogsNav] }] : []),
-    { title: "Resources", items: [docsNav] },
-  ];
+  const stakingSoon = dashboardStakingComingSoon();
+  const accessNav = useMemo(
+    () => [
+      { path: "/runtime", label: "Runtime", icon: Clock },
+      { path: "/staking", label: "Staking", icon: Lock, comingSoon: stakingSoon },
+      { path: "/referral", label: "Referral", icon: Gift },
+      { path: "/store", label: "Store", icon: Storefront },
+    ],
+    [stakingSoon],
+  );
+  const navSections = useMemo(
+    () => [
+      { items: [dashboardNav] },
+      { title: "Trading", items: tradingNav },
+      { title: "Signals", items: signalsNav },
+      { title: "Strategy", items: strategyNav },
+      { title: "Access", items: accessNav },
+      ...(dashboardSocketFeatureEnabled() ? [{ title: "Monitoring", items: [agentLogsNav] }] : []),
+      { title: "Resources", items: [docsNav] },
+    ],
+    [accessNav],
+  );
   const walletActive = location.startsWith("/wallet-setup");
   const settingsActive = location.startsWith("/settings");
   const isCollapsed = mobile ? false : collapsed;
@@ -129,7 +146,7 @@ export function AppSidebar({ mobile = false, onNavigate }: AppSidebarProps) {
       {/* Brand header */}
       <div
         className={cn(
-          "min-h-16 py-3 flex items-center transition-[padding] duration-300 ease-out",
+          "shrink-0 min-h-16 py-3 flex items-center transition-[padding] duration-300 ease-out",
           isCollapsed ? "justify-center px-3" : "justify-start px-3"
         )}
         style={{ borderBottom: "1px solid hsl(var(--border))" }}
@@ -156,22 +173,33 @@ export function AppSidebar({ mobile = false, onNavigate }: AppSidebarProps) {
         </div>
       </div>
 
-      {/* Nav items */}
-      <ScrollArea
-        className="min-h-0 flex-1"
-        viewportClassName="h-full"
-        hideScrollbar
+      {/* Nav + quick actions: native scroll so flex + Radix viewport height bugs cannot clip items */}
+      <div
+        className={cn(
+          "min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain",
+          "[scrollbar-gutter:stable]"
+        )}
       >
         <nav className={cn("px-3", isCollapsed ? "space-y-3 py-4" : "space-y-4 py-4")}>
           {navSections.map((section, sectionIndex) => (
             <div
-              key={section.title ?? section.items.map((item) => item.path).join("-")}
+              key={
+                section.title ??
+                section.items.map((item) => item.label).join("-")
+              }
               className={cn(sectionIndex > 0 && isCollapsed ? "border-t border-border/60 pt-3" : "")}
             >
               {!isCollapsed && section.title ? <SectionLabel>{section.title}</SectionLabel> : null}
               <div className={cn("space-y-1", !isCollapsed && !section.title ? "space-y-0" : "")}>
-                {section.items.map(({ path, href, label, icon: Icon, external }) => {
-                  const isActive = !external && path ? (path === "/" ? location === "/" : location.startsWith(path)) : false;
+                {section.items.map((item) => {
+                  const label = item.label;
+                  const Icon = item.icon;
+                  const external = "external" in item && item.external === true;
+                  const comingSoon = "comingSoon" in item ? Boolean(item.comingSoon) : false;
+                  const path = "path" in item ? item.path : undefined;
+                  const href = "href" in item ? item.href : undefined;
+                  const isActive =
+                    !external && path ? (path === "/" ? location === "/" : location.startsWith(path)) : false;
                   const itemKey = path ?? href ?? label;
                   const buttonClasses = cn(
                     "group/sidebar-nav sidebar-nav-item flex select-none items-center rounded-none cursor-pointer transition-[background-color,color,outline-color] duration-150 focus-visible:outline-none active:bg-primary/10 active:text-foreground",
@@ -180,8 +208,10 @@ export function AppSidebar({ mobile = false, onNavigate }: AppSidebarProps) {
                       : "w-full gap-3 px-3 py-2.5 text-[0.96rem] font-medium tracking-[0.02em] normal-case",
                     isActive
                       ? "nav-active font-medium"
-                      : "text-muted-foreground hover:bg-primary/6 hover:text-foreground"
+                      : "text-muted-foreground hover:bg-primary/6 hover:text-foreground",
+                    comingSoon && !isActive ? "opacity-[0.92]" : null,
                   );
+                  const collapsedTitle = comingSoon ? `${label} · Coming soon` : label;
                   const buttonContents = (
                     <>
                       <Icon
@@ -194,7 +224,17 @@ export function AppSidebar({ mobile = false, onNavigate }: AppSidebarProps) {
                       {!isCollapsed ? (
                         <>
                           <span className="truncate">{label}</span>
-                          {external ? <ArrowUpRight className="ml-auto h-3.5 w-3.5 text-muted-foreground/80 transition-colors duration-150 group-hover/sidebar-nav:text-primary/80 group-active/sidebar-nav:text-primary/80" /> : null}
+                          {comingSoon ? (
+                            <span
+                              className="ml-auto shrink-0 border border-border/50 px-1.5 py-0.5 text-[8px] uppercase tracking-[0.14em] text-muted-foreground"
+                              style={{ fontFamily: "var(--font-mono)" }}
+                            >
+                              Soon
+                            </span>
+                          ) : null}
+                          {external && !comingSoon ? (
+                            <ArrowUpRight className="ml-auto h-3.5 w-3.5 text-muted-foreground/80 transition-colors duration-150 group-hover/sidebar-nav:text-primary/80 group-active/sidebar-nav:text-primary/80" />
+                          ) : null}
                         </>
                       ) : null}
                     </>
@@ -226,8 +266,8 @@ export function AppSidebar({ mobile = false, onNavigate }: AppSidebarProps) {
                       key={itemKey}
                       type="button"
                       onClick={() => path && handleNavigate(path)}
-                      title={isCollapsed ? label : undefined}
-                      aria-label={label}
+                      title={isCollapsed ? collapsedTitle : undefined}
+                      aria-label={collapsedTitle}
                       data-testid={`nav-${label.toLowerCase().replace(/\s/g, "-")}`}
                       className={buttonClasses}
                       style={
@@ -249,7 +289,7 @@ export function AppSidebar({ mobile = false, onNavigate }: AppSidebarProps) {
                           className="text-[11px] uppercase tracking-[0.12em]"
                           style={{ fontFamily: "var(--font-mono)" }}
                         >
-                          {label}
+                          {comingSoon ? `${label} · Coming soon` : label}
                         </TooltipContent>
                       </Tooltip>
                     );
@@ -261,62 +301,84 @@ export function AppSidebar({ mobile = false, onNavigate }: AppSidebarProps) {
             </div>
           ))}
         </nav>
-      </ScrollArea>
 
-      <div className="px-3 py-3">
-        <div className={cn(isCollapsed ? "space-y-1 p-2" : "space-y-0 p-0")}>
-          <button
-            type="button"
-            onClick={() => handleNavigate("/wallet-setup")}
-            title={isCollapsed ? "Wallet" : undefined}
-            data-testid="button-sidebar-wallet"
-            className={cn(
-              "group flex w-full items-center rounded-none transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
-              isCollapsed ? "h-10 justify-center" : "gap-3 border-b border-border/60 px-3 py-3 text-[0.94rem] font-medium tracking-[0.02em]",
-              walletActive ? "bg-sidebar-accent/70 text-sidebar-foreground" : "text-muted-foreground"
-            )}
-            style={isCollapsed ? undefined : { fontFamily: "var(--font-sans)" }}
-          >
-            <Wallet className={cn("shrink-0", isCollapsed ? "h-5 w-5" : "h-[1.02rem] w-[1.02rem]")} />
-            {!isCollapsed ? <span>Wallet</span> : null}
-          </button>
-
-          <SyncSessionDialog>
+        <div className="px-3 pb-3 pt-0">
+          <div className={cn(isCollapsed ? "space-y-1 p-2" : "space-y-0 p-0")}>
             <button
               type="button"
-              title={isCollapsed ? "Sync" : undefined}
-              data-testid="button-sidebar-sync"
+              onClick={() => handleNavigate("/wallet-setup")}
+              title={isCollapsed ? "Wallet" : undefined}
+              data-testid="button-sidebar-wallet"
               className={cn(
-                "group flex w-full items-center rounded-none text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
-                isCollapsed ? "h-10 justify-center" : "gap-3 border-b border-border/60 px-3 py-3 text-[0.94rem] font-medium tracking-[0.02em]"
+                "group flex w-full items-center rounded-none transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+                isCollapsed ? "h-10 justify-center" : "gap-3 border-b border-border/60 px-3 py-3 text-[0.94rem] font-medium tracking-[0.02em]",
+                walletActive ? "bg-sidebar-accent/70 text-sidebar-foreground" : "text-muted-foreground"
               )}
               style={isCollapsed ? undefined : { fontFamily: "var(--font-sans)" }}
             >
-              <Link2 className={cn("shrink-0", isCollapsed ? "h-5 w-5" : "h-[1.02rem] w-[1.02rem]")} />
-              {!isCollapsed ? <span>Sync</span> : null}
+              <Wallet className={cn("shrink-0", isCollapsed ? "h-5 w-5" : "h-[1.02rem] w-[1.02rem]")} />
+              {!isCollapsed ? <span>Wallet</span> : null}
             </button>
-          </SyncSessionDialog>
 
-          <button
-            type="button"
-            onClick={() => handleNavigate("/settings")}
-            title={isCollapsed ? "Settings" : undefined}
-            data-testid="button-sidebar-settings"
-            className={cn(
-              "group flex w-full items-center rounded-none transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
-              isCollapsed ? "h-10 justify-center" : "gap-3 px-3 py-3 text-[0.94rem] font-medium tracking-[0.02em]",
-              settingsActive ? "bg-sidebar-accent/70 text-sidebar-foreground" : "text-muted-foreground"
-            )}
-            style={isCollapsed ? undefined : { fontFamily: "var(--font-sans)" }}
-          >
-            <Settings className={cn("shrink-0", isCollapsed ? "h-5 w-5" : "h-[1.02rem] w-[1.02rem]")} />
-            {!isCollapsed ? <span>Settings</span> : null}
-          </button>
+            <SyncSessionDialog>
+              <button
+                type="button"
+                title={isCollapsed ? (accountSyncedWithWallet ? "Synced" : "Sync") : undefined}
+                data-testid="button-sidebar-sync"
+                className={cn(
+                  "group flex w-full items-center rounded-none transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+                  isCollapsed ? "h-10 justify-center" : "gap-3 border-b border-border/60 px-3 py-3 text-[0.94rem] font-medium tracking-[0.02em]",
+                  accountSyncedWithWallet ? "text-profit" : "text-muted-foreground"
+                )}
+                style={isCollapsed ? undefined : { fontFamily: "var(--font-sans)" }}
+              >
+                {accountSyncedWithWallet ? (
+                  <CheckCircle className={cn("shrink-0", isCollapsed ? "h-5 w-5" : "h-[1.02rem] w-[1.02rem]")} />
+                ) : (
+                  <Link2 className={cn("shrink-0", isCollapsed ? "h-5 w-5" : "h-[1.02rem] w-[1.02rem]")} />
+                )}
+                {!isCollapsed ? <span>{accountSyncedWithWallet ? "Synced" : "Sync"}</span> : null}
+              </button>
+            </SyncSessionDialog>
+
+            {sessionAuthenticated ? (
+              <button
+                type="button"
+                onClick={() => void handleSidebarLogOut()}
+                title={isCollapsed ? "Log out" : undefined}
+                data-testid="button-sidebar-log-out"
+                className={cn(
+                  "group flex w-full items-center rounded-none text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+                  isCollapsed ? "h-10 justify-center" : "gap-3 border-b border-border/60 px-3 py-3 text-[0.94rem] font-medium tracking-[0.02em]"
+                )}
+                style={isCollapsed ? undefined : { fontFamily: "var(--font-sans)" }}
+              >
+                <SignOut className={cn("shrink-0", isCollapsed ? "h-5 w-5" : "h-[1.02rem] w-[1.02rem]")} />
+                {!isCollapsed ? <span>Log out</span> : null}
+              </button>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => handleNavigate("/settings")}
+              title={isCollapsed ? "Settings" : undefined}
+              data-testid="button-sidebar-settings"
+              className={cn(
+                "group flex w-full items-center rounded-none transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
+                isCollapsed ? "h-10 justify-center" : "gap-3 px-3 py-3 text-[0.94rem] font-medium tracking-[0.02em]",
+                settingsActive ? "bg-sidebar-accent/70 text-sidebar-foreground" : "text-muted-foreground"
+              )}
+              style={isCollapsed ? undefined : { fontFamily: "var(--font-sans)" }}
+            >
+              <Settings className={cn("shrink-0", isCollapsed ? "h-5 w-5" : "h-[1.02rem] w-[1.02rem]")} />
+              {!isCollapsed ? <span>Settings</span> : null}
+            </button>
+          </div>
         </div>
       </div>
 
       <div
-        className="space-y-3 px-3 py-3"
+        className="shrink-0 space-y-3 px-3 py-3"
         style={{ borderTop: "1px solid hsl(var(--border))" }}
       >
         {isCollapsed ? (

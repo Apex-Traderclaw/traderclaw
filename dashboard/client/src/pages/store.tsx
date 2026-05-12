@@ -6,6 +6,7 @@ import {
   Waveform,
   Zap,
 } from "@/components/ui/icons";
+import { TOKEN_TICKER_DOLLAR } from "@/lib/token-config";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -70,7 +71,7 @@ const STORE_OFFERINGS: StoreOffering[] = [
       "Runtime top-ups and plan access presented here as a store product surface in addition to the dedicated Runtime page.",
     details: [
       "Show active runtime plan and purchase additional runtime from the same product layer.",
-      "Stage purchase rails for SOL and $TCLAW when the runtime checkout is enabled.",
+      `Stage purchase rails for SOL and ${TOKEN_TICKER_DOLLAR} when the runtime checkout is enabled.`,
       "Ideal for users who want runtime buying surfaced directly inside the broader Store flow.",
     ],
     launchState: "Purchase staging",

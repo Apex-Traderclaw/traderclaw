@@ -1,74 +1,115 @@
-import { useQuery } from "@tanstack/react-query";
-import { Link2, PanelLeftIcon, Power, Radio, WifiOff, Wallet } from "@/components/ui/icons";
-import { useLocation } from "wouter";
-import { useWebSocket } from "@/hooks/use-websocket";
-import { isAdminSession } from "@/lib/queryClient";
-import { Button } from "@/components/ui/button";
-import { SolAmount } from "@/components/ui/solana-mark";
-import { SyncSessionDialog } from "@/components/sync-session-dialog";
-import { cn } from "@/lib/utils";
-import type { Wallet as WalletType, KillSwitch } from "@shared/schema";
+import type { KillSwitch, Wallet as WalletType } from '@shared/schema';
+import { useQuery } from '@tanstack/react-query';
+import { useLocation } from 'wouter';
+import { SyncSessionDialog } from '@/components/sync-session-dialog';
+import { Button } from '@/components/ui/button';
+import { Link2, PanelLeftIcon, Power, Radio, Rocket, SignOut, Wallet, WifiOff, CheckCircle } from '@/components/ui/icons';
+import { SolAmount } from '@/components/ui/solana-mark';
+import { useWebSocket } from '@/hooks/use-websocket';
+import { traderClawInstallUrl } from '@/lib/install-cta-url';
+import { isAdminSession, logoutDashboardSession, queryClient } from '@/lib/queryClient';
+import { cn } from '@/lib/utils';
 
 const HEADER_CHIP_CLASS =
-  "inline-flex h-9 items-center gap-2 border px-3 text-[11px] font-medium uppercase tracking-[0.16em] rounded-none";
-const HEADER_ICON_CLASS = "h-3.5 w-3.5 shrink-0";
-const HEADER_LABEL_STYLE = { fontFamily: "var(--font-mono)" };
+  'inline-flex h-9 items-center gap-2 border px-3 text-[11px] font-medium uppercase tracking-[0.16em] rounded-none';
+const HEADER_ICON_CLASS = 'h-3.5 w-3.5 shrink-0';
+const HEADER_LABEL_STYLE = {
+  fontFamily: 'var(--font-mono)',
+};
 const MOBILE_ACTION_BUTTON_CLASS =
-  "inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-none border text-foreground transition-[background-color,border-color,color,transform] duration-150 active:scale-[0.98] active:bg-muted/35";
-const MOBILE_ACTION_ICON_CLASS = "h-[1.1rem] w-[1.1rem] shrink-0";
+  'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-none border text-foreground transition-[background-color,border-color,color,transform] duration-150 active:scale-[0.98] active:bg-muted/35';
+const MOBILE_CTA_PRIMARY_CLASS =
+  'inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-none border px-2.5 transition-[background-color,border-color,color,transform] duration-150 active:scale-[0.98]';
+const MOBILE_ACTION_ICON_CLASS = 'h-[1.1rem] w-[1.1rem] shrink-0';
 
 type HeaderProps = {
   onOpenMobileNav?: () => void;
 };
 
 export function Header({ onOpenMobileNav }: HeaderProps) {
+  const installUrl = traderClawInstallUrl();
   const { connected } = useWebSocket();
   const [, setLocation] = useLocation();
   const isAdmin = isAdminSession();
 
   const { data: wallets } = useQuery<WalletType[]>({
-    queryKey: ["/api/wallets"],
+    queryKey: [
+      '/api/wallets',
+    ],
   });
 
   const wallet = wallets?.[0];
+  /** Valid Bearer session (includes auto-provisioned key with zero wallets). */
+  const sessionAuthenticated = Array.isArray(wallets);
+  /** "Synced" in the UI: session is tied to an API account that has at least one wallet (unfunded OK). */
+  const accountSyncedWithWallet = sessionAuthenticated && wallets.length > 0;
 
-  const { data: killSwitch } = useQuery<KillSwitch>({
-    queryKey: ["/api/killswitch/status", wallet?.id ? `?walletId=${wallet.id}` : ""],
+  const handleLogOut = async () => {
+    await logoutDashboardSession();
+    queryClient.clear();
+    window.location.reload();
+  };
+
+  /** Same queryKey as Dashboard — merges cache; prefers live SOL from RPC (capital) over stored wallet row. */
+  const { data: capitalStatus } = useQuery<{
+    balanceSol?: number;
+  }>({
+    queryKey: [
+      '/api/capital/status',
+      wallet?.id ? `?walletId=${wallet.id}` : '',
+    ],
     enabled: !!wallet?.id,
   });
 
-  const balanceSol = wallet ? wallet.balanceLamports / 1e9 : 0;
+  const { data: killSwitch } = useQuery<KillSwitch>({
+    queryKey: [
+      '/api/killswitch/status',
+      wallet?.id ? `?walletId=${wallet.id}` : '',
+    ],
+    enabled: !!wallet?.id,
+  });
+
+  const balanceSol = (() => {
+    if (!wallet) return 0;
+    const live = capitalStatus?.balanceSol;
+    if (live != null && Number.isFinite(Number(live))) {
+      return Number(live);
+    }
+    return wallet.balanceLamports / 1e9;
+  })();
   const killSwitchLabel = killSwitch?.enabled
-    ? `Kill ${String(killSwitch.mode || "trades only").toLowerCase().replace(/_/g, " ")}`
-    : "Kill disabled";
-  const connectionMobileLabel = connected ? "System online" : "System offline";
-  const killSwitchMobileLabel = killSwitch?.enabled ? "Kill switch enabled" : "Kill switch disabled";
+    ? `Kill ${String(killSwitch.mode || 'trades only')
+        .toLowerCase()
+        .replace(/_/g, ' ')}`
+    : 'Kill disabled';
+  const connectionMobileLabel = connected ? 'System online' : 'System offline';
+  const killSwitchMobileLabel = killSwitch?.enabled ? 'Kill switch enabled' : 'Kill switch disabled';
 
   return (
     <header
       data-testid="header"
       className="sticky top-0 z-30 bg-card/95 backdrop-blur-sm"
-      style={{ borderBottom: "1px solid hsl(var(--border))" }}
+      style={{
+        borderBottom: '1px solid hsl(var(--border))',
+      }}
     >
       <div className="md:hidden flex min-h-16 items-center justify-between gap-2 px-3 py-2.5">
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setLocation("/")}
+            onClick={() => setLocation('/')}
             title="Open dashboard"
             aria-label="Open dashboard"
             data-testid="button-mobile-dashboard-home"
             className={cn(
               MOBILE_ACTION_BUTTON_CLASS,
-              "border-border/80 bg-transparent hover:border-border hover:bg-muted/25"
+              'border-border/80 bg-transparent hover:border-border hover:bg-muted/25',
             )}
-            style={{ WebkitTapHighlightColor: "transparent" }}
+            style={{
+              WebkitTapHighlightColor: 'transparent',
+            }}
           >
-            <img
-              src="/traderclaw-logo-icon.svg"
-              alt="TraderClaw"
-              className="h-5 w-5 object-contain"
-            />
+            <img src="/traderclaw-logo-icon.svg" alt="TraderClaw" className="h-5 w-5 object-contain" />
           </button>
 
           <button
@@ -76,46 +117,104 @@ export function Header({ onOpenMobileNav }: HeaderProps) {
             data-testid="status-balance-mobile"
             title="Open wallet settings"
             aria-label="Open wallet settings"
-            onClick={() => setLocation("/settings")}
+            onClick={() => setLocation('/settings')}
             className={cn(
               MOBILE_ACTION_BUTTON_CLASS,
-              "border-primary bg-primary text-primary-foreground hover:bg-primary/92"
+              'border-primary bg-primary text-primary-foreground hover:bg-primary/92',
             )}
-            style={{ WebkitTapHighlightColor: "transparent" }}
+            style={{
+              WebkitTapHighlightColor: 'transparent',
+            }}
           >
             <Wallet className={`${MOBILE_ACTION_ICON_CLASS} text-primary-foreground`} />
           </button>
         </div>
 
         <div className="flex items-center gap-1.5">
+          <a
+            href={installUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid="cta-install-traderclaw-mobile"
+            title="Install TraderClaw"
+            className={cn(
+              MOBILE_CTA_PRIMARY_CLASS,
+              'border-primary bg-primary text-primary-foreground hover:bg-primary/92 active:bg-primary/88',
+            )}
+            style={{
+              WebkitTapHighlightColor: 'transparent',
+            }}
+          >
+            <Rocket className={`${MOBILE_ACTION_ICON_CLASS} shrink-0 text-primary-foreground`} />
+            <span className="truncate text-[10px] font-medium uppercase tracking-[0.14em]" style={HEADER_LABEL_STYLE}>
+              Install
+            </span>
+          </a>
+
           <SyncSessionDialog>
             <Button
               type="button"
               size="icon"
               variant="outline"
-              className="h-10 w-10 rounded-none border-border/80 bg-transparent text-foreground hover:border-border hover:bg-muted/25"
+              className={`h-10 w-10 rounded-none border-border/80 bg-transparent text-foreground hover:border-border hover:bg-muted/25 ${
+                accountSyncedWithWallet ? 'border-profit/25 bg-profit/5' : ''
+              }`}
               data-testid="button-sync-session-mobile"
-              title="Sync session"
-              aria-label="Sync session"
+              title={
+                accountSyncedWithWallet
+                  ? 'Synced — change API key'
+                  : sessionAuthenticated
+                    ? 'Signed in — open to add a wallet or use another API key'
+                    : 'Sync session'
+              }
+              aria-label={
+                accountSyncedWithWallet
+                  ? 'Synced — open sync dialog'
+                  : sessionAuthenticated
+                    ? 'Session active — open sync dialog'
+                    : 'Sync session'
+              }
               style={HEADER_LABEL_STYLE}
             >
-              <Link2 className={MOBILE_ACTION_ICON_CLASS} />
+              {accountSyncedWithWallet ? (
+                <CheckCircle className={`${MOBILE_ACTION_ICON_CLASS} text-profit`} />
+              ) : (
+                <Link2 className={MOBILE_ACTION_ICON_CLASS} />
+              )}
             </Button>
           </SyncSessionDialog>
+
+          {sessionAuthenticated ? (
+            <Button
+              type="button"
+              size="icon"
+              variant="outline"
+              className="h-10 w-10 rounded-none border-border/80 bg-transparent text-foreground hover:border-border hover:bg-muted/25"
+              data-testid="button-log-out-mobile"
+              title="Log out"
+              aria-label="Log out"
+              onClick={() => void handleLogOut()}
+              style={HEADER_LABEL_STYLE}
+            >
+              <SignOut className={MOBILE_ACTION_ICON_CLASS} />
+            </Button>
+          ) : null}
 
           <button
             type="button"
             data-testid="status-connection-mobile"
             title={connectionMobileLabel}
             aria-label={connectionMobileLabel}
-            onClick={() => setLocation("/agent-logs")}
+            onClick={() => setLocation('/agent-logs')}
             className={cn(
               MOBILE_ACTION_BUTTON_CLASS,
               connected
-                ? "border-profit/25 bg-profit/10 text-profit hover:border-profit/40 hover:bg-profit/15"
-                : "border-loss/25 bg-loss/10 text-loss hover:border-loss/40 hover:bg-loss/15"
+                ? 'border-profit/25 bg-profit/10 text-profit hover:border-profit/40 hover:bg-profit/15'
+                : 'border-loss/25 bg-loss/10 text-loss hover:border-loss/40 hover:bg-loss/15',
             )}
-            style={{ WebkitTapHighlightColor: "transparent" }}
+            style={{
+              WebkitTapHighlightColor: 'transparent',
+            }}
           >
             {connected ? (
               <Radio className={MOBILE_ACTION_ICON_CLASS} />
@@ -130,14 +229,16 @@ export function Header({ onOpenMobileNav }: HeaderProps) {
               data-testid="status-killswitch-mobile"
               title={killSwitchMobileLabel}
               aria-label={killSwitchMobileLabel}
-              onClick={() => setLocation("/")}
+              onClick={() => setLocation('/')}
               className={cn(
                 MOBILE_ACTION_BUTTON_CLASS,
                 killSwitch.enabled
-                  ? "border-loss/25 bg-loss/10 text-loss hover:border-loss/40 hover:bg-loss/15"
-                  : "border-border/80 bg-muted/15 text-muted-foreground hover:border-border hover:bg-muted/25 hover:text-foreground"
+                  ? 'border-loss/25 bg-loss/10 text-loss hover:border-loss/40 hover:bg-loss/15'
+                  : 'border-border/80 bg-muted/15 text-muted-foreground hover:border-border hover:bg-muted/25 hover:text-foreground',
               )}
-              style={{ WebkitTapHighlightColor: "transparent" }}
+              style={{
+                WebkitTapHighlightColor: 'transparent',
+              }}
             >
               <Power className={MOBILE_ACTION_ICON_CLASS} />
             </button>
@@ -162,87 +263,130 @@ export function Header({ onOpenMobileNav }: HeaderProps) {
       <div className="hidden min-h-16 items-center gap-3 px-3 sm:px-4 md:flex">
         <div className="ml-auto flex min-w-0 flex-1 justify-end overflow-x-auto">
           <div className="flex min-w-max items-center gap-2 py-2.5">
-        {/* Connection status */}
-        <div
-          data-testid="status-connection"
-          className={`${HEADER_CHIP_CLASS} ${
-            connected
-              ? "border-profit/25 bg-profit/10 text-profit"
-              : "border-loss/25 bg-loss/10 text-loss"
-          }`}
-          style={HEADER_LABEL_STYLE}
-        >
-          {connected ? (
-            <>
-              <span className="live-dot shrink-0" />
-              <span>Online</span>
-            </>
-          ) : (
-            <>
-              <WifiOff className={`${HEADER_ICON_CLASS} text-loss`} />
-              <span>Offline</span>
-            </>
-          )}
-        </div>
+            <a
+              href={installUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="cta-install-traderclaw"
+              title="Install TraderClaw"
+              className={`${HEADER_CHIP_CLASS} border-primary bg-primary text-primary-foreground transition-colors hover:bg-primary/92`}
+              style={HEADER_LABEL_STYLE}
+            >
+              <Rocket className={`${HEADER_ICON_CLASS} text-primary-foreground`} />
+              <span>Install TraderClaw</span>
+            </a>
 
-        {isAdmin ? (
-          <div
-            data-testid="status-admin-mode"
-            className={`${HEADER_CHIP_CLASS} border-border/80 bg-muted/15 text-foreground`}
-            style={HEADER_LABEL_STYLE}
-          >
-            Admin
-          </div>
-        ) : null}
+            {/* Connection status */}
+            <div
+              data-testid="status-connection"
+              className={`${HEADER_CHIP_CLASS} ${
+                connected ? 'border-profit/25 bg-profit/10 text-profit' : 'border-loss/25 bg-loss/10 text-loss'
+              }`}
+              style={HEADER_LABEL_STYLE}
+            >
+              {connected ? (
+                <>
+                  <span className="live-dot shrink-0" />
+                  <span>Online</span>
+                </>
+              ) : (
+                <>
+                  <WifiOff className={`${HEADER_ICON_CLASS} text-loss`} />
+                  <span>Offline</span>
+                </>
+              )}
+            </div>
 
-        {/* Kill switch badge */}
-        {killSwitch && (
-          <div
-            data-testid="status-killswitch"
-            className={`${HEADER_CHIP_CLASS} ${
-              killSwitch.enabled
-                ? "border-loss/25 bg-loss/10 text-loss"
-                : "border-border/80 bg-muted/15 text-muted-foreground"
-            }`}
-            style={HEADER_LABEL_STYLE}
-          >
-            <Power className={`${HEADER_ICON_CLASS} ${killSwitch.enabled ? "text-loss" : "text-muted-foreground"}`} />
-            {killSwitchLabel}
-          </div>
-        )}
+            {isAdmin ? (
+              <div
+                data-testid="status-admin-mode"
+                className={`${HEADER_CHIP_CLASS} border-border/80 bg-muted/15 text-foreground`}
+                style={HEADER_LABEL_STYLE}
+              >
+                Admin
+              </div>
+            ) : null}
 
-        {/* Sync session dialog */}
-        <SyncSessionDialog>
-          <Button
-            size="sm"
-            variant="outline"
-            className={`${HEADER_CHIP_CLASS} border-border/80 bg-transparent text-foreground hover:border-border hover:bg-muted/25`}
-            data-testid="button-sync-session"
-            style={HEADER_LABEL_STYLE}
-          >
-            <Link2 className={HEADER_ICON_CLASS} />
-            Sync
-          </Button>
-        </SyncSessionDialog>
+            {/* Kill switch badge */}
+            {killSwitch && (
+              <div
+                data-testid="status-killswitch"
+                className={`${HEADER_CHIP_CLASS} ${
+                  killSwitch.enabled
+                    ? 'border-loss/25 bg-loss/10 text-loss'
+                    : 'border-border/80 bg-muted/15 text-muted-foreground'
+                }`}
+                style={HEADER_LABEL_STYLE}
+              >
+                <Power
+                  className={`${HEADER_ICON_CLASS} ${killSwitch.enabled ? 'text-loss' : 'text-muted-foreground'}`}
+                />
+                {killSwitchLabel}
+              </div>
+            )}
 
-        {/* Balance */}
-        <button
-          type="button"
-          data-testid="status-balance"
-          title="View wallet settings"
-          onClick={() => setLocation("/settings")}
-          className={`${HEADER_CHIP_CLASS} cursor-pointer border-primary bg-primary text-primary-foreground transition-colors hover:bg-primary/92`}
-          style={HEADER_LABEL_STYLE}
-        >
-          <Wallet className={`${HEADER_ICON_CLASS} text-primary-foreground`} />
-          <SolAmount
-            value={balanceSol.toFixed(4)}
-            className="text-sm font-bold tabular-nums"
-            valueClassName="font-mono text-primary-foreground"
-            markClassName="h-[0.95em] w-[0.95em]"
-            iconClassName="text-primary-foreground"
-          />
-        </button>
+            {/* Sync: "Synced" only when this API account has a wallet; Log out whenever any session exists */}
+            <SyncSessionDialog>
+              <Button
+                size="sm"
+                variant="outline"
+                className={`${HEADER_CHIP_CLASS} ${
+                  accountSyncedWithWallet
+                    ? 'border-profit/25 bg-profit/10 text-profit hover:border-profit/40 hover:bg-profit/15'
+                    : 'border-border/80 bg-transparent text-foreground hover:border-border hover:bg-muted/25'
+                }`}
+                data-testid="button-sync-session"
+                title={
+                  accountSyncedWithWallet
+                    ? 'Synced — click to change API key'
+                    : sessionAuthenticated
+                      ? 'Signed in — add a wallet or paste another API key'
+                      : 'Sync session with API key'
+                }
+                style={HEADER_LABEL_STYLE}
+              >
+                {accountSyncedWithWallet ? (
+                  <CheckCircle className={`${HEADER_ICON_CLASS} text-profit`} />
+                ) : (
+                  <Link2 className={HEADER_ICON_CLASS} />
+                )}
+                {accountSyncedWithWallet ? 'Synced' : 'Sync'}
+              </Button>
+            </SyncSessionDialog>
+
+            {sessionAuthenticated ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void handleLogOut()}
+                className={`${HEADER_CHIP_CLASS} border-border/80 bg-transparent text-foreground hover:border-border hover:bg-muted/25`}
+                data-testid="button-log-out"
+                title="Log out and connect a different account"
+                style={HEADER_LABEL_STYLE}
+              >
+                <SignOut className={HEADER_ICON_CLASS} />
+                Log out
+              </Button>
+            ) : null}
+
+            {/* Balance */}
+            <button
+              type="button"
+              data-testid="status-balance"
+              title="View wallet settings"
+              onClick={() => setLocation('/settings')}
+              className={`${HEADER_CHIP_CLASS} cursor-pointer border-primary bg-primary text-primary-foreground transition-colors hover:bg-primary/92`}
+              style={HEADER_LABEL_STYLE}
+            >
+              <Wallet className={`${HEADER_ICON_CLASS} text-primary-foreground`} />
+              <SolAmount
+                value={balanceSol.toFixed(4)}
+                className="text-sm font-bold tabular-nums"
+                valueClassName="font-mono text-primary-foreground"
+                markClassName="h-[0.95em] w-[0.95em]"
+                iconClassName="text-primary-foreground"
+              />
+            </button>
           </div>
         </div>
       </div>

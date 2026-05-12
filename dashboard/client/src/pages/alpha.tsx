@@ -272,6 +272,16 @@ export default function AlphaPage() {
     [walletId, policy, storedPrivateIds, allPrivateIds, savePolicyMutation],
   );
 
+  const enableAllPrivateGroups = useCallback(() => {
+    if (!walletId || !policy) return;
+    savePolicyMutation.mutate({ walletId, alphaEnabledPrivateGroupIds: null });
+  }, [walletId, policy, savePolicyMutation]);
+
+  const disableAllPrivateGroups = useCallback(() => {
+    if (!walletId || !policy) return;
+    savePolicyMutation.mutate({ walletId, alphaEnabledPrivateGroupIds: [] });
+  }, [walletId, policy, savePolicyMutation]);
+
   const activeFilterDraft = filterDraft ?? policy?.alphaFilters ?? {};
 
   const saveFilters = () => {
@@ -301,6 +311,10 @@ export default function AlphaPage() {
       </div>
     );
   }
+
+  const privateGroupCount = privateData?.groups?.length ?? 0;
+  const privateBulkDisabled =
+    !policy || policyLoading || savePolicyMutation.isPending || privateGroupCount === 0;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-4 py-4 sm:px-6 sm:py-6">
@@ -389,7 +403,8 @@ export default function AlphaPage() {
             Your Telegram groups
           </CardTitle>
           <CardDescription className="text-xs">
-            Private groups from your linked Telegram account. Link your account below to add them.
+            Private groups from your linked Telegram account stay off until you enable them. Link your
+            account below to add them.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -397,20 +412,46 @@ export default function AlphaPage() {
             <Skeleton className="h-8 w-full" />
           ) : privateData?.telegramLinked ? (
             <>
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-2 text-xs text-profit">
                   <CheckCircle2 className="w-3.5 h-3.5 text-foreground" />
                   Connected{privateData.telegramUsername ? ` as @${privateData.telegramUsername}` : ""}
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 px-2 text-xs text-muted-foreground"
-                  onClick={() => refetchPrivate()}
-                  disabled={privateRefetching}
-                >
-                  {privateRefetching ? "Syncing…" : "↻ Sync"}
-                </Button>
+                <div className="flex flex-wrap items-center justify-end gap-1.5">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={enableAllPrivateGroups}
+                    disabled={privateBulkDisabled}
+                    data-testid="button-private-groups-enable-all"
+                  >
+                    Enable all
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={disableAllPrivateGroups}
+                    disabled={privateBulkDisabled}
+                    data-testid="button-private-groups-disable-all"
+                  >
+                    Disable all
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-xs text-muted-foreground"
+                    onClick={() => refetchPrivate()}
+                    disabled={privateRefetching}
+                    data-testid="button-private-groups-sync"
+                  >
+                    {privateRefetching ? "Syncing…" : "↻ Sync"}
+                  </Button>
+                </div>
               </div>
               {!privateData.groups?.length ? (
                 <EmptyState

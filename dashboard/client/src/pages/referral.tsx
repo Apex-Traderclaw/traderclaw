@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, getAccessToken } from "@/lib/queryClient";
+import { TOKEN_TICKER_DOLLAR, formatReferralCodeForDisplay } from "@/lib/token-config";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,6 +40,8 @@ function formatStakeTclaw(n: number) {
   return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
 }
 
+const accessRuntimeQueryKey = ["/api/access/runtime"] as const;
+
 export default function ReferralPage() {
   const { toast } = useToast();
   const [referralCodeDraft, setReferralCodeDraft] = useState("");
@@ -46,21 +49,41 @@ export default function ReferralPage() {
   const [waitlistTelegramId, setWaitlistTelegramId] = useState("");
   const [accessTick, setAccessTick] = useState(0);
 
+  const { data: accessRuntime } = useQuery<{ paused?: boolean }>({
+    queryKey: accessRuntimeQueryKey,
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/access/runtime");
+      return res.json();
+    },
+    enabled: Boolean(getAccessToken()),
+    retry: false,
+  });
+  const runtimePaused = Boolean(accessRuntime?.paused);
+
   const { data: referralMe, isLoading: referralLoading } = useQuery<ReferralMe | null>({
     queryKey: ["/api/referral/me"],
   });
 
   useEffect(() => {
-    if (!referralMe?.accessUntil) return;
+    if (!referralMe?.accessUntil || runtimePaused) return;
     const id = window.setInterval(() => setAccessTick((t) => t + 1), 1000);
     return () => window.clearInterval(id);
-  }, [referralMe?.accessUntil]);
+  }, [referralMe?.accessUntil, runtimePaused]);
 
   const accessSecondsLive = useMemo(() => {
+    void accessTick;
+    void runtimePaused;
+    if (
+      runtimePaused
+      && referralMe?.accessSecondsRemaining != null
+      && Number.isFinite(Number(referralMe.accessSecondsRemaining))
+    ) {
+      return Math.max(0, Math.floor(Number(referralMe.accessSecondsRemaining)));
+    }
     if (!referralMe?.accessUntil) return null;
     const ms = new Date(referralMe.accessUntil).getTime() - Date.now();
     return Math.max(0, Math.floor(ms / 1000));
-  }, [referralMe?.accessUntil, accessTick]);
+  }, [referralMe?.accessUntil, referralMe?.accessSecondsRemaining, accessTick, runtimePaused]);
 
   const saveReferralCodeMutation = useMutation({
     mutationFn: async (code: string) => {
@@ -178,6 +201,11 @@ export default function ReferralPage() {
                         <div className="text-lg font-medium" style={{ fontFamily: "var(--font-mono)" }} data-testid="text-access-countdown">
                           {formatAccessCountdown(accessSecondsLive ?? referralMe.accessSecondsRemaining ?? 0)}
                         </div>
+                        {runtimePaused ? (
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            Countdown frozen while agent runtime is paused—resume from the Dashboard to continue.
+                          </p>
+                        ) : null}
                       </div>
                       <div className="flex flex-col gap-1 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
                         <span>Ends</span>
@@ -190,7 +218,7 @@ export default function ReferralPage() {
                       Extend access
                     </div>
                     <p className="text-sm text-muted-foreground">
-                      Stake <span className="font-mono text-foreground">{formatStakeTclaw(referralMe.stakeTclawAmount)} $TCLAW</span> if you need more time on this account.
+                      Stake <span className="font-mono text-foreground">{formatStakeTclaw(referralMe.stakeTclawAmount)} {TOKEN_TICKER_DOLLAR}</span> if you need more time on this account.
                     </p>
                     <a
                       href={referralMe.stakingUrl || "https://traderclaw.ai/staking"}
@@ -299,7 +327,7 @@ export default function ReferralPage() {
                       Current code
                     </div>
                     <div className="break-all text-sm text-foreground" style={{ fontFamily: "var(--font-mono)" }}>
-                      {referralMe.referralCode ?? "—"}
+                      {referralMe.referralCode ? formatReferralCodeForDisplay(referralMe.referralCode) : "—"}
                     </div>
                   </div>
 
@@ -309,7 +337,7 @@ export default function ReferralPage() {
                     disabled={!referralMe.referralCode}
                     onClick={async () => {
                       if (!referralMe.referralCode) return;
-                      await navigator.clipboard.writeText(referralMe.referralCode);
+                      await navigator.clipboard.writeText(formatReferralCodeForDisplay(referralMe.referralCode));
                       toast({ title: "Referral code copied" });
                     }}
                     data-testid="button-copy-referral-code"

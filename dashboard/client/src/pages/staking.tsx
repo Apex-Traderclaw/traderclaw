@@ -9,8 +9,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowUpRight, Certificate, CheckCircle2, Clock, Link2, Lock, ShoppingCart, Sparkles, Unlock, Wallet } from "@/components/ui/icons";
+import { ArrowUpRight, CheckCircle2, Clock, Link2, Lock, ShoppingCart, Sparkles, Unlock, Wallet } from "@/components/ui/icons";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Wallet as WalletType } from "@shared/schema";
+import { TOKEN_TICKER } from "@/lib/token-config";
 
 type StakeEvent = {
   id: string;
@@ -29,31 +31,43 @@ type ConnectedWalletView = {
   source: WalletSource;
 };
 
-const STAKE_TIERS = [
-  {
-    min: 50000,
-    name: "Operator",
-    runtimeBoost: "+72h runtime",
-    rewardsPath: "1.4x rewards path",
-    summary: "Built for higher-conviction operators who want the strongest runtime and rewards profile.",
-  },
-  {
-    min: 25000,
-    name: "Pro",
-    runtimeBoost: "+36h runtime",
-    rewardsPath: "1.15x rewards path",
-    summary: "Balanced tier for desks that want more runtime headroom without moving into the top band.",
-  },
-  {
-    min: 10000,
-    name: "Base",
-    runtimeBoost: "+12h runtime",
-    rewardsPath: "0.9x rewards path",
-    summary: "Entry staking lane for getting into TCLAW staking with a lighter commitment level.",
-  },
-];
+type TierDef = {
+  name: string;
+  min: number;
+  discountPct: number;
+};
 
-const STAKE_TIER_PREVIEW = [...STAKE_TIERS].reverse();
+type StakingEntitlementsResponse = {
+  ok: boolean;
+  staking: {
+    linkedWallet: string | null;
+    stakedBalance: number;
+    rawTier: string | null;
+    activeTier: string | null;
+    discountPct: number;
+    unlimitedRuntime: boolean;
+    tierActivatesAt: string | null;
+    pendingTier: string | null;
+    holdTclawUnlimitedRuntime?: boolean;
+  } | null;
+  tiers: TierDef[];
+};
+
+type ReferralMeResponse = {
+  stakeTclawAmount: number;
+  stakingUrl: string;
+  stakingTier: string | null;
+  stakingDiscountPct: number;
+  stakingUnlimitedRuntime: boolean;
+  holdTclawUnlimitedRuntime?: boolean;
+  runtimeUnlimited?: boolean;
+  runtimeHoldMinTclaw?: number | null;
+  runtimeHoldSplWalletPublicKey?: string | null;
+  stakingLinkedWallet: string | null;
+  accessUntil: string | null;
+  accessSecondsRemaining: number | null;
+  referralCode: string | null;
+};
 
 function formatTclaw(value: number) {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: value < 1000 ? 2 : 0 }).format(value);
@@ -63,13 +77,43 @@ function formatCompactDate(value: string) {
   return new Date(value).toLocaleString();
 }
 
-function resolveTier(stakedAmount: number) {
-  return STAKE_TIERS.find((tier) => stakedAmount >= tier.min) ?? null;
+function tierDisplayName(name: string | null) {
+  if (!name) return "Inactive";
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 export default function StakingPage() {
   const { toast } = useToast();
   const { data: wallets, isLoading: walletsLoading } = useQuery<WalletType[] | null>({ queryKey: ["/api/wallets"] });
+
+  const { data: stakingData, isLoading: stakingLoading } = useQuery<StakingEntitlementsResponse>({
+    queryKey: ["/api/staking/entitlements"],
+    refetchInterval: 30_000,
+  });
+
+  const { data: referralMe } = useQuery<ReferralMeResponse>({
+    queryKey: ["/api/referral/me"],
+  });
+
+  const tiers: TierDef[] = useMemo(() => {
+    if (stakingData?.tiers?.length) return stakingData.tiers;
+    return [
+      { name: "gold", min: 6_000_000, discountPct: 40 },
+      { name: "silver", min: 2_000_000, discountPct: 28 },
+      { name: "bronze", min: 600_000, discountPct: 18 },
+      { name: "standard", min: 200_000, discountPct: 10 },
+    ];
+  }, [stakingData?.tiers]);
+
+  const tierPreview = useMemo(() => [...tiers].reverse(), [tiers]);
+
+  const staking = stakingData?.staking;
+  const stakedAmount = staking?.stakedBalance ?? 0;
+  const activeTierName = tierDisplayName(staking?.activeTier ?? null);
+  const discountPct = staking?.discountPct ?? 0;
+  const unlimitedRuntime = staking?.unlimitedRuntime ?? false;
+  const pendingTier = staking?.pendingTier ?? null;
+  const tierActivatesAt = staking?.tierActivatesAt ?? null;
 
   const walletOptions = Array.isArray(wallets) ? wallets : [];
   const [walletSource, setWalletSource] = useState<WalletSource>("external");
@@ -80,32 +124,24 @@ export default function StakingPage() {
 
   const [stakeAmount, setStakeAmount] = useState("10000");
   const [unstakeAmount, setUnstakeAmount] = useState("");
-  const [stakedAmount, setStakedAmount] = useState(18500);
-  const [pendingRewards, setPendingRewards] = useState(247.25);
-  const [cooldownAmount, setCooldownAmount] = useState(0);
-  const [cooldownEndsAt, setCooldownEndsAt] = useState<string | null>(null);
-  const [activity, setActivity] = useState<StakeEvent[]>([
-    {
-      id: "seed-runtime-bonus",
-      type: "stake",
-      label: "Runtime bonus tier activated",
-      amount: 18500,
-      timestamp: new Date(Date.now() - 1000 * 60 * 90).toISOString(),
-    },
-    {
-      id: "seed-claim",
-      type: "claim",
-      label: "Last rewards claim",
-      amount: 84,
-      timestamp: new Date(Date.now() - 1000 * 60 * 60 * 18).toISOString(),
-    },
-  ]);
+  const [pendingRewards] = useState(0);
+  const [cooldownAmount] = useState(0);
+  const [cooldownEndsAt] = useState<string | null>(null);
+  const [activity, setActivity] = useState<StakeEvent[]>([]);
 
   useEffect(() => {
     if (!walletOptions.length) return;
     if (selectedWalletId) return;
     setSelectedWalletId(String(walletOptions[0].id));
   }, [walletOptions, selectedWalletId]);
+
+  useEffect(() => {
+    if (staking?.linkedWallet) {
+      setExternalWalletPublicKey(staking.linkedWallet);
+      setExternalWalletConnected(true);
+      setWalletSource("external");
+    }
+  }, [staking?.linkedWallet]);
 
   const selectedDashboardWallet =
     walletOptions.find((wallet) => String(wallet.id) === selectedWalletId) ?? walletOptions[0] ?? null;
@@ -131,9 +167,13 @@ export default function StakingPage() {
     };
   }, [walletSource, selectedDashboardWallet, externalWalletConnected, externalWalletLabel, externalWalletPublicKey]);
 
-  const activeTier = resolveTier(stakedAmount);
-  const activeTierName = activeTier?.name ?? "Inactive";
-  const runtimeBoost = activeTier?.runtimeBoost ?? "No runtime boost";
+  const runtimeLabel = unlimitedRuntime
+    ? "Unlimited runtime"
+    : pendingTier
+      ? `Pending ${tierDisplayName(pendingTier)} (activates ${tierActivatesAt ? formatCompactDate(tierActivatesAt) : "soon"})`
+      : discountPct > 0
+        ? `${discountPct}% discount`
+        : "No runtime boost";
 
   const addActivity = (entry: Omit<StakeEvent, "id" | "timestamp">) => {
     setActivity((prev) => [
@@ -146,7 +186,7 @@ export default function StakingPage() {
     ]);
   };
 
-  const handleConnectExternalWallet = () => {
+  const handleConnectExternalWallet = async () => {
     if (!externalWalletPublicKey.trim()) {
       toast({
         title: "Wallet public key required",
@@ -156,13 +196,26 @@ export default function StakingPage() {
       return;
     }
 
-    setExternalWalletConnected(true);
-    setWalletSource("external");
-    addActivity({
-      type: "connect",
-      label: `Connected ${externalWalletLabel.trim() || "external wallet"}`,
-    });
-    toast({ title: "Wallet connected", description: "External staking wallet is now selected." });
+    try {
+      await apiRequest("POST", "/api/staking/link-wallet", {
+        stakingWallet: externalWalletPublicKey.trim(),
+      });
+      setExternalWalletConnected(true);
+      setWalletSource("external");
+      addActivity({
+        type: "connect",
+        label: `Connected ${externalWalletLabel.trim() || "external wallet"}`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/staking/entitlements"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/referral/me"] });
+      toast({ title: "Wallet linked", description: "Staking wallet linked to your account." });
+    } catch (err: unknown) {
+      toast({
+        title: "Link failed",
+        description: err instanceof Error ? err.message : "Could not link wallet.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleStake = () => {
@@ -172,19 +225,18 @@ export default function StakingPage() {
       return;
     }
     if (!Number.isFinite(amount) || amount <= 0) {
-      toast({ title: "Invalid stake amount", description: "Enter a valid TCLAW amount to stake.", variant: "destructive" });
+      toast({ title: "Invalid stake amount", description: `Enter a valid ${TOKEN_TICKER} amount to stake.`, variant: "destructive" });
       return;
     }
-
-    setStakedAmount((prev) => prev + amount);
-    setPendingRewards((prev) => prev + amount * 0.002);
-    setStakeAmount("");
     addActivity({
       type: "stake",
-      label: `Staked via ${connectedWallet.label}`,
+      label: `Stake request via ${connectedWallet.label}`,
       amount,
     });
-    toast({ title: "Stake staged", description: "Frontend preview updated the staking position locally." });
+    toast({
+      title: "Stake action",
+      description: "Submit this transaction in your wallet to complete the stake on-chain.",
+    });
   };
 
   const handleUnstake = () => {
@@ -197,18 +249,15 @@ export default function StakingPage() {
       toast({ title: "Invalid unstake amount", description: "Enter an amount within the current staked balance.", variant: "destructive" });
       return;
     }
-
-    const cooldownEnd = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7).toISOString();
-    setStakedAmount((prev) => Math.max(0, prev - amount));
-    setCooldownAmount((prev) => prev + amount);
-    setCooldownEndsAt(cooldownEnd);
-    setUnstakeAmount("");
     addActivity({
       type: "unstake",
       label: `Unstake request from ${connectedWallet.label}`,
       amount,
     });
-    toast({ title: "Unstake request staged", description: "Frontend preview moved the amount into cooldown locally." });
+    toast({
+      title: "Unstake action",
+      description: "Submit this transaction in your wallet to complete the unstake on-chain.",
+    });
   };
 
   const handleClaimRewards = () => {
@@ -216,20 +265,18 @@ export default function StakingPage() {
       toast({ title: "No rewards available", description: "There are no pending rewards to claim right now.", variant: "destructive" });
       return;
     }
-    const claimed = pendingRewards;
-    setPendingRewards(0);
     addActivity({
       type: "claim",
       label: "Rewards claimed",
-      amount: claimed,
+      amount: pendingRewards,
     });
-    toast({ title: "Rewards staged", description: "Frontend preview marked rewards as claimed locally." });
+    toast({ title: "Claim action", description: "Submit this transaction in your wallet to claim rewards on-chain." });
   };
 
   const handleBuyTclaw = () => {
     toast({
-      title: "TCLAW buy flow staged",
-      description: "This frontend preview is ready for the token-buy rail once the final purchase path is connected.",
+      title: `Buy ${TOKEN_TICKER}`,
+      description: "The token buy flow will be connected once the purchase rail is live.",
     });
   };
 
@@ -237,7 +284,7 @@ export default function StakingPage() {
     document.getElementById("staking-tier-preview")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  if (walletsLoading) {
+  if (walletsLoading || stakingLoading) {
     return (
       <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-6">
         <Skeleton className="h-24 w-full" />
@@ -253,9 +300,7 @@ export default function StakingPage() {
           Staking
         </h1>
         <p className="max-w-3xl text-sm text-muted-foreground">
-          Connect a staking wallet, manage TCLAW stake, and review unstake and rewards status from one dedicated access surface.
-          <br />
-          This is a frontend staging flow for the staking experience until the final staking backend and wallet-connect path are wired.
+          Connect a staking wallet, manage {TOKEN_TICKER} stake, and review tier status from one dedicated access surface.
         </p>
       </div>
 
@@ -271,7 +316,7 @@ export default function StakingPage() {
         <Card>
           <CardContent className="space-y-2 p-4">
             <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground" style={{ fontFamily: "var(--font-mono)" }}>
-              Staked TCLAW
+              Staked {TOKEN_TICKER}
             </div>
             <div className="text-base text-foreground" style={{ fontFamily: "var(--font-mono)" }}>
               {formatTclaw(stakedAmount)}
@@ -295,7 +340,7 @@ export default function StakingPage() {
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline" className="text-[10px]">{activeTierName}</Badge>
-              <span className="text-[11px] text-muted-foreground">{runtimeBoost}</span>
+              <span className="text-[11px] text-muted-foreground">{runtimeLabel}</span>
             </div>
           </CardContent>
         </Card>
@@ -347,7 +392,7 @@ export default function StakingPage() {
                 </div>
                 <div className="text-sm text-foreground">Connect another wallet</div>
                 <div className="mt-2 text-[11px] text-muted-foreground">
-                  This path is preselected and stages the external staking flow with a separate wallet address.
+                  This path stages the external staking flow with a separate wallet address.
                 </div>
               </button>
             </div>
@@ -470,7 +515,7 @@ export default function StakingPage() {
           <CardHeader className="space-y-3">
             <div className="space-y-1">
               <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground" style={{ fontFamily: "var(--font-mono)" }}>
-                TCLAW
+                {TOKEN_TICKER}
               </div>
               <CardTitle className="text-base">Stake, unstake, rewards</CardTitle>
             </div>
@@ -514,7 +559,7 @@ export default function StakingPage() {
                   <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground" style={{ fontFamily: "var(--font-mono)" }}>
                     Runtime Boost
                   </div>
-                  <div className="text-sm text-foreground">{runtimeBoost}</div>
+                  <div className="text-sm text-foreground">{runtimeLabel}</div>
                 </div>
                 <Button
                   type="button"
@@ -523,7 +568,7 @@ export default function StakingPage() {
                   data-testid="button-staking-stake"
                 >
                   <Lock className="mr-1.5 h-3.5 w-3.5" />
-                  Stake TCLAW
+                  Stake {TOKEN_TICKER}
                 </Button>
               </TabsContent>
 
@@ -565,7 +610,7 @@ export default function StakingPage() {
                     Cooldown
                   </div>
                   <div className="text-sm text-foreground">
-                    {cooldownAmount > 0 ? `${formatTclaw(cooldownAmount)} TCLAW pending release` : "No unstake cooldown active"}
+                    {cooldownAmount > 0 ? `${formatTclaw(cooldownAmount)} ${TOKEN_TICKER} pending release` : "No unstake cooldown active"}
                   </div>
                   {cooldownEndsAt ? (
                     <div className="mt-1 text-[11px] text-muted-foreground" style={{ fontFamily: "var(--font-mono)" }}>
@@ -581,7 +626,7 @@ export default function StakingPage() {
                   data-testid="button-staking-unstake"
                 >
                   <Unlock className="mr-1.5 h-3.5 w-3.5" />
-                  Unstake TCLAW
+                  Unstake {TOKEN_TICKER}
                 </Button>
               </TabsContent>
 
@@ -592,7 +637,7 @@ export default function StakingPage() {
                       Pending Rewards
                     </div>
                     <div className="text-base text-foreground" style={{ fontFamily: "var(--font-mono)" }}>
-                      {formatTclaw(pendingRewards)} TCLAW
+                      {formatTclaw(pendingRewards)} {TOKEN_TICKER}
                     </div>
                   </div>
                   <div className="border border-border/70 bg-muted/10 px-3 py-3">
@@ -607,7 +652,7 @@ export default function StakingPage() {
                     Reward Path
                   </div>
                   <div className="text-sm text-muted-foreground">
-                    Rewards and staking updates are staged locally in this frontend flow until the final staking contracts and claim path are connected.
+                    Rewards and claim path will be connected once the staking contracts are live on-chain.
                   </div>
                 </div>
                 <Button
@@ -630,18 +675,18 @@ export default function StakingPage() {
           <CardHeader className="space-y-3">
             <div className="space-y-1">
               <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground" style={{ fontFamily: "var(--font-mono)" }}>
-                Preview
+                Tiers
               </div>
-              <CardTitle className="text-base">Tier preview</CardTitle>
+              <CardTitle className="text-base">Staking tiers</CardTitle>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-              Preview the staged staking ladder below. These tier surfaces are placeholders for the final SaaS-style staking and access plans.
+              Stake {TOKEN_TICKER} to unlock discount tiers and unlimited agent runtime at Standard and above.
             </p>
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-              {STAKE_TIER_PREVIEW.map((tier) => {
-                const isActive = activeTierName === tier.name;
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
+              {tierPreview.map((tier) => {
+                const isActive = staking?.activeTier === tier.name;
 
                 return (
                   <div
@@ -659,23 +704,23 @@ export default function StakingPage() {
                           className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground"
                           style={{ fontFamily: "var(--font-mono)" }}
                         >
-                          {formatTclaw(tier.min)} TCLAW
+                          {formatTclaw(tier.min)} {TOKEN_TICKER}
                         </div>
-                        <div className="text-base text-foreground">{tier.name}</div>
+                        <div className="text-base text-foreground">{tierDisplayName(tier.name)}</div>
                       </div>
                       <Badge variant="outline" className="text-[10px]">
-                        {isActive ? "Active" : "Preview"}
+                        {isActive ? "Active" : `${tier.discountPct}%`}
                       </Badge>
                     </div>
 
                     <div className="space-y-2">
-                      <div className="text-sm text-foreground">{tier.runtimeBoost}</div>
-                      <div className="text-sm text-foreground">{tier.rewardsPath}</div>
+                      <div className="text-sm text-foreground">{tier.discountPct}% discount</div>
+                      <div className="text-sm text-foreground">
+                        {tier.name === "standard" || tier.name === "bronze" || tier.name === "silver" || tier.name === "gold"
+                          ? "Unlimited runtime"
+                          : ""}
+                      </div>
                     </div>
-
-                    <p className="mt-auto text-sm leading-6 text-muted-foreground">
-                      {tier.summary}
-                    </p>
                   </div>
                 );
               })}
@@ -689,7 +734,7 @@ export default function StakingPage() {
               <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground" style={{ fontFamily: "var(--font-mono)" }}>
                 Token
               </div>
-              <CardTitle className="text-base">Buy TCLAW</CardTitle>
+              <CardTitle className="text-base">Buy {TOKEN_TICKER}</CardTitle>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -698,18 +743,18 @@ export default function StakingPage() {
                 <ShoppingCart className="h-6 w-6" />
               </span>
               <div className="text-sm leading-6 text-muted-foreground">
-                Build toward higher staking tiers, stronger runtime boosts, and the staged rewards path from one token position.
+                Build toward higher staking tiers, stronger discounts, and unlimited agent runtime from one token position.
               </div>
             </div>
 
             <div className="space-y-2 border-t border-border/70 pt-4">
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="text-muted-foreground">Tier unlocks</span>
-                <span className="text-foreground">Base / Pro / Operator</span>
+                <span className="text-foreground">Standard / Bronze / Silver / Gold</span>
               </div>
               <div className="flex items-center justify-between gap-3 text-sm">
-                <span className="text-muted-foreground">Runtime upside</span>
-                <span className="text-foreground">Up to +72h</span>
+                <span className="text-muted-foreground">Max discount</span>
+                <span className="text-foreground">Up to 40%</span>
               </div>
               <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="text-muted-foreground">Status</span>
@@ -724,7 +769,7 @@ export default function StakingPage() {
                 data-testid="button-buy-tclaw"
               >
                 <ShoppingCart className="mr-1.5 h-3.5 w-3.5" />
-                Buy TCLAW
+                Buy {TOKEN_TICKER}
               </Button>
               <Button
                 type="button"
@@ -753,20 +798,26 @@ export default function StakingPage() {
           <CardContent className="space-y-3">
             <div className="flex items-center justify-between gap-3 border border-border/70 bg-muted/10 px-3 py-3">
               <span className="text-sm text-muted-foreground">Staked amount</span>
-              <span className="font-mono text-sm text-foreground">{formatTclaw(stakedAmount)} TCLAW</span>
+              <span className="font-mono text-sm text-foreground">{formatTclaw(stakedAmount)} {TOKEN_TICKER}</span>
             </div>
             <div className="flex items-center justify-between gap-3 border border-border/70 bg-muted/10 px-3 py-3">
               <span className="text-sm text-muted-foreground">Cooldown</span>
-              <span className="font-mono text-sm text-foreground">{formatTclaw(cooldownAmount)} TCLAW</span>
+              <span className="font-mono text-sm text-foreground">{formatTclaw(cooldownAmount)} {TOKEN_TICKER}</span>
             </div>
             <div className="flex items-center justify-between gap-3 border border-border/70 bg-muted/10 px-3 py-3">
               <span className="text-sm text-muted-foreground">Rewards pending</span>
-              <span className="font-mono text-sm text-foreground">{formatTclaw(pendingRewards)} TCLAW</span>
+              <span className="font-mono text-sm text-foreground">{formatTclaw(pendingRewards)} {TOKEN_TICKER}</span>
             </div>
             <div className="flex items-center justify-between gap-3 border border-border/70 bg-muted/10 px-3 py-3">
               <span className="text-sm text-muted-foreground">Runtime tier</span>
               <span className="text-sm text-foreground">{activeTierName}</span>
             </div>
+            {discountPct > 0 && (
+              <div className="flex items-center justify-between gap-3 border border-border/70 bg-muted/10 px-3 py-3">
+                <span className="text-sm text-muted-foreground">Discount</span>
+                <span className="text-sm text-foreground">{discountPct}%</span>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -795,7 +846,7 @@ export default function StakingPage() {
                     </div>
                     {typeof event.amount === "number" ? (
                       <Badge variant="outline" className="text-[10px]">
-                        {formatTclaw(event.amount)} TCLAW
+                        {formatTclaw(event.amount)} {TOKEN_TICKER}
                       </Badge>
                     ) : null}
                   </div>
