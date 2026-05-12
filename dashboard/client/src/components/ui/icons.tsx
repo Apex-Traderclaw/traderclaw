@@ -61,6 +61,7 @@ export {
   PiShieldSlash as ShieldOff,
   PiShoppingBag as ShoppingBag,
   PiShoppingCart as ShoppingCart,
+  PiSignOut as SignOut,
   PiSlidersHorizontal as SlidersHorizontal,
   PiSparkle as Sparkles,
   PiStorefront as Storefront,

@@ -37,7 +37,7 @@ function notifyListeners(connected: boolean) {
 
 function mergePositionFromStream(walletId: string, position: { id: string; currentPrice?: number; unrealizedPnl?: number }) {
   const suffix = `?walletId=${walletId}&status=open`;
-  queryClient.setQueryData<unknown>(["/api/wallet/positions", suffix], (old) => {
+  queryClient.setQueryData<unknown>(["/api/wallet/positions", suffix], (old: unknown) => {
     if (!Array.isArray(old)) return old;
     return old.map((p: { id: string }) =>
       p.id === position.id ? { ...p, ...position } : p,
