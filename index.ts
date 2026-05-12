@@ -166,6 +166,12 @@ function parseConfig(raw: unknown): PluginConfig {
   };
 }
 
+/** Matches orchestrator/thrown errors after rate limiting (gateway-credentials poll, HTTP client, etc.). */
+function isOrchestratorRateLimitError(err: unknown): boolean {
+  const m = err instanceof Error ? err.message : String(err);
+  return /\bRATE_LIMIT\b|(^|[\s:])429([\s:]|$)|rate\s+limit\s+exceeded/i.test(m);
+}
+
 function buildTraderClawWelcomeMessage(apiKeyForDisplay: string | null): string {
   const keyBlock = apiKeyForDisplay
     ? `Your TraderClaw API Key:\n\n${apiKeyForDisplay}\n\nUse this to connect your dashboard.`
@@ -3758,6 +3764,8 @@ const solanaTraderPlugin = {
       },
     );
 
+    let solanaTraderSessionWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+
     api.registerService({
       id: "solana-trader-session",
       start: async () => {
@@ -3826,13 +3834,30 @@ const solanaTraderPlugin = {
         const WATCHDOG_INTERVAL_MS = 20 * 60 * 1_000;
         const FORWARD_PROBE_WATCHDOG_MS = 7 * 60 * 1000;
         const STARTUP_GATE_AFTER_PROBE_FAIL_COOLDOWN_MS = 10 * 60 * 1000;
+        /** After RATE_LIMIT on gateway-credentials poll, pause that check to avoid amplifier effects with stacked timers. */
+        const GATEWAY_CRED_RATE_LIMIT_COOLDOWN_MS = 10 * 60 * 1000;
+        const GATEWAY_CRED_WARN_THROTTLE_MS = 60_000;
+        let gatewayCredRateLimitBackoffUntilMs = 0;
+        let gatewayCredWarnLastLoggedAtMs = 0;
+        const throttleGatewayCredWarn = (msg: string) => {
+          const t = Date.now();
+          if (t - gatewayCredWarnLastLoggedAtMs < GATEWAY_CRED_WARN_THROTTLE_MS) return;
+          gatewayCredWarnLastLoggedAtMs = t;
+          api.logger.warn(msg);
+        };
+
+        if (solanaTraderSessionWatchdogTimer !== null) {
+          clearInterval(solanaTraderSessionWatchdogTimer);
+          solanaTraderSessionWatchdogTimer = null;
+        }
+
         let alphaStalePhase: 0 | 1 = 0;
         // Anchor to service start so `Date.now() - 0` does not satisfy thresholds on every tick.
         const watchdogStartedAt = Date.now();
         let lastForwardProbeWatchdogMs = watchdogStartedAt;
         let lastProbeFailureStartupGateMs = watchdogStartedAt;
 
-        const watchdogTimer = setInterval(async () => {
+        solanaTraderSessionWatchdogTimer = setInterval(async () => {
           const now = Date.now();
 
           // 1. Alpha: not subscribed → subscribe; else ingestion staleness → soft resubscribe then force reconnect
@@ -3874,14 +3899,25 @@ const solanaTraderPlugin = {
           }
 
           // 2. Gateway credential liveness (orchestrator row)
-          try {
-            const creds = (await get("/api/agents/gateway-credentials")) as Record<string, unknown>;
-            if (!getActiveCredential(creds)) {
-              api.logger.warn("[watchdog] Gateway credentials inactive — re-registering...");
-              await runStartupGate({ autoFixGateway: true, force: true });
+          if (now >= gatewayCredRateLimitBackoffUntilMs) {
+            try {
+              const creds = (await get("/api/agents/gateway-credentials")) as Record<string, unknown>;
+              gatewayCredRateLimitBackoffUntilMs = 0;
+              if (!getActiveCredential(creds)) {
+                api.logger.warn("[watchdog] Gateway credentials inactive — re-registering...");
+                await runStartupGate({ autoFixGateway: true, force: true });
+              }
+            } catch (err) {
+              const detail = err instanceof Error ? err.message : String(err);
+              if (isOrchestratorRateLimitError(err)) {
+                gatewayCredRateLimitBackoffUntilMs = now + GATEWAY_CRED_RATE_LIMIT_COOLDOWN_MS;
+                throttleGatewayCredWarn(
+                  `[watchdog] Gateway credential check paused ${Math.round(GATEWAY_CRED_RATE_LIMIT_COOLDOWN_MS / 60000)}m after orchestrator rate limit: ${detail}`,
+                );
+              } else {
+                throttleGatewayCredWarn(`[watchdog] Gateway credential check failed: ${detail}`);
+              }
             }
-          } catch (err) {
-            api.logger.warn(`[watchdog] Gateway credential check failed: ${err instanceof Error ? err.message : String(err)}`);
           }
 
           // 3. Rate-limited forward probe + bounded startup gate on persistent failure
@@ -3903,8 +3939,19 @@ const solanaTraderPlugin = {
           }
         }, WATCHDOG_INTERVAL_MS);
 
-        if (watchdogTimer && typeof watchdogTimer === "object" && "unref" in watchdogTimer) {
-          (watchdogTimer as NodeJS.Timeout).unref();
+        if (
+          solanaTraderSessionWatchdogTimer &&
+          typeof solanaTraderSessionWatchdogTimer === "object" &&
+          "unref" in solanaTraderSessionWatchdogTimer
+        ) {
+          (solanaTraderSessionWatchdogTimer as NodeJS.Timeout).unref();
+        }
+      },
+      stop: async () => {
+        if (solanaTraderSessionWatchdogTimer !== null) {
+          clearInterval(solanaTraderSessionWatchdogTimer);
+          solanaTraderSessionWatchdogTimer = null;
+          api.logger.info("[solana-trader] Session health watchdog stopped");
         }
       },
     });

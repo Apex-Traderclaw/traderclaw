@@ -838,6 +838,10 @@ function parseConfig(raw) {
     kaybaFolder
   };
 }
+function isOrchestratorRateLimitError(err) {
+  const m = err instanceof Error ? err.message : String(err);
+  return /\bRATE_LIMIT\b|(^|[\s:])429([\s:]|$)|rate\s+limit\s+exceeded/i.test(m);
+}
 function buildTraderClawWelcomeMessage(apiKeyForDisplay) {
   const keyBlock = apiKeyForDisplay ? `Your TraderClaw API Key:
 
@@ -4291,6 +4295,7 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
         description: "Sync STATE.md and append memory-flush entry to daily log before context compaction."
       }
     );
+    let solanaTraderSessionWatchdogTimer = null;
     api.registerService({
       id: "solana-trader-session",
       start: async () => {
@@ -4352,11 +4357,25 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
         const WATCHDOG_INTERVAL_MS = 20 * 60 * 1e3;
         const FORWARD_PROBE_WATCHDOG_MS = 7 * 60 * 1e3;
         const STARTUP_GATE_AFTER_PROBE_FAIL_COOLDOWN_MS = 10 * 60 * 1e3;
+        const GATEWAY_CRED_RATE_LIMIT_COOLDOWN_MS = 10 * 60 * 1e3;
+        const GATEWAY_CRED_WARN_THROTTLE_MS = 6e4;
+        let gatewayCredRateLimitBackoffUntilMs = 0;
+        let gatewayCredWarnLastLoggedAtMs = 0;
+        const throttleGatewayCredWarn = (msg) => {
+          const t = Date.now();
+          if (t - gatewayCredWarnLastLoggedAtMs < GATEWAY_CRED_WARN_THROTTLE_MS) return;
+          gatewayCredWarnLastLoggedAtMs = t;
+          api.logger.warn(msg);
+        };
+        if (solanaTraderSessionWatchdogTimer !== null) {
+          clearInterval(solanaTraderSessionWatchdogTimer);
+          solanaTraderSessionWatchdogTimer = null;
+        }
         let alphaStalePhase = 0;
         const watchdogStartedAt = Date.now();
         let lastForwardProbeWatchdogMs = watchdogStartedAt;
         let lastProbeFailureStartupGateMs = watchdogStartedAt;
-        const watchdogTimer = setInterval(async () => {
+        solanaTraderSessionWatchdogTimer = setInterval(async () => {
           const now = Date.now();
           if (!alphaStreamManager.isSubscribed()) {
             alphaStalePhase = 0;
@@ -4394,14 +4413,25 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
           } else {
             alphaStalePhase = 0;
           }
-          try {
-            const creds = await get("/api/agents/gateway-credentials");
-            if (!getActiveCredential(creds)) {
-              api.logger.warn("[watchdog] Gateway credentials inactive \u2014 re-registering...");
-              await runStartupGate({ autoFixGateway: true, force: true });
+          if (now >= gatewayCredRateLimitBackoffUntilMs) {
+            try {
+              const creds = await get("/api/agents/gateway-credentials");
+              gatewayCredRateLimitBackoffUntilMs = 0;
+              if (!getActiveCredential(creds)) {
+                api.logger.warn("[watchdog] Gateway credentials inactive \u2014 re-registering...");
+                await runStartupGate({ autoFixGateway: true, force: true });
+              }
+            } catch (err) {
+              const detail = err instanceof Error ? err.message : String(err);
+              if (isOrchestratorRateLimitError(err)) {
+                gatewayCredRateLimitBackoffUntilMs = now + GATEWAY_CRED_RATE_LIMIT_COOLDOWN_MS;
+                throttleGatewayCredWarn(
+                  `[watchdog] Gateway credential check paused ${Math.round(GATEWAY_CRED_RATE_LIMIT_COOLDOWN_MS / 6e4)}m after orchestrator rate limit: ${detail}`
+                );
+              } else {
+                throttleGatewayCredWarn(`[watchdog] Gateway credential check failed: ${detail}`);
+              }
             }
-          } catch (err) {
-            api.logger.warn(`[watchdog] Gateway credential check failed: ${err instanceof Error ? err.message : String(err)}`);
           }
           if (now - lastForwardProbeWatchdogMs >= FORWARD_PROBE_WATCHDOG_MS) {
             lastForwardProbeWatchdogMs = now;
@@ -4420,8 +4450,15 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
             }
           }
         }, WATCHDOG_INTERVAL_MS);
-        if (watchdogTimer && typeof watchdogTimer === "object" && "unref" in watchdogTimer) {
-          watchdogTimer.unref();
+        if (solanaTraderSessionWatchdogTimer && typeof solanaTraderSessionWatchdogTimer === "object" && "unref" in solanaTraderSessionWatchdogTimer) {
+          solanaTraderSessionWatchdogTimer.unref();
+        }
+      },
+      stop: async () => {
+        if (solanaTraderSessionWatchdogTimer !== null) {
+          clearInterval(solanaTraderSessionWatchdogTimer);
+          solanaTraderSessionWatchdogTimer = null;
+          api.logger.info("[solana-trader] Session health watchdog stopped");
         }
       }
     });
