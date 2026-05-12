@@ -5,7 +5,7 @@ import {
 } from "./chunk-IAQC34O7.js";
 import {
   SessionManager
-} from "./chunk-6IS5XPDB.js";
+} from "./chunk-NEMH5KB5.js";
 import {
   looksLikeTelegramChatId,
   resolveTelegramRecipientToChatId
@@ -4349,7 +4349,7 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
         } catch (err) {
           api.logger.warn(`[solana-trader] Forward probe failed: ${err instanceof Error ? err.message : String(err)}`);
         }
-        const WATCHDOG_INTERVAL_MS = 9e4;
+        const WATCHDOG_INTERVAL_MS = 20 * 60 * 1e3;
         const FORWARD_PROBE_WATCHDOG_MS = 7 * 60 * 1e3;
         const STARTUP_GATE_AFTER_PROBE_FAIL_COOLDOWN_MS = 10 * 60 * 1e3;
         let alphaStalePhase = 0;

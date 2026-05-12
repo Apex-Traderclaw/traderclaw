@@ -127,7 +127,7 @@ async function rawFetch(url, method, body, bearerToken, timeout = 15e3) {
     clearTimeout(timer);
   }
 }
-var SessionManager = class {
+var SessionManager = class _SessionManager {
   baseUrl;
   apiKey;
   accessToken = null;
@@ -150,6 +150,8 @@ var SessionManager = class {
   tokenGeneration = 0;
   proactiveRefreshTimer = null;
   proactiveRefreshRunning = false;
+  lastChallengeAttemptAt = 0;
+  static CHALLENGE_COOLDOWN_MS = 5 * 60 * 1e3;
   constructor(config) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, "");
     this.apiKey = config.apiKey;
@@ -339,6 +341,15 @@ var SessionManager = class {
       }
     }
     this.log.info("[session] Starting challenge flow...");
+    const nowMs = Date.now();
+    const sinceLastChallenge = nowMs - this.lastChallengeAttemptAt;
+    if (this.lastChallengeAttemptAt > 0 && sinceLastChallenge < _SessionManager.CHALLENGE_COOLDOWN_MS) {
+      const waitSec = Math.ceil((_SessionManager.CHALLENGE_COOLDOWN_MS - sinceLastChallenge) / 1e3);
+      throw new Error(
+        `[session] Challenge cooldown active \u2014 skipping to prevent server flood. Retry in ${waitSec}s. Last attempt: ${new Date(this.lastChallengeAttemptAt).toISOString()}`
+      );
+    }
+    this.lastChallengeAttemptAt = nowMs;
     const challenge = await this.requestChallenge();
     let walletPubKey;
     let walletSig;
