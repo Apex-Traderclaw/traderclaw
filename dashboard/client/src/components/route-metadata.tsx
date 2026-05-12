@@ -1,5 +1,7 @@
 import { useEffect } from "react";
 import { useLocation } from "wouter";
+import { dashboardStakingComingSoon } from "@/lib/feature-flags";
+import { TOKEN_TICKER } from "@/lib/token-config";
 
 type MetadataEntry = {
   title: string;
@@ -77,7 +79,7 @@ const ROUTE_METADATA: Array<{ match: (pathname: string) => boolean; metadata: Me
     metadata: {
       title: "Staking | TraderClaw Trading Console",
       description:
-        "Connect a staking wallet, manage TCLAW stake and unstake actions, and review rewards and staking status from the TraderClaw dashboard.",
+        `Connect a staking wallet, manage ${TOKEN_TICKER} stake and unstake actions, and review rewards and staking status from the TraderClaw dashboard.`,
     },
   },
   {
@@ -141,6 +143,12 @@ function setMetaTag(attribute: "name" | "property", key: string, content: string
 }
 
 function resolveMetadata(pathname: string): MetadataEntry {
+  if ((pathname || "/").startsWith("/staking") && dashboardStakingComingSoon()) {
+    return {
+      title: "Staking (Coming soon) | TraderClaw Trading Console",
+      description: `TraderClaw on-dashboard staking is coming soon. Check back for ${TOKEN_TICKER} stake, tiers, and rewards.`,
+    };
+  }
   return ROUTE_METADATA.find((entry) => entry.match(pathname))?.metadata ?? {
     title: "Page Not Found | TraderClaw",
     description:

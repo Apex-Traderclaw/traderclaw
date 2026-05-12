@@ -1,4 +1,6 @@
 import { ReactNode, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import type { Wallet as WalletType } from "@shared/schema";
 import { queryClient, startUserSession, getStoredApiKey } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -24,6 +26,12 @@ export function SyncSessionDialog({ children }: SyncSessionDialogProps) {
   const [syncApiKey, setSyncApiKey] = useState(getStoredApiKey() || "");
   const [syncPrivateKey, setSyncPrivateKey] = useState("");
 
+  const { data: wallets } = useQuery<WalletType[]>({
+    queryKey: ["/api/wallets"],
+  });
+  const sessionAuthenticated = Array.isArray(wallets);
+  const accountSyncedWithWallet = sessionAuthenticated && wallets.length > 0;
+
   return (
     <Dialog
       open={open}
@@ -39,8 +47,11 @@ export function SyncSessionDialog({ children }: SyncSessionDialogProps) {
         <DialogHeader>
           <DialogTitle>Sync Agent Session</DialogTitle>
           <DialogDescription>
-            Paste API key to sync this dashboard session. If wallet proof is required, add wallet private key for local
-            challenge signing.
+            {accountSyncedWithWallet
+              ? "This API account has a TraderClaw wallet (synced). Paste a different key below to re-sync, or use Log out to switch accounts."
+              : sessionAuthenticated
+                ? "You are signed in, but this API key has no wallet yet—finish Wallet Setup to create one, paste an API key that already has a wallet, or use Log out to switch accounts."
+                : "Paste API key to sync this dashboard session. If wallet proof is required, add wallet private key for local challenge signing."}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
