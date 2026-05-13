@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import kayba, { SpanType } from "@kayba_ai/tracing";
 import { orchestratorRequest } from "./src/http-client.js";
-import { SessionManager } from "./src/session-manager.js";
+import { SessionManager, TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT } from "./src/session-manager.js";
 import { AlphaBuffer } from "./src/alpha-buffer.js";
 import { AlphaStreamManager } from "./src/alpha-ws.js";
 import { shouldSyncGatewayCredentials } from "./src/gateway-config-sync.js";
@@ -268,7 +268,7 @@ const solanaTraderPlugin = {
 
     if (!apiKey && !config.refreshToken) {
       api.logger.error(
-        "[solana-trader] apiKey or refreshToken is required. Tell the user to run on their machine: traderclaw setup --signup (or traderclaw signup) for a new account, or traderclaw setup / traderclaw login if they already have an API key. The agent cannot sign up or edit credentials.",
+        `[solana-trader] apiKey or refreshToken is required. Tell the user to run on their machine: traderclaw setup --signup (or traderclaw signup) for a new account, or traderclaw setup / traderclaw login if they already have an API key. The agent cannot sign up or edit credentials. ${TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT}`,
       );
       return;
     }
@@ -3780,7 +3780,7 @@ const solanaTraderPlugin = {
             `[solana-trader] Session initialization failed: ${err instanceof Error ? err.message : String(err)}`,
           );
           api.logger.error(
-            "[solana-trader] Trading tools will fail until session is established. User should run on this machine: traderclaw login (after logout) or traderclaw setup / traderclaw signup for a new account. Wallet proof uses local signing only — private key never leaves this system.",
+            `[solana-trader] Trading tools will fail until session is established. User should run on this machine: traderclaw login (after logout) or traderclaw setup / traderclaw signup for a new account. Wallet proof uses local signing only — private key never leaves this system. ${TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT}`,
           );
           return;
         }

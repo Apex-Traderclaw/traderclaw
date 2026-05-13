@@ -36,6 +36,13 @@ export interface ChallengeResult {
 const TRADERCLAW_SESSION_TROUBLESHOOTING =
   "https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-auth-errors-or-the-agent-logged-out";
 
+/** Deep link into the VPS console Panel (TraderClaw login and other tools for managed installs). */
+export const TRADERCLAW_MANAGED_INSTALL_CONSOLE_PANEL_URL = "https://install.traderclaw.ai/panel";
+
+/** Appended where users see “run traderclaw login again” so managed-install users route through the VPS console. */
+export const TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT =
+  `If you installed via install.traderclaw.ai's managed VPS console, re-authenticate in Panel → TraderClaw login (${TRADERCLAW_MANAGED_INSTALL_CONSOLE_PANEL_URL}), then openclaw gateway restart when convenient.`;
+
 /** Emitted whenever access/refresh tokens change (refresh, startSession, etc.). */
 export interface RotatedSessionTokens {
   refreshToken: string;
@@ -462,7 +469,7 @@ export class SessionManager {
           "Wallet proof required but the gateway cannot sign interactively — no wallet key is wired into this process. " +
             "This account already has a wallet. On the host that runs OpenClaw (with a normal terminal / TTY), run: traderclaw login — complete wallet proof when prompted — then openclaw gateway restart. " +
             "That persists new session tokens without putting a private key in the gateway configuration. Do not paste private keys into openclaw.json. " +
-            `Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`,
+            `Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING} ${TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT}`,
         );
       }
 
@@ -503,7 +510,7 @@ export class SessionManager {
 
     if (!this.accessToken) {
       throw new Error(
-        `Session expired and could not be refreshed. Re-authentication required. On the gateway host try: traderclaw login — then openclaw gateway restart. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`,
+        `Session expired and could not be refreshed. Re-authentication required. On the gateway host try: traderclaw login — then openclaw gateway restart. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING} ${TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT}`,
       );
     }
 
@@ -518,7 +525,7 @@ export class SessionManager {
 
     if (!this.accessToken) {
       throw new Error(
-        `Session expired and could not be refreshed. Re-authentication required. On the gateway host try: traderclaw login — then openclaw gateway restart. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`,
+        `Session expired and could not be refreshed. Re-authentication required. On the gateway host try: traderclaw login — then openclaw gateway restart. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING} ${TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT}`,
       );
     }
 

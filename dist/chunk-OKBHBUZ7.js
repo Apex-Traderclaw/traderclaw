@@ -1,5 +1,7 @@
 // src/session-manager.ts
 var TRADERCLAW_SESSION_TROUBLESHOOTING = "https://docs.traderclaw.ai/docs/installation#troubleshooting-session-expired-auth-errors-or-the-agent-logged-out";
+var TRADERCLAW_MANAGED_INSTALL_CONSOLE_PANEL_URL = "https://install.traderclaw.ai/panel";
+var TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT = `If you installed via install.traderclaw.ai's managed VPS console, re-authenticate in Panel \u2192 TraderClaw login (${TRADERCLAW_MANAGED_INSTALL_CONSOLE_PANEL_URL}), then openclaw gateway restart when convenient.`;
 var BS58_CHARS = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 function b58Decode(str) {
   let num = BigInt(0);
@@ -357,7 +359,7 @@ var SessionManager = class _SessionManager {
       const walletPrivateKey = (await this.walletPrivateKeyProvider?.())?.trim();
       if (!walletPrivateKey) {
         throw new Error(
-          `Wallet proof required but the gateway cannot sign interactively \u2014 no wallet key is wired into this process. This account already has a wallet. On the host that runs OpenClaw (with a normal terminal / TTY), run: traderclaw login \u2014 complete wallet proof when prompted \u2014 then openclaw gateway restart. That persists new session tokens without putting a private key in the gateway configuration. Do not paste private keys into openclaw.json. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`
+          `Wallet proof required but the gateway cannot sign interactively \u2014 no wallet key is wired into this process. This account already has a wallet. On the host that runs OpenClaw (with a normal terminal / TTY), run: traderclaw login \u2014 complete wallet proof when prompted \u2014 then openclaw gateway restart. That persists new session tokens without putting a private key in the gateway configuration. Do not paste private keys into openclaw.json. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING} ${TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT}`
         );
       }
       walletPubKey = challenge.walletPublicKey || this.walletPublicKey || void 0;
@@ -387,7 +389,7 @@ var SessionManager = class _SessionManager {
     await this.unifiedRefresh();
     if (!this.accessToken) {
       throw new Error(
-        `Session expired and could not be refreshed. Re-authentication required. On the gateway host try: traderclaw login \u2014 then openclaw gateway restart. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`
+        `Session expired and could not be refreshed. Re-authentication required. On the gateway host try: traderclaw login \u2014 then openclaw gateway restart. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING} ${TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT}`
       );
     }
     return this.accessToken;
@@ -398,7 +400,7 @@ var SessionManager = class _SessionManager {
     await this.unifiedRefresh();
     if (!this.accessToken) {
       throw new Error(
-        `Session expired and could not be refreshed. Re-authentication required. On the gateway host try: traderclaw login \u2014 then openclaw gateway restart. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING}`
+        `Session expired and could not be refreshed. Re-authentication required. On the gateway host try: traderclaw login \u2014 then openclaw gateway restart. Troubleshooting: ${TRADERCLAW_SESSION_TROUBLESHOOTING} ${TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT}`
       );
     }
     return this.accessToken;
@@ -541,5 +543,7 @@ var SessionManager = class _SessionManager {
 };
 
 export {
+  TRADERCLAW_MANAGED_INSTALL_CONSOLE_PANEL_URL,
+  TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT,
   SessionManager
 };
