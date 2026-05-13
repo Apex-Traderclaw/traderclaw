@@ -4319,6 +4319,10 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
       }
     );
     let solanaTraderSessionWatchdogTimer = null;
+    let solanaTraderLifecycleDisposed = false;
+    __solanaTraderDisposers.push(() => {
+      solanaTraderLifecycleDisposed = true;
+    });
     __solanaTraderDisposers.push(() => {
       if (solanaTraderSessionWatchdogTimer !== null) {
         clearInterval(solanaTraderSessionWatchdogTimer);
@@ -4329,8 +4333,16 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
     const bootstrapSessionAndArmWatchdog = () => {
       if (solanaTraderBootstrapPromise) return solanaTraderBootstrapPromise;
       solanaTraderBootstrapPromise = (async () => {
+        const checkDisposed = (stage) => {
+          if (solanaTraderLifecycleDisposed) {
+            api.logger.info(`[solana-trader] Bootstrap aborted at ${stage}: lifecycle disposed by newer register`);
+            return true;
+          }
+          return false;
+        };
         try {
           await sessionManager.initialize();
+          if (checkDisposed("after sessionManager.initialize")) return;
           const info = sessionManager.getSessionInfo();
           api.logger.info(
             `[solana-trader] Session active. Tier: ${info.tier}, Scopes: ${info.scopes.join(", ")}`
@@ -4352,6 +4364,7 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
             timeout: 5e3,
             accessToken: await sessionManager.getAccessToken()
           });
+          if (checkDisposed("after healthz")) return;
           api.logger.info(`[solana-trader] Orchestrator healthz OK at ${orchestratorUrl}`);
           if (healthz && typeof healthz === "object") {
             const h = healthz;
@@ -4360,8 +4373,10 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
         } catch (err) {
           api.logger.warn(`[solana-trader] /healthz unreachable at ${orchestratorUrl}: ${err instanceof Error ? err.message : String(err)}`);
         }
+        if (checkDisposed("after healthz catch")) return;
         try {
           const status = await get("/api/system/status");
+          if (checkDisposed("after /api/system/status")) return;
           api.logger.info(`[solana-trader] Connected to orchestrator (walletId: ${walletId})`);
           if (status && typeof status === "object") {
             api.logger.info(`[solana-trader] System status: ${JSON.stringify(status)}`);
@@ -4369,8 +4384,10 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
         } catch (err) {
           api.logger.warn(`[solana-trader] /api/system/status unreachable: ${err instanceof Error ? err.message : String(err)}`);
         }
+        if (checkDisposed("after system-status catch")) return;
         try {
           const startupGate = await runStartupGate({ autoFixGateway: true, force: true });
+          if (checkDisposed("after startup gate")) return;
           api.logger.info(`[solana-trader] Startup gate completed: ok=${startupGate.ok}, passed=${startupGate.summary.passed}, failed=${startupGate.summary.failed}`);
           if (!startupGate.ok) {
             api.logger.warn(`[solana-trader] Startup gate failures: ${JSON.stringify(startupGate.steps.filter((step) => !step.ok))}`);
@@ -4378,12 +4395,15 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
         } catch (err) {
           api.logger.warn(`[solana-trader] Startup gate run failed: ${err instanceof Error ? err.message : String(err)}`);
         }
+        if (checkDisposed("after startup gate catch")) return;
         try {
           const probe = await runForwardProbe({ agentId: config.agentId || "main", source: "service_startup" });
+          if (checkDisposed("after forward probe")) return;
           api.logger.info(`[solana-trader] Forward probe result: ${JSON.stringify(probe)}`);
         } catch (err) {
           api.logger.warn(`[solana-trader] Forward probe failed: ${err instanceof Error ? err.message : String(err)}`);
         }
+        if (checkDisposed("before watchdog arm")) return;
         const WATCHDOG_INTERVAL_MS = 20 * 60 * 1e3;
         const FORWARD_PROBE_WATCHDOG_MS = 7 * 60 * 1e3;
         const STARTUP_GATE_AFTER_PROBE_FAIL_COOLDOWN_MS = 10 * 60 * 1e3;
@@ -4482,6 +4502,11 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
         }, WATCHDOG_INTERVAL_MS);
         if (solanaTraderSessionWatchdogTimer && typeof solanaTraderSessionWatchdogTimer === "object" && "unref" in solanaTraderSessionWatchdogTimer) {
           solanaTraderSessionWatchdogTimer.unref();
+        }
+        if (solanaTraderLifecycleDisposed && solanaTraderSessionWatchdogTimer !== null) {
+          clearInterval(solanaTraderSessionWatchdogTimer);
+          solanaTraderSessionWatchdogTimer = null;
+          api.logger.info("[solana-trader] Bootstrap cleared freshly-armed watchdog: lifecycle disposed during setInterval window");
         }
       })();
       return solanaTraderBootstrapPromise;
