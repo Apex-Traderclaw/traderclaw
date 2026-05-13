@@ -4,8 +4,9 @@ import {
   writeRefreshTokenToOpenclawAtomic
 } from "./chunk-IAQC34O7.js";
 import {
-  SessionManager
-} from "./chunk-NEMH5KB5.js";
+  SessionManager,
+  TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT
+} from "./chunk-OKBHBUZ7.js";
 import {
   looksLikeTelegramChatId,
   resolveTelegramRecipientToChatId
@@ -954,7 +955,7 @@ var solanaTraderPlugin = {
     }
     if (!apiKey && !config.refreshToken) {
       api.logger.error(
-        "[solana-trader] apiKey or refreshToken is required. Tell the user to run on their machine: traderclaw setup --signup (or traderclaw signup) for a new account, or traderclaw setup / traderclaw login if they already have an API key. The agent cannot sign up or edit credentials."
+        `[solana-trader] apiKey or refreshToken is required. Tell the user to run on their machine: traderclaw setup --signup (or traderclaw signup) for a new account, or traderclaw setup / traderclaw login if they already have an API key. The agent cannot sign up or edit credentials. ${TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT}`
       );
       return;
     }
@@ -4356,7 +4357,7 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
             `[solana-trader] Session initialization failed: ${err instanceof Error ? err.message : String(err)}`
           );
           api.logger.error(
-            "[solana-trader] Trading tools will fail until session is established. User should run on this machine: traderclaw login (after logout) or traderclaw setup / traderclaw signup for a new account. Wallet proof uses local signing only \u2014 private key never leaves this system."
+            `[solana-trader] Trading tools will fail until session is established. User should run on this machine: traderclaw login (after logout) or traderclaw setup / traderclaw signup for a new account. Wallet proof uses local signing only \u2014 private key never leaves this system. ${TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT}`
           );
           return;
         }

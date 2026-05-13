@@ -1,6 +1,10 @@
 import {
-  SessionManager
-} from "../chunk-NEMH5KB5.js";
+  SessionManager,
+  TRADERCLAW_MANAGED_INSTALL_CONSOLE_PANEL_URL,
+  TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT
+} from "../chunk-OKBHBUZ7.js";
 export {
-  SessionManager
+  SessionManager,
+  TRADERCLAW_MANAGED_INSTALL_CONSOLE_PANEL_URL,
+  TRADERCLAW_MANAGED_INSTALL_LOGIN_HINT
 };
