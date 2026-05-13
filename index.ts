@@ -3856,11 +3856,12 @@ const solanaTraderPlugin = {
 
     let solanaTraderSessionWatchdogTimer: ReturnType<typeof setInterval> | null = null;
 
-    // Idempotent dispose for the watchdog setInterval (created inside service.start).
-    // This disposer closure captures the timer variable by reference, so when the
-    // next register() fires our globalThis-stored dispose, it sees the current
-    // timer value and clears it — preventing the orphan-watchdog accumulation
-    // that produced the wss://api.traderclaw.ai/ws connect storm.
+    // Idempotent dispose for the watchdog setInterval (created inside
+    // bootstrapSessionAndArmWatchdog). This disposer closure captures the
+    // timer variable by reference, so when the next register() fires our
+    // globalThis-stored dispose, it sees the current timer value and clears
+    // it — preventing the orphan-watchdog accumulation that produced the
+    // wss://api.traderclaw.ai/ws connect storm.
     __solanaTraderDisposers.push(() => {
       if (solanaTraderSessionWatchdogTimer !== null) {
         clearInterval(solanaTraderSessionWatchdogTimer);
@@ -3868,9 +3869,20 @@ const solanaTraderPlugin = {
       }
     });
 
-    api.registerService({
-      id: "solana-trader-session",
-      start: async () => {
+    // Bootstrap that historically lived inside api.registerService({ start })
+    // is now factored out so it runs on EVERY register(), not only on the
+    // gateway's one-time service activation. OpenClaw calls service.start()
+    // exactly once at gateway boot, but it calls register() on every plugin
+    // load + re-register. Before this change, a re-register disposed the
+    // previous alpha manager + watchdog but never re-armed them, leaving
+    // alpha idle until the next gateway restart. A simple mutex
+    // (`solanaTraderBootstrapPromise`) prevents double-init when both
+    // service.start() and the post-register fire-and-forget kick this off
+    // on the very first plugin load.
+    let solanaTraderBootstrapPromise: Promise<void> | null = null;
+    const bootstrapSessionAndArmWatchdog = (): Promise<void> => {
+      if (solanaTraderBootstrapPromise) return solanaTraderBootstrapPromise;
+      solanaTraderBootstrapPromise = (async () => {
         try {
           await sessionManager.initialize();
           const info = sessionManager.getSessionInfo();
@@ -4048,6 +4060,14 @@ const solanaTraderPlugin = {
         ) {
           (solanaTraderSessionWatchdogTimer as NodeJS.Timeout).unref();
         }
+      })();
+      return solanaTraderBootstrapPromise;
+    };
+
+    api.registerService({
+      id: "solana-trader-session",
+      start: async () => {
+        await bootstrapSessionAndArmWatchdog();
       },
       stop: async () => {
         if (solanaTraderSessionWatchdogTimer !== null) {
@@ -4172,6 +4192,20 @@ const solanaTraderPlugin = {
           }
         }
       },
+    });
+
+    // Kick off the session bootstrap (sessionManager.initialize → healthz →
+    // system status → startup gate → forward probe → arm watchdog) on every
+    // register(), not just on first plugin load. service.start() runs once
+    // at gateway boot; re-registers (driven by OpenClaw config reloads,
+    // Telegram session activation, or agent turn) would otherwise leave the
+    // freshly-constructed AlphaStreamManager idle and the watchdog disposed.
+    // Mutex inside bootstrapSessionAndArmWatchdog makes this safe to call
+    // alongside service.start() on the very first load.
+    void bootstrapSessionAndArmWatchdog().catch((err: unknown) => {
+      api.logger.error(
+        `[solana-trader] Post-register bootstrap failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     });
   },
 };
