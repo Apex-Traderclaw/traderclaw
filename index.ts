@@ -3856,6 +3856,18 @@ const solanaTraderPlugin = {
 
     let solanaTraderSessionWatchdogTimer: ReturnType<typeof setInterval> | null = null;
 
+    // Cancellation flag: set by the disposer for THIS register call. Checked
+    // at each await boundary in bootstrapSessionAndArmWatchdog so an
+    // in-flight bootstrap aborts cleanly if its register was disposed mid
+    // flight (the ~5s race where two register() calls fire within bootstrap
+    // duration — e.g. boot + Telegram session activation within 1–2s). Also
+    // re-clears the watchdog timer if the dispose ran AFTER its disposer
+    // already executed but BEFORE the bootstrap reached setInterval.
+    let solanaTraderLifecycleDisposed = false;
+    __solanaTraderDisposers.push(() => {
+      solanaTraderLifecycleDisposed = true;
+    });
+
     // Idempotent dispose for the watchdog setInterval (created inside
     // bootstrapSessionAndArmWatchdog). This disposer closure captures the
     // timer variable by reference, so when the next register() fires our
@@ -3883,8 +3895,23 @@ const solanaTraderPlugin = {
     const bootstrapSessionAndArmWatchdog = (): Promise<void> => {
       if (solanaTraderBootstrapPromise) return solanaTraderBootstrapPromise;
       solanaTraderBootstrapPromise = (async () => {
+        // Helper to short-circuit when our register was disposed while we
+        // were awaiting an I/O call. Without this, an in-flight bootstrap
+        // would happily call subscribe() on an AlphaStreamManager that the
+        // disposer already unsubscribed, leaving an orphan WS that no
+        // future disposer can clean up (since its disposer was already
+        // consumed).
+        const checkDisposed = (stage: string): boolean => {
+          if (solanaTraderLifecycleDisposed) {
+            api.logger.info(`[solana-trader] Bootstrap aborted at ${stage}: lifecycle disposed by newer register`);
+            return true;
+          }
+          return false;
+        };
+
         try {
           await sessionManager.initialize();
+          if (checkDisposed("after sessionManager.initialize")) return;
           const info = sessionManager.getSessionInfo();
           api.logger.info(
             `[solana-trader] Session active. Tier: ${info.tier}, Scopes: ${info.scopes.join(", ")}`,
@@ -3907,6 +3934,7 @@ const solanaTraderPlugin = {
             timeout: 5000,
             accessToken: await sessionManager.getAccessToken(),
           });
+          if (checkDisposed("after healthz")) return;
           api.logger.info(`[solana-trader] Orchestrator healthz OK at ${orchestratorUrl}`);
           if (healthz && typeof healthz === "object") {
             const h = healthz as Record<string, unknown>;
@@ -3915,9 +3943,11 @@ const solanaTraderPlugin = {
         } catch (err) {
           api.logger.warn(`[solana-trader] /healthz unreachable at ${orchestratorUrl}: ${err instanceof Error ? err.message : String(err)}`);
         }
+        if (checkDisposed("after healthz catch")) return;
 
         try {
           const status = await get("/api/system/status");
+          if (checkDisposed("after /api/system/status")) return;
           api.logger.info(`[solana-trader] Connected to orchestrator (walletId: ${walletId})`);
           if (status && typeof status === "object") {
             api.logger.info(`[solana-trader] System status: ${JSON.stringify(status)}`);
@@ -3925,9 +3955,11 @@ const solanaTraderPlugin = {
         } catch (err) {
           api.logger.warn(`[solana-trader] /api/system/status unreachable: ${err instanceof Error ? err.message : String(err)}`);
         }
+        if (checkDisposed("after system-status catch")) return;
 
         try {
           const startupGate = await runStartupGate({ autoFixGateway: true, force: true });
+          if (checkDisposed("after startup gate")) return;
           api.logger.info(`[solana-trader] Startup gate completed: ok=${startupGate.ok}, passed=${startupGate.summary.passed}, failed=${startupGate.summary.failed}`);
           if (!startupGate.ok) {
             api.logger.warn(`[solana-trader] Startup gate failures: ${JSON.stringify(startupGate.steps.filter((step) => !step.ok))}`);
@@ -3935,13 +3967,16 @@ const solanaTraderPlugin = {
         } catch (err) {
           api.logger.warn(`[solana-trader] Startup gate run failed: ${err instanceof Error ? err.message : String(err)}`);
         }
+        if (checkDisposed("after startup gate catch")) return;
 
         try {
           const probe = await runForwardProbe({ agentId: config.agentId || "main", source: "service_startup" });
+          if (checkDisposed("after forward probe")) return;
           api.logger.info(`[solana-trader] Forward probe result: ${JSON.stringify(probe)}`);
         } catch (err) {
           api.logger.warn(`[solana-trader] Forward probe failed: ${err instanceof Error ? err.message : String(err)}`);
         }
+        if (checkDisposed("before watchdog arm")) return;
 
         // Background health watchdog: alpha ingestion staleness, subscription,
         // gateway credentials, and rate-limited orchestrator→gateway forward probe.
@@ -4059,6 +4094,15 @@ const solanaTraderPlugin = {
           "unref" in solanaTraderSessionWatchdogTimer
         ) {
           (solanaTraderSessionWatchdogTimer as NodeJS.Timeout).unref();
+        }
+
+        // Final guard: if dispose ran AFTER the watchdog disposer already
+        // executed but BEFORE we reached setInterval, this clears the
+        // freshly-armed timer that would otherwise be orphaned.
+        if (solanaTraderLifecycleDisposed && solanaTraderSessionWatchdogTimer !== null) {
+          clearInterval(solanaTraderSessionWatchdogTimer);
+          solanaTraderSessionWatchdogTimer = null;
+          api.logger.info("[solana-trader] Bootstrap cleared freshly-armed watchdog: lifecycle disposed during setInterval window");
         }
       })();
       return solanaTraderBootstrapPromise;
