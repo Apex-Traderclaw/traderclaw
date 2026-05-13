@@ -52,8 +52,15 @@ import { registerWebFetchTool } from "./lib/web-fetch.mjs";
 // ──────────────────────────────────────────────────────────────────────────
 
 type SolanaTraderLifecycle = {
-  /** Tear down all timers, WS managers, and session refresh intervals from the prior register call. */
-  dispose: () => Promise<void>;
+  /**
+   * Tear down all timers, WS managers, and session refresh intervals from the
+   * prior register call. Must be synchronous so it can run inside the
+   * synchronous plugin `register(api)` contract enforced by the OpenClaw
+   * gateway. Async cleanups inside are fire-and-forget (none of our
+   * disposers actually await anything — see comment in
+   * `AlphaStreamManager.unsubscribe`).
+   */
+  dispose: () => void;
 };
 const SOLANA_TRADER_LIFECYCLE_SINGLETON_KEY = Symbol.for(
   "openclaw.solana-trader.lifecycle.v1",
@@ -63,16 +70,16 @@ const __solanaTraderGlobalSingletonHolder = globalThis as unknown as Record<
   SolanaTraderLifecycle | undefined
 >;
 
-async function __solanaTraderDisposePreviousLifecycle(logger: {
+function __solanaTraderDisposePreviousLifecycle(logger: {
   info: (m: string) => void;
   warn: (m: string) => void;
-} | null): Promise<void> {
+} | null): void {
   const prev = __solanaTraderGlobalSingletonHolder[SOLANA_TRADER_LIFECYCLE_SINGLETON_KEY];
   if (!prev) return;
   __solanaTraderGlobalSingletonHolder[SOLANA_TRADER_LIFECYCLE_SINGLETON_KEY] = undefined;
   try {
     logger?.info("[solana-trader] Disposing previous plugin lifecycle before re-register");
-    await prev.dispose();
+    prev.dispose();
   } catch (err) {
     logger?.warn(
       `[solana-trader] Previous lifecycle dispose error: ${err instanceof Error ? err.message : String(err)}`,
@@ -306,15 +313,21 @@ const solanaTraderPlugin = {
   name: "Solana Trader",
   description: "Autonomous Solana memecoin trading agent — V1-Upgraded with intelligence lab, tool envelopes, prompt scrubbing, and split skill architecture",
 
-  async register(api: OpenClawPluginApi): Promise<void> {
+  register(api: OpenClawPluginApi): void {
     // Idempotent register: stop any timers/WS/refresh-loops from a prior
     // register call before constructing new singletons. See header comment.
-    await __solanaTraderDisposePreviousLifecycle(api.logger);
+    // Synchronous because the OpenClaw gateway enforces a synchronous
+    // `register(api)` contract — async returns fail with
+    // "plugin register must be synchronous".
+    __solanaTraderDisposePreviousLifecycle(api.logger);
 
-    // Collect teardown callbacks as resources are constructed below.
-    // The dispose handler stored on globalThis runs these in reverse order
-    // on the next register call (or on plugin unload).
-    const __solanaTraderDisposers: Array<() => Promise<void> | void> = [];
+    // Collect synchronous teardown callbacks as resources are constructed
+    // below. The dispose handler stored on globalThis runs these in reverse
+    // order on the next register call (or on plugin unload). All teardown
+    // operations are synchronous (clearInterval / clearTimeout / ws.close /
+    // SessionManager.destroy / AlphaStreamManager.unsubscribe — the latter
+    // is declared async but its body contains no await and runs sync).
+    const __solanaTraderDisposers: Array<() => void> = [];
 
     const pluginConfigRaw =
       api.pluginConfig && typeof api.pluginConfig === "object" && !Array.isArray(api.pluginConfig)
@@ -2133,8 +2146,12 @@ const solanaTraderPlugin = {
       },
     });
 
-    __solanaTraderDisposers.push(async () => {
-      try { await alphaStreamManager.unsubscribe(); } catch { /* ignore */ }
+    __solanaTraderDisposers.push(() => {
+      // `unsubscribe()` is declared async but its body is synchronous
+      // (sets intentionalClose, clearTimeout reconnect, ws.close). Fire it
+      // without awaiting so register stays synchronous; swallow any
+      // rejection from the discarded Promise to keep teardown isolated.
+      try { void alphaStreamManager.unsubscribe().catch(() => undefined); } catch { /* ignore */ }
     });
 
     type StartupStepName =
@@ -4145,12 +4162,13 @@ const solanaTraderPlugin = {
     // Publish dispose hook so the NEXT register() call (or plugin unload)
     // can tear down all timers/WS/refresh loops created above. Runs in
     // reverse construction order, swallows individual errors so a single
-    // failing disposer cannot block the rest.
+    // failing disposer cannot block the rest. Synchronous so it can be
+    // invoked from inside the synchronous plugin register contract.
     __solanaTraderSetCurrentLifecycle({
-      dispose: async () => {
+      dispose: () => {
         for (let i = __solanaTraderDisposers.length - 1; i >= 0; i--) {
           try {
-            await __solanaTraderDisposers[i]();
+            __solanaTraderDisposers[i]();
           } catch {
             /* ignore individual disposer errors */
           }

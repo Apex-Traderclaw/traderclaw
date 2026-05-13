@@ -778,13 +778,13 @@ var SOLANA_TRADER_LIFECYCLE_SINGLETON_KEY = Symbol.for(
   "openclaw.solana-trader.lifecycle.v1"
 );
 var __solanaTraderGlobalSingletonHolder = globalThis;
-async function __solanaTraderDisposePreviousLifecycle(logger) {
+function __solanaTraderDisposePreviousLifecycle(logger) {
   const prev = __solanaTraderGlobalSingletonHolder[SOLANA_TRADER_LIFECYCLE_SINGLETON_KEY];
   if (!prev) return;
   __solanaTraderGlobalSingletonHolder[SOLANA_TRADER_LIFECYCLE_SINGLETON_KEY] = void 0;
   try {
     logger?.info("[solana-trader] Disposing previous plugin lifecycle before re-register");
-    await prev.dispose();
+    prev.dispose();
   } catch (err) {
     logger?.warn(
       `[solana-trader] Previous lifecycle dispose error: ${err instanceof Error ? err.message : String(err)}`
@@ -941,8 +941,8 @@ var solanaTraderPlugin = {
   id: "solana-trader",
   name: "Solana Trader",
   description: "Autonomous Solana memecoin trading agent \u2014 V1-Upgraded with intelligence lab, tool envelopes, prompt scrubbing, and split skill architecture",
-  async register(api) {
-    await __solanaTraderDisposePreviousLifecycle(api.logger);
+  register(api) {
+    __solanaTraderDisposePreviousLifecycle(api.logger);
     const __solanaTraderDisposers = [];
     const pluginConfigRaw = api.pluginConfig && typeof api.pluginConfig === "object" && !Array.isArray(api.pluginConfig) ? api.pluginConfig : {};
     const walletPrivateKeyFromPluginJsonOnly = walletPrivateKeyFromPluginConfigRecord(pluginConfigRaw);
@@ -2601,9 +2601,9 @@ ${notes}
         error: (msg) => api.logger.error(`[solana-trader] ${msg}`)
       }
     });
-    __solanaTraderDisposers.push(async () => {
+    __solanaTraderDisposers.push(() => {
       try {
-        await alphaStreamManager.unsubscribe();
+        void alphaStreamManager.unsubscribe().catch(() => void 0);
       } catch {
       }
     });
@@ -4593,10 +4593,10 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
       `[solana-trader] V1-Upgraded-Public: Registered ${totalToolCount} tools (${baseToolCount} base + ${intelligenceToolCount} intelligence + ${webFetchCount} web_fetch = ${totalRegistered} Solana + ${xToolCount} X/Twitter read-only) for walletId ${walletId} (session auth mode)`
     );
     __solanaTraderSetCurrentLifecycle({
-      dispose: async () => {
+      dispose: () => {
         for (let i = __solanaTraderDisposers.length - 1; i >= 0; i--) {
           try {
-            await __solanaTraderDisposers[i]();
+            __solanaTraderDisposers[i]();
           } catch {
           }
         }
