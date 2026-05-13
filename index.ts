@@ -30,6 +30,60 @@ import { parseXConfig, registerXTools } from "./lib/x-tools.mjs";
 // @ts-ignore — shared ESM web-fetch module
 import { registerWebFetchTool } from "./lib/web-fetch.mjs";
 
+// ──────────────────────────────────────────────────────────────────────────
+// Module-scope lifecycle singleton (idempotent register guard).
+//
+// The OpenClaw runtime may call `register(api)` repeatedly for a single
+// plugin instance (per-session activation, context fetches that re-import
+// the plugin, config changes, etc.). Without active teardown each call
+// would create a NEW AlphaStreamManager + BitqueryStreamManager +
+// SessionManager (each with its own setInterval/setTimeout) AND a new
+// watchdog setInterval inside the registered service. The previous
+// instances' closures become unreachable but their timers and WebSocket
+// reconnect loops keep firing — that produced the >12 connect/sec storm
+// to wss://api.traderclaw.ai/ws documented in
+// `.cursor/plans/diagnose_plugin_rate_limit_d5b5f27f.plan.md`.
+//
+// The fix: at the start of every register, await teardown of the
+// previously-registered instance before constructing new singletons. We
+// store the dispose function on `globalThis` under a stable Symbol.for
+// key so the new instance can find it even when the runtime cleared
+// `require.cache` and re-imported this module file.
+// ──────────────────────────────────────────────────────────────────────────
+
+type SolanaTraderLifecycle = {
+  /** Tear down all timers, WS managers, and session refresh intervals from the prior register call. */
+  dispose: () => Promise<void>;
+};
+const SOLANA_TRADER_LIFECYCLE_SINGLETON_KEY = Symbol.for(
+  "openclaw.solana-trader.lifecycle.v1",
+);
+const __solanaTraderGlobalSingletonHolder = globalThis as unknown as Record<
+  symbol,
+  SolanaTraderLifecycle | undefined
+>;
+
+async function __solanaTraderDisposePreviousLifecycle(logger: {
+  info: (m: string) => void;
+  warn: (m: string) => void;
+} | null): Promise<void> {
+  const prev = __solanaTraderGlobalSingletonHolder[SOLANA_TRADER_LIFECYCLE_SINGLETON_KEY];
+  if (!prev) return;
+  __solanaTraderGlobalSingletonHolder[SOLANA_TRADER_LIFECYCLE_SINGLETON_KEY] = undefined;
+  try {
+    logger?.info("[solana-trader] Disposing previous plugin lifecycle before re-register");
+    await prev.dispose();
+  } catch (err) {
+    logger?.warn(
+      `[solana-trader] Previous lifecycle dispose error: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+function __solanaTraderSetCurrentLifecycle(lc: SolanaTraderLifecycle): void {
+  __solanaTraderGlobalSingletonHolder[SOLANA_TRADER_LIFECYCLE_SINGLETON_KEY] = lc;
+}
+
 interface XProfile {
   accessToken: string;
   accessTokenSecret: string;
@@ -252,7 +306,16 @@ const solanaTraderPlugin = {
   name: "Solana Trader",
   description: "Autonomous Solana memecoin trading agent — V1-Upgraded with intelligence lab, tool envelopes, prompt scrubbing, and split skill architecture",
 
-  register(api: OpenClawPluginApi) {
+  async register(api: OpenClawPluginApi): Promise<void> {
+    // Idempotent register: stop any timers/WS/refresh-loops from a prior
+    // register call before constructing new singletons. See header comment.
+    await __solanaTraderDisposePreviousLifecycle(api.logger);
+
+    // Collect teardown callbacks as resources are constructed below.
+    // The dispose handler stored on globalThis runs these in reverse order
+    // on the next register call (or on plugin unload).
+    const __solanaTraderDisposers: Array<() => Promise<void> | void> = [];
+
     const pluginConfigRaw =
       api.pluginConfig && typeof api.pluginConfig === "object" && !Array.isArray(api.pluginConfig)
         ? (api.pluginConfig as Record<string, unknown>)
@@ -419,6 +482,10 @@ const solanaTraderPlugin = {
         warn: (msg) => api.logger.warn(`[solana-trader] ${msg}`),
         error: (msg) => api.logger.error(`[solana-trader] ${msg}`),
       },
+    });
+
+    __solanaTraderDisposers.push(() => {
+      try { sessionManager.destroy(); } catch { /* ignore */ }
     });
 
     const onUnauthorized = async (): Promise<string> => {
@@ -1917,6 +1984,10 @@ const solanaTraderPlugin = {
       },
     });
 
+    __solanaTraderDisposers.push(() => {
+      try { bitqueryStreamManager.close(); } catch { /* ignore */ }
+    });
+
     api.registerTool({
       name: "solana_bitquery_subscribe",
       description: "Subscribe to a managed real-time Bitquery data stream. The orchestrator manages the WebSocket connection and broadcasts events. Available templates: realtimeTokenPricesSolana, ohlc1s, dexPoolLiquidityChanges, pumpFunTokenCreation, pumpFunTrades, pumpSwapTrades, raydiumNewPools. Returns a subscriptionId for tracking. Pass agentId to enable event-to-agent forwarding — orchestrator delivers each event to your Gateway via /v1/responses in addition to normal WS delivery. Subscriptions expire after 24h and emit subscription_expiring/subscription_expired events. See websocket-streaming.md in the solana-trader skill for the full message contract and usage patterns.",
@@ -2060,6 +2131,10 @@ const solanaTraderPlugin = {
         warn: (msg) => api.logger.warn(`[solana-trader] ${msg}`),
         error: (msg) => api.logger.error(`[solana-trader] ${msg}`),
       },
+    });
+
+    __solanaTraderDisposers.push(async () => {
+      try { await alphaStreamManager.unsubscribe(); } catch { /* ignore */ }
     });
 
     type StartupStepName =
@@ -3766,6 +3841,18 @@ const solanaTraderPlugin = {
 
     let solanaTraderSessionWatchdogTimer: ReturnType<typeof setInterval> | null = null;
 
+    // Idempotent dispose for the watchdog setInterval (created inside service.start).
+    // This disposer closure captures the timer variable by reference, so when the
+    // next register() fires our globalThis-stored dispose, it sees the current
+    // timer value and clears it — preventing the orphan-watchdog accumulation
+    // that produced the wss://api.traderclaw.ai/ws connect storm.
+    __solanaTraderDisposers.push(() => {
+      if (solanaTraderSessionWatchdogTimer !== null) {
+        clearInterval(solanaTraderSessionWatchdogTimer);
+        solanaTraderSessionWatchdogTimer = null;
+      }
+    });
+
     api.registerService({
       id: "solana-trader-session",
       start: async () => {
@@ -4054,6 +4141,22 @@ const solanaTraderPlugin = {
     api.logger.info(
       `[solana-trader] V1-Upgraded-Public: Registered ${totalToolCount} tools (${baseToolCount} base + ${intelligenceToolCount} intelligence + ${webFetchCount} web_fetch = ${totalRegistered} Solana + ${xToolCount} X/Twitter read-only) for walletId ${walletId} (session auth mode)`,
     );
+
+    // Publish dispose hook so the NEXT register() call (or plugin unload)
+    // can tear down all timers/WS/refresh loops created above. Runs in
+    // reverse construction order, swallows individual errors so a single
+    // failing disposer cannot block the rest.
+    __solanaTraderSetCurrentLifecycle({
+      dispose: async () => {
+        for (let i = __solanaTraderDisposers.length - 1; i >= 0; i--) {
+          try {
+            await __solanaTraderDisposers[i]();
+          } catch {
+            /* ignore individual disposer errors */
+          }
+        }
+      },
+    });
   },
 };
 
