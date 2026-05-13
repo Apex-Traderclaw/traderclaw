@@ -20,7 +20,7 @@ import {
 } from "./src/runtime-layout.js";
 import { IntelligenceLab } from "./src/intelligence-lab.js";
 import { scrubUntrustedText } from "./src/prompt-scrub.js";
-import { readRecoverySecretFromDisk, writeRecoverySecretToOpenclawAtomic, writeRefreshTokenToOpenclawAtomic } from "./src/recovery-secret-config.js";
+import { readRecoverySecretFromDisk } from "./src/recovery-secret-config.js";
 import { looksLikeTelegramChatId, resolveTelegramRecipientToChatId } from "./src/telegram-resolve.js";
 import * as fs from "fs";
 import * as path from "path";
@@ -439,6 +439,12 @@ const solanaTraderPlugin = {
         return typeof s === "string" && s.trim().length > 0 ? s.trim() : undefined;
       },
       onRecoverySecretRotated: (newSecret) => {
+        // Persist ONLY to the sidecar (session-tokens.json). Writing back to
+        // openclaw.json would trip OpenClaw's config-file watcher and force a
+        // plugin reload on every rotation, which creates a tight register →
+        // initialize → rotate → write → reload → register loop. The sidecar is
+        // already the source of truth at plugin bootstrap; see
+        // `recoverySecretProvider` above, which prefers sidecar first.
         try {
           const current = readSessionSidecar() ?? {};
           writeSessionSidecarAtomic({ ...current, recoverySecret: newSecret });
@@ -448,20 +454,20 @@ const solanaTraderPlugin = {
             `[solana-trader] Failed to write rotated recovery secret to sidecar: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
-        try {
-          writeRecoverySecretToOpenclawAtomic(newSecret);
-          api.logger.info("[solana-trader] Persisted rotated recovery secret to openclaw.json");
-        } catch (err: unknown) {
-          api.logger.warn(
-            `[solana-trader] Failed to write rotated recovery secret to openclaw.json: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
       },
       clientLabel: "openclaw-plugin-runtime",
       timeout: apiTimeout,
       initialAccessToken,
       initialAccessTokenExpiresAt,
       onTokensRotated: (tokens) => {
+        // Persist ONLY to the sidecar (session-tokens.json). Writing the
+        // rotated refresh token back into openclaw.json caused a feedback loop:
+        // OpenClaw watches openclaw.json for changes and reloads the plugin on
+        // any modification, which calls register() again, which constructs a
+        // new SessionManager whose initialize() refreshes immediately, which
+        // re-writes openclaw.json, etc. The sidecar is already the source of
+        // truth at plugin bootstrap; see `effectiveRefreshToken` above, which
+        // prefers sidecar.refreshToken first.
         try {
           const current = readSessionSidecar() ?? {};
           // Only propagate walletPublicKey when defined — spreading undefined would cause
@@ -479,14 +485,6 @@ const solanaTraderPlugin = {
         } catch (err: unknown) {
           api.logger.warn(
             `[solana-trader] Failed to persist session sidecar: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-        try {
-          writeRefreshTokenToOpenclawAtomic(tokens.refreshToken);
-          api.logger.info("[solana-trader] Persisted rotated refresh token to openclaw.json");
-        } catch (err: unknown) {
-          api.logger.warn(
-            `[solana-trader] Failed to write rotated refresh token to openclaw.json: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       },
@@ -3858,11 +3856,24 @@ const solanaTraderPlugin = {
 
     let solanaTraderSessionWatchdogTimer: ReturnType<typeof setInterval> | null = null;
 
-    // Idempotent dispose for the watchdog setInterval (created inside service.start).
-    // This disposer closure captures the timer variable by reference, so when the
-    // next register() fires our globalThis-stored dispose, it sees the current
-    // timer value and clears it — preventing the orphan-watchdog accumulation
-    // that produced the wss://api.traderclaw.ai/ws connect storm.
+    // Cancellation flag: set by the disposer for THIS register call. Checked
+    // at each await boundary in bootstrapSessionAndArmWatchdog so an
+    // in-flight bootstrap aborts cleanly if its register was disposed mid
+    // flight (the ~5s race where two register() calls fire within bootstrap
+    // duration — e.g. boot + Telegram session activation within 1–2s). Also
+    // re-clears the watchdog timer if the dispose ran AFTER its disposer
+    // already executed but BEFORE the bootstrap reached setInterval.
+    let solanaTraderLifecycleDisposed = false;
+    __solanaTraderDisposers.push(() => {
+      solanaTraderLifecycleDisposed = true;
+    });
+
+    // Idempotent dispose for the watchdog setInterval (created inside
+    // bootstrapSessionAndArmWatchdog). This disposer closure captures the
+    // timer variable by reference, so when the next register() fires our
+    // globalThis-stored dispose, it sees the current timer value and clears
+    // it — preventing the orphan-watchdog accumulation that produced the
+    // wss://api.traderclaw.ai/ws connect storm.
     __solanaTraderDisposers.push(() => {
       if (solanaTraderSessionWatchdogTimer !== null) {
         clearInterval(solanaTraderSessionWatchdogTimer);
@@ -3870,11 +3881,37 @@ const solanaTraderPlugin = {
       }
     });
 
-    api.registerService({
-      id: "solana-trader-session",
-      start: async () => {
+    // Bootstrap that historically lived inside api.registerService({ start })
+    // is now factored out so it runs on EVERY register(), not only on the
+    // gateway's one-time service activation. OpenClaw calls service.start()
+    // exactly once at gateway boot, but it calls register() on every plugin
+    // load + re-register. Before this change, a re-register disposed the
+    // previous alpha manager + watchdog but never re-armed them, leaving
+    // alpha idle until the next gateway restart. A simple mutex
+    // (`solanaTraderBootstrapPromise`) prevents double-init when both
+    // service.start() and the post-register fire-and-forget kick this off
+    // on the very first plugin load.
+    let solanaTraderBootstrapPromise: Promise<void> | null = null;
+    const bootstrapSessionAndArmWatchdog = (): Promise<void> => {
+      if (solanaTraderBootstrapPromise) return solanaTraderBootstrapPromise;
+      solanaTraderBootstrapPromise = (async () => {
+        // Helper to short-circuit when our register was disposed while we
+        // were awaiting an I/O call. Without this, an in-flight bootstrap
+        // would happily call subscribe() on an AlphaStreamManager that the
+        // disposer already unsubscribed, leaving an orphan WS that no
+        // future disposer can clean up (since its disposer was already
+        // consumed).
+        const checkDisposed = (stage: string): boolean => {
+          if (solanaTraderLifecycleDisposed) {
+            api.logger.info(`[solana-trader] Bootstrap aborted at ${stage}: lifecycle disposed by newer register`);
+            return true;
+          }
+          return false;
+        };
+
         try {
           await sessionManager.initialize();
+          if (checkDisposed("after sessionManager.initialize")) return;
           const info = sessionManager.getSessionInfo();
           api.logger.info(
             `[solana-trader] Session active. Tier: ${info.tier}, Scopes: ${info.scopes.join(", ")}`,
@@ -3897,6 +3934,7 @@ const solanaTraderPlugin = {
             timeout: 5000,
             accessToken: await sessionManager.getAccessToken(),
           });
+          if (checkDisposed("after healthz")) return;
           api.logger.info(`[solana-trader] Orchestrator healthz OK at ${orchestratorUrl}`);
           if (healthz && typeof healthz === "object") {
             const h = healthz as Record<string, unknown>;
@@ -3905,9 +3943,11 @@ const solanaTraderPlugin = {
         } catch (err) {
           api.logger.warn(`[solana-trader] /healthz unreachable at ${orchestratorUrl}: ${err instanceof Error ? err.message : String(err)}`);
         }
+        if (checkDisposed("after healthz catch")) return;
 
         try {
           const status = await get("/api/system/status");
+          if (checkDisposed("after /api/system/status")) return;
           api.logger.info(`[solana-trader] Connected to orchestrator (walletId: ${walletId})`);
           if (status && typeof status === "object") {
             api.logger.info(`[solana-trader] System status: ${JSON.stringify(status)}`);
@@ -3915,9 +3955,11 @@ const solanaTraderPlugin = {
         } catch (err) {
           api.logger.warn(`[solana-trader] /api/system/status unreachable: ${err instanceof Error ? err.message : String(err)}`);
         }
+        if (checkDisposed("after system-status catch")) return;
 
         try {
           const startupGate = await runStartupGate({ autoFixGateway: true, force: true });
+          if (checkDisposed("after startup gate")) return;
           api.logger.info(`[solana-trader] Startup gate completed: ok=${startupGate.ok}, passed=${startupGate.summary.passed}, failed=${startupGate.summary.failed}`);
           if (!startupGate.ok) {
             api.logger.warn(`[solana-trader] Startup gate failures: ${JSON.stringify(startupGate.steps.filter((step) => !step.ok))}`);
@@ -3925,13 +3967,16 @@ const solanaTraderPlugin = {
         } catch (err) {
           api.logger.warn(`[solana-trader] Startup gate run failed: ${err instanceof Error ? err.message : String(err)}`);
         }
+        if (checkDisposed("after startup gate catch")) return;
 
         try {
           const probe = await runForwardProbe({ agentId: config.agentId || "main", source: "service_startup" });
+          if (checkDisposed("after forward probe")) return;
           api.logger.info(`[solana-trader] Forward probe result: ${JSON.stringify(probe)}`);
         } catch (err) {
           api.logger.warn(`[solana-trader] Forward probe failed: ${err instanceof Error ? err.message : String(err)}`);
         }
+        if (checkDisposed("before watchdog arm")) return;
 
         // Background health watchdog: alpha ingestion staleness, subscription,
         // gateway credentials, and rate-limited orchestrator→gateway forward probe.
@@ -4050,6 +4095,23 @@ const solanaTraderPlugin = {
         ) {
           (solanaTraderSessionWatchdogTimer as NodeJS.Timeout).unref();
         }
+
+        // Final guard: if dispose ran AFTER the watchdog disposer already
+        // executed but BEFORE we reached setInterval, this clears the
+        // freshly-armed timer that would otherwise be orphaned.
+        if (solanaTraderLifecycleDisposed && solanaTraderSessionWatchdogTimer !== null) {
+          clearInterval(solanaTraderSessionWatchdogTimer);
+          solanaTraderSessionWatchdogTimer = null;
+          api.logger.info("[solana-trader] Bootstrap cleared freshly-armed watchdog: lifecycle disposed during setInterval window");
+        }
+      })();
+      return solanaTraderBootstrapPromise;
+    };
+
+    api.registerService({
+      id: "solana-trader-session",
+      start: async () => {
+        await bootstrapSessionAndArmWatchdog();
       },
       stop: async () => {
         if (solanaTraderSessionWatchdogTimer !== null) {
@@ -4174,6 +4236,20 @@ const solanaTraderPlugin = {
           }
         }
       },
+    });
+
+    // Kick off the session bootstrap (sessionManager.initialize → healthz →
+    // system status → startup gate → forward probe → arm watchdog) on every
+    // register(), not just on first plugin load. service.start() runs once
+    // at gateway boot; re-registers (driven by OpenClaw config reloads,
+    // Telegram session activation, or agent turn) would otherwise leave the
+    // freshly-constructed AlphaStreamManager idle and the watchdog disposed.
+    // Mutex inside bootstrapSessionAndArmWatchdog makes this safe to call
+    // alongside service.start() on the very first load.
+    void bootstrapSessionAndArmWatchdog().catch((err: unknown) => {
+      api.logger.error(
+        `[solana-trader] Post-register bootstrap failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     });
   },
 };
