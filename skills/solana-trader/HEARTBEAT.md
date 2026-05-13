@@ -54,8 +54,6 @@ If ALL four true → exit immediately. Do NOT hold hoping for recovery. A positi
 
 ## STEP 1: SCAN
 
-Call `solana_scan_launches` for new launches and `solana_scan_hot_pairs` for hot pairs.
-
 **Bitquery subscription events:** Check `solana_bitquery_subscriptions` for active streams. Process buffered events from real-time subscriptions. If no subscriptions active and first heartbeat of session, call `solana_bitquery_templates` to discover available templates and cache in memory.
 
 ## STEP 1.5: ALPHA SIGNALS
