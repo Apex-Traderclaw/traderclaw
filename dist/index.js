@@ -30,7 +30,7 @@ import {
 } from "./chunk-R24UDHQG.js";
 import {
   orchestratorRequest
-} from "./chunk-6GSGHMUH.js";
+} from "./chunk-E7QOPXSU.js";
 import {
   IntelligenceLab
 } from "./chunk-FBS5FGW2.js";
@@ -775,6 +775,26 @@ function registerWebFetchTool(api, Type2, logPrefix, options) {
 }
 
 // index.ts
+var SOLANA_TRADER_LIFECYCLE_SINGLETON_KEY = Symbol.for(
+  "openclaw.solana-trader.lifecycle.v1"
+);
+var __solanaTraderGlobalSingletonHolder = globalThis;
+function __solanaTraderDisposePreviousLifecycle(logger) {
+  const prev = __solanaTraderGlobalSingletonHolder[SOLANA_TRADER_LIFECYCLE_SINGLETON_KEY];
+  if (!prev) return;
+  __solanaTraderGlobalSingletonHolder[SOLANA_TRADER_LIFECYCLE_SINGLETON_KEY] = void 0;
+  try {
+    logger?.info("[solana-trader] Disposing previous plugin lifecycle before re-register");
+    prev.dispose();
+  } catch (err) {
+    logger?.warn(
+      `[solana-trader] Previous lifecycle dispose error: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+function __solanaTraderSetCurrentLifecycle(lc) {
+  __solanaTraderGlobalSingletonHolder[SOLANA_TRADER_LIFECYCLE_SINGLETON_KEY] = lc;
+}
 var TRADERCLAW_WALLET_PRIVATE_KEY_ENV = "TRADERCLAW_WALLET_PRIVATE_KEY";
 function walletPrivateKeyFromPluginConfigRecord(obj) {
   const w = typeof obj.walletPrivateKey === "string" ? obj.walletPrivateKey.trim() : "";
@@ -923,6 +943,8 @@ var solanaTraderPlugin = {
   name: "Solana Trader",
   description: "Autonomous Solana memecoin trading agent \u2014 V1-Upgraded with intelligence lab, tool envelopes, prompt scrubbing, and split skill architecture",
   register(api) {
+    __solanaTraderDisposePreviousLifecycle(api.logger);
+    const __solanaTraderDisposers = [];
     const pluginConfigRaw = api.pluginConfig && typeof api.pluginConfig === "object" && !Array.isArray(api.pluginConfig) ? api.pluginConfig : {};
     const walletPrivateKeyFromPluginJsonOnly = walletPrivateKeyFromPluginConfigRecord(pluginConfigRaw);
     const config = parseConfig(api.pluginConfig);
@@ -1048,6 +1070,12 @@ var solanaTraderPlugin = {
         info: (msg) => api.logger.info(`[solana-trader] ${msg}`),
         warn: (msg) => api.logger.warn(`[solana-trader] ${msg}`),
         error: (msg) => api.logger.error(`[solana-trader] ${msg}`)
+      }
+    });
+    __solanaTraderDisposers.push(() => {
+      try {
+        sessionManager.destroy();
+      } catch {
       }
     });
     const onUnauthorized = async () => {
@@ -2435,6 +2463,12 @@ ${notes}
         error: (msg) => api.logger.error(`[solana-trader] ${msg}`)
       }
     });
+    __solanaTraderDisposers.push(() => {
+      try {
+        bitqueryStreamManager.close();
+      } catch {
+      }
+    });
     api.registerTool({
       name: "solana_bitquery_subscribe",
       description: "Subscribe to a managed real-time Bitquery data stream. The orchestrator manages the WebSocket connection and broadcasts events. Available templates: realtimeTokenPricesSolana, ohlc1s, dexPoolLiquidityChanges, pumpFunTokenCreation, pumpFunTrades, pumpSwapTrades, raydiumNewPools. Returns a subscriptionId for tracking. Pass agentId to enable event-to-agent forwarding \u2014 orchestrator delivers each event to your Gateway via /v1/responses in addition to normal WS delivery. Subscriptions expire after 24h and emit subscription_expiring/subscription_expired events. See websocket-streaming.md in the solana-trader skill for the full message contract and usage patterns.",
@@ -2566,6 +2600,12 @@ ${notes}
         info: (msg) => api.logger.info(`[solana-trader] ${msg}`),
         warn: (msg) => api.logger.warn(`[solana-trader] ${msg}`),
         error: (msg) => api.logger.error(`[solana-trader] ${msg}`)
+      }
+    });
+    __solanaTraderDisposers.push(() => {
+      try {
+        void alphaStreamManager.unsubscribe().catch(() => void 0);
+      } catch {
       }
     });
     let startupGateRunning = null;
@@ -4297,6 +4337,12 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
       }
     );
     let solanaTraderSessionWatchdogTimer = null;
+    __solanaTraderDisposers.push(() => {
+      if (solanaTraderSessionWatchdogTimer !== null) {
+        clearInterval(solanaTraderSessionWatchdogTimer);
+        solanaTraderSessionWatchdogTimer = null;
+      }
+    });
     api.registerService({
       id: "solana-trader-session",
       start: async () => {
@@ -4547,6 +4593,16 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
     api.logger.info(
       `[solana-trader] V1-Upgraded-Public: Registered ${totalToolCount} tools (${baseToolCount} base + ${intelligenceToolCount} intelligence + ${webFetchCount} web_fetch = ${totalRegistered} Solana + ${xToolCount} X/Twitter read-only) for walletId ${walletId} (session auth mode)`
     );
+    __solanaTraderSetCurrentLifecycle({
+      dispose: () => {
+        for (let i = __solanaTraderDisposers.length - 1; i >= 0; i--) {
+          try {
+            __solanaTraderDisposers[i]();
+          } catch {
+          }
+        }
+      }
+    });
   }
 };
 var index_default = solanaTraderPlugin;
