@@ -4325,9 +4325,10 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
         solanaTraderSessionWatchdogTimer = null;
       }
     });
-    api.registerService({
-      id: "solana-trader-session",
-      start: async () => {
+    let solanaTraderBootstrapPromise = null;
+    const bootstrapSessionAndArmWatchdog = () => {
+      if (solanaTraderBootstrapPromise) return solanaTraderBootstrapPromise;
+      solanaTraderBootstrapPromise = (async () => {
         try {
           await sessionManager.initialize();
           const info = sessionManager.getSessionInfo();
@@ -4482,6 +4483,13 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
         if (solanaTraderSessionWatchdogTimer && typeof solanaTraderSessionWatchdogTimer === "object" && "unref" in solanaTraderSessionWatchdogTimer) {
           solanaTraderSessionWatchdogTimer.unref();
         }
+      })();
+      return solanaTraderBootstrapPromise;
+    };
+    api.registerService({
+      id: "solana-trader-session",
+      start: async () => {
+        await bootstrapSessionAndArmWatchdog();
       },
       stop: async () => {
         if (solanaTraderSessionWatchdogTimer !== null) {
@@ -4584,6 +4592,11 @@ Context compaction triggered. STATE.md synced from last persisted state. Decisio
           }
         }
       }
+    });
+    void bootstrapSessionAndArmWatchdog().catch((err) => {
+      api.logger.error(
+        `[solana-trader] Post-register bootstrap failed: ${err instanceof Error ? err.message : String(err)}`
+      );
     });
   }
 };
