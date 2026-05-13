@@ -20,7 +20,7 @@ import {
 } from "./src/runtime-layout.js";
 import { IntelligenceLab } from "./src/intelligence-lab.js";
 import { scrubUntrustedText } from "./src/prompt-scrub.js";
-import { readRecoverySecretFromDisk, writeRecoverySecretToOpenclawAtomic, writeRefreshTokenToOpenclawAtomic } from "./src/recovery-secret-config.js";
+import { readRecoverySecretFromDisk } from "./src/recovery-secret-config.js";
 import { looksLikeTelegramChatId, resolveTelegramRecipientToChatId } from "./src/telegram-resolve.js";
 import * as fs from "fs";
 import * as path from "path";
@@ -439,6 +439,12 @@ const solanaTraderPlugin = {
         return typeof s === "string" && s.trim().length > 0 ? s.trim() : undefined;
       },
       onRecoverySecretRotated: (newSecret) => {
+        // Persist ONLY to the sidecar (session-tokens.json). Writing back to
+        // openclaw.json would trip OpenClaw's config-file watcher and force a
+        // plugin reload on every rotation, which creates a tight register →
+        // initialize → rotate → write → reload → register loop. The sidecar is
+        // already the source of truth at plugin bootstrap; see
+        // `recoverySecretProvider` above, which prefers sidecar first.
         try {
           const current = readSessionSidecar() ?? {};
           writeSessionSidecarAtomic({ ...current, recoverySecret: newSecret });
@@ -448,20 +454,20 @@ const solanaTraderPlugin = {
             `[solana-trader] Failed to write rotated recovery secret to sidecar: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
-        try {
-          writeRecoverySecretToOpenclawAtomic(newSecret);
-          api.logger.info("[solana-trader] Persisted rotated recovery secret to openclaw.json");
-        } catch (err: unknown) {
-          api.logger.warn(
-            `[solana-trader] Failed to write rotated recovery secret to openclaw.json: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
       },
       clientLabel: "openclaw-plugin-runtime",
       timeout: apiTimeout,
       initialAccessToken,
       initialAccessTokenExpiresAt,
       onTokensRotated: (tokens) => {
+        // Persist ONLY to the sidecar (session-tokens.json). Writing the
+        // rotated refresh token back into openclaw.json caused a feedback loop:
+        // OpenClaw watches openclaw.json for changes and reloads the plugin on
+        // any modification, which calls register() again, which constructs a
+        // new SessionManager whose initialize() refreshes immediately, which
+        // re-writes openclaw.json, etc. The sidecar is already the source of
+        // truth at plugin bootstrap; see `effectiveRefreshToken` above, which
+        // prefers sidecar.refreshToken first.
         try {
           const current = readSessionSidecar() ?? {};
           // Only propagate walletPublicKey when defined — spreading undefined would cause
@@ -479,14 +485,6 @@ const solanaTraderPlugin = {
         } catch (err: unknown) {
           api.logger.warn(
             `[solana-trader] Failed to persist session sidecar: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-        try {
-          writeRefreshTokenToOpenclawAtomic(tokens.refreshToken);
-          api.logger.info("[solana-trader] Persisted rotated refresh token to openclaw.json");
-        } catch (err: unknown) {
-          api.logger.warn(
-            `[solana-trader] Failed to write rotated refresh token to openclaw.json: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       },
