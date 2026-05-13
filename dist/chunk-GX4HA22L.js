@@ -141,12 +141,19 @@ var AlphaStreamManager = class {
     return this.subscribed && this.ws !== null && this.ws.readyState === 1;
   }
   getStats() {
+    const ls = this.config.lifetimeState;
+    const lifetimeMessageCount = ls ? ls.lifetimeMessageCount : this.messageCount;
+    const firstConnectedAt = ls && ls.firstConnectedAt > 0 ? ls.firstConnectedAt : this.connectedAt;
+    const lifetimeLastEventTs = ls && ls.lifetimeLastEventTs > 0 ? ls.lifetimeLastEventTs : this.lastEventTs;
     return {
       subscribed: this.isSubscribed(),
-      messageCount: this.messageCount,
-      lastEventTs: this.lastEventTs,
+      messageCount: lifetimeMessageCount,
+      currentWsMessageCount: this.messageCount,
+      lastEventTs: lifetimeLastEventTs,
       connectedAt: this.connectedAt,
+      firstConnectedAt,
       uptimeSeconds: this.connectedAt ? Math.floor((Date.now() - this.connectedAt) / 1e3) : 0,
+      lifetimeUptimeSeconds: firstConnectedAt ? Math.floor((Date.now() - firstConnectedAt) / 1e3) : 0,
       reconnectAttempt: this.reconnectAttempt,
       unhealthyStreak: this.unhealthyStreak,
       circuitBackoff: this.unhealthyStreak >= CIRCUIT_UNHEALTHY_THRESHOLD
@@ -200,6 +207,9 @@ var AlphaStreamManager = class {
       this.ws.on("open", () => {
         clearTimeout(connectTimeout);
         this.connectedAt = Date.now();
+        if (this.config.lifetimeState && this.config.lifetimeState.firstConnectedAt === 0) {
+          this.config.lifetimeState.firstConnectedAt = this.connectedAt;
+        }
         this.reconnectAttempt = 0;
         this.log("info", "WebSocket connected, waiting for server handshake...");
         pingInterval = setInterval(() => {
@@ -286,6 +296,10 @@ var AlphaStreamManager = class {
       case "alpha_signal": {
         this.messageCount++;
         this.lastEventTs = Date.now();
+        if (this.config.lifetimeState) {
+          this.config.lifetimeState.lifetimeMessageCount++;
+          this.config.lifetimeState.lifetimeLastEventTs = this.lastEventTs;
+        }
         const data = msg.data;
         if (data) {
           const signal = {

@@ -1,9 +1,40 @@
 import { AlphaBuffer, type AlphaSignal } from "./alpha-buffer.js";
 
+/**
+ * Cross-instance state that should outlive any single AlphaStreamManager.
+ *
+ * The OpenClaw gateway calls `register(api)` repeatedly (every agent turn /
+ * Telegram interaction / config reload). Each register builds a fresh
+ * AlphaStreamManager whose instance-local `messageCount` and `connectedAt`
+ * would otherwise reset to 0 on every interaction — making the live tool
+ * report misleadingly small numbers (the "I just got a signal but the agent
+ * says we've received 0 today" problem).
+ *
+ * The plugin entry point allocates one of these on `globalThis` (keyed by a
+ * stable `Symbol.for(...)`) and passes the same reference into every newly
+ * constructed manager. The manager mutates it on every alpha_signal received
+ * and on every fresh WebSocket open, so `getStats()` can return both the
+ * per-current-WS view (debug) and the lifetime view (correct UX answer).
+ */
+export interface AlphaLifetimeState {
+  /** Total alpha_signal messages received across all WebSocket sessions in this gateway process. */
+  lifetimeMessageCount: number;
+  /** Wall-clock ms of the first successful WebSocket open since the gateway process started. 0 = never connected. */
+  firstConnectedAt: number;
+  /** Wall-clock ms of the most recent alpha_signal across all WebSocket sessions. 0 = never received one. */
+  lifetimeLastEventTs: number;
+}
+
 interface AlphaWSConfig {
   wsUrl: string;
   getAccessToken: () => Promise<string>;
   buffer: AlphaBuffer;
+  /**
+   * Cross-instance lifetime counters (see {@link AlphaLifetimeState}). Optional
+   * for backwards compatibility — when omitted, lifetime fields in getStats()
+   * fall back to the instance-local equivalents.
+   */
+  lifetimeState?: AlphaLifetimeState;
   agentId?: string;
   subscriberType?: string;
   logger?: {
@@ -188,20 +219,42 @@ export class AlphaStreamManager {
 
   getStats(): {
     subscribed: boolean;
+    /**
+     * Total alpha_signal messages received in this gateway process across all
+     * AlphaStreamManager instances and WebSocket reconnects. Stable across
+     * plugin re-registers — this is the headline number for "how many alpha
+     * signals have we gotten?" questions.
+     */
     messageCount: number;
+    /** Per-current-WS-connect message count (debug; resets on every reconnect). */
+    currentWsMessageCount: number;
+    /** Most recent alpha_signal across all sessions in this gateway process. */
     lastEventTs: number;
+    /** Wall-clock ms when the current WebSocket opened (resets on reconnect). */
     connectedAt: number;
+    /** Wall-clock ms of the first WS open since the gateway process started. */
+    firstConnectedAt: number;
+    /** Seconds since the current WebSocket opened (resets on reconnect). */
     uptimeSeconds: number;
+    /** Seconds since the first WS open in this gateway process (stable across re-registers/reconnects). */
+    lifetimeUptimeSeconds: number;
     reconnectAttempt: number;
     unhealthyStreak: number;
     circuitBackoff: boolean;
   } {
+    const ls = this.config.lifetimeState;
+    const lifetimeMessageCount = ls ? ls.lifetimeMessageCount : this.messageCount;
+    const firstConnectedAt = ls && ls.firstConnectedAt > 0 ? ls.firstConnectedAt : this.connectedAt;
+    const lifetimeLastEventTs = ls && ls.lifetimeLastEventTs > 0 ? ls.lifetimeLastEventTs : this.lastEventTs;
     return {
       subscribed: this.isSubscribed(),
-      messageCount: this.messageCount,
-      lastEventTs: this.lastEventTs,
+      messageCount: lifetimeMessageCount,
+      currentWsMessageCount: this.messageCount,
+      lastEventTs: lifetimeLastEventTs,
       connectedAt: this.connectedAt,
+      firstConnectedAt,
       uptimeSeconds: this.connectedAt ? Math.floor((Date.now() - this.connectedAt) / 1000) : 0,
+      lifetimeUptimeSeconds: firstConnectedAt ? Math.floor((Date.now() - firstConnectedAt) / 1000) : 0,
       reconnectAttempt: this.reconnectAttempt,
       unhealthyStreak: this.unhealthyStreak,
       circuitBackoff: this.unhealthyStreak >= CIRCUIT_UNHEALTHY_THRESHOLD,
@@ -258,6 +311,12 @@ export class AlphaStreamManager {
       this.ws.on("open", () => {
         clearTimeout(connectTimeout);
         this.connectedAt = Date.now();
+        if (this.config.lifetimeState && this.config.lifetimeState.firstConnectedAt === 0) {
+          // First successful open in this gateway process: anchor the lifetime
+          // uptime clock. Subsequent re-registers / reconnects keep this value
+          // so "since we started" UX numbers stay accurate.
+          this.config.lifetimeState.firstConnectedAt = this.connectedAt;
+        }
         this.reconnectAttempt = 0;
         this.log("info", "WebSocket connected, waiting for server handshake...");
 
@@ -350,6 +409,10 @@ export class AlphaStreamManager {
       case "alpha_signal": {
         this.messageCount++;
         this.lastEventTs = Date.now();
+        if (this.config.lifetimeState) {
+          this.config.lifetimeState.lifetimeMessageCount++;
+          this.config.lifetimeState.lifetimeLastEventTs = this.lastEventTs;
+        }
         const data = msg.data as Record<string, unknown>;
         if (data) {
           const signal: Omit<AlphaSignal, "_seen" | "_ingestedAt"> = {
