@@ -48,6 +48,7 @@ import { Type } from "@sinclair/typebox";
 import kayba, { SpanType } from "@kayba_ai/tracing";
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "os";
 
 // lib/x-client.mjs
@@ -802,6 +803,16 @@ function getOrCreateAlphaLifetimeState() {
   __solanaTraderAlphaSingletonHolder[SOLANA_TRADER_ALPHA_LIFETIME_SINGLETON_KEY] = fresh;
   return fresh;
 }
+var __solanaTraderStatusQueriesMd = (() => {
+  try {
+    const distPath = fileURLToPath(import.meta.url);
+    const packageRoot = path.dirname(path.dirname(distPath));
+    const mdPath = path.join(packageRoot, "lib", "status-queries.md");
+    return fs.readFileSync(mdPath, "utf-8");
+  } catch {
+    return void 0;
+  }
+})();
 function __solanaTraderDisposePreviousLifecycle(logger) {
   const prev = __solanaTraderGlobalSingletonHolder[SOLANA_TRADER_LIFECYCLE_SINGLETON_KEY];
   if (!prev) return;
@@ -4298,6 +4309,14 @@ ${String(params.summary)}
           content: "# Live alpha status queries \u2014 always call the tool\n\nWhen the user asks anything about CURRENT alpha activity, call the matching tool **on this turn**. Do NOT answer from memory, heartbeat history, journal logs, or earlier turn context \u2014 alpha signals are not journalled per-message, so 'I don't see any / 0' is wrong by default.\n\n## Routing\n\n| User question shape | Tool(s) to call | Key fields in response |\n|---|---|---|\n| how many alpha signals / are we getting alpha / activity since gateway start | `solana_alpha_signals` (unseen:false) | stats.messageCount, stats.lifetimeUptimeSeconds, stats.lastEventTs, subscribed, bufferSize |\n| is alpha connected / healthy / stream status | `solana_alpha_signals` (unseen:false) | subscribed, stats.reconnectAttempt, stats.unhealthyStreak, stats.circuitBackoff, stats.lastEventTs |\n| how many alpha signals in last hour / today / this week / since <day> | `solana_alpha_signals` (live state) **AND** `solana_alpha_history` (days=\u2026 or compute from window) | live: stats.messageCount + bufferSize; historical: pings[] in window |\n| any alpha on token <X> (recent / historical) | `solana_alpha_signals` for in-buffer signals, then `solana_alpha_history` (tokenAddress=X, days=N) for older | both responses merged by ts |\n| what alpha sources / channels are active | `solana_alpha_sources` | sources[] (name, type, count, avgScore) |\n| latest signals / new signals | `solana_alpha_signals` (unseen:false) | signals[] sorted newest last |\n\n## Field meanings \u2014 IMPORTANT\n\n`solana_alpha_signals` returns `stats` with both lifetime and current-WS fields. Use LIFETIME fields for user-facing answers:\n\n- `stats.messageCount` = **lifetime** total alpha_signal messages received since the gateway process started. Survives plugin re-registers and WS reconnects. **This is the headline number.**\n- `stats.lifetimeUptimeSeconds` = seconds since the first WS open in this process.\n- `stats.lastEventTs` = wall-clock ms of the most recent signal (lifetime).\n- `stats.firstConnectedAt` = wall-clock ms of the first WS open in this process.\n\nDebug-only (do NOT report these as 'totals' \u2014 they reset on every WS reconnect / plugin re-register):\n\n- `stats.currentWsMessageCount` \u2014 messages since the current WS opened.\n- `stats.uptimeSeconds` \u2014 current WS uptime.\n- `stats.connectedAt` \u2014 current WS open ts.\n\n## When to also call `solana_alpha_history`\n\nCall `solana_alpha_history` in addition to `solana_alpha_signals` whenever the user's window pre-dates the current gateway-process lifetime (e.g. `stats.lifetimeUptimeSeconds` is shorter than the asked window, or `stats.messageCount` is 0 because the gateway just restarted). Tier=enterprise returns up to 200 pings, up to ~1 year back.\n\n## Reply template (live-only)\n\n```\nLive alpha state:\n- subscribed: <bool>\n- lifetime: <messageCount> messages over <lifetimeUptimeSeconds>s (\u2248 <rate>/min) since gateway start\n- last signal: <Xs/Xm ago> (lastEventTs)\n- buffer (deduped): <bufferSize>\n- reconnects: <reconnectAttempt>, unhealthy streak: <unhealthyStreak>\n```\n\n## Reply template (with historical window, e.g. 'last hour')\n\n```\nAlpha activity (<window>):\n- live (gateway lifetime): <messageCount> messages over <lifetimeUptimeSeconds>s\n- historical (`solana_alpha_history` days=<N>): <pings.length> pings\n- combined unique within <window>: <merged count>\n- subscribed: <bool>, last signal: <ago>\n```\n\nThis routing overrides any heartbeat-cycle 'minimal calls' cap: ad-hoc user status questions are NOT subject to per-cycle envelopes.\n",
           source: "solana-trader:live-queries"
         });
+        if (__solanaTraderStatusQueriesMd) {
+          context.bootstrapFiles.push({
+            name: "STATUS_QUERIES.md",
+            path: "STATUS_QUERIES.md",
+            content: __solanaTraderStatusQueriesMd,
+            source: "solana-trader:status-queries"
+          });
+        }
         api.logger.info(`[solana-trader] Bootstrap: injected ${context.bootstrapFiles.length} files for agent ${bootAgentId}`);
       },
       {
