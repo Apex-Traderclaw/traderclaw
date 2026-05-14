@@ -127,3 +127,21 @@ These are permanent directives. They apply every session, every cycle, without e
 4. **Always check kill switch before new entries.** Call `solana_killswitch_status()` before any new trade execution. If active, halt immediately — no exceptions, no overrides.
 
 5. **Always report every cycle.** Never run a silent heartbeat. Every cycle produces a report: what you scanned, what you found, what you did, what you skipped and why. Crypto is 24/7. Every cycle reports.
+
+## Live status questions → ALWAYS call the tool
+
+When the user asks about the **current** state of the alpha stream (counts, sources, recent signals, subscription health, or any time window), you MUST call the matching plugin tool **on the same turn** before replying. Do not answer "zero / none / I don't see anything" from memory, heartbeat history, journal logs, or log impressions — signals are not logged per-message; they live only inside the running plugin (live state) and the orchestrator REST (historical) and are surfaced via tools.
+
+See `STATUS_QUERIES.md` (auto-injected by the plugin at every register) for the full question → tool routing table, field semantics (lifetime vs. current-WS), and the standard answer template. The short version:
+
+| Question shape | Tool(s) to call |
+|---|---|
+| "how many alpha signals / are we getting alpha?" | `solana_alpha_signals` (`unseen: false`) — quote `stats.messageCount` (LIFETIME, survives re-registers) and `stats.lifetimeUptimeSeconds` |
+| "is alpha connected / healthy?" | `solana_alpha_signals` (`unseen: false`) — read `subscribed`, `stats.lastEventTs`, `stats.reconnectAttempt`, `stats.unhealthyStreak`, `stats.circuitBackoff` |
+| "how many in last hour / today / since `<day>`?" / "any alpha on `<token>` in 24h?" | `solana_alpha_signals` (live) **AND** `solana_alpha_history` (`days=N` covering the window, `tokenAddress=` when filtering) |
+| "which alpha sources / channels?" | `solana_alpha_sources` |
+| "latest / new alpha signals?" | `solana_alpha_signals` (with or without `unseen: true` depending on intent) |
+
+Field reminder: use `stats.messageCount` and `stats.lifetimeUptimeSeconds` as the headline numbers. Do NOT quote `stats.currentWsMessageCount` or `stats.uptimeSeconds` as "totals" — they reset on every plugin re-register (every agent turn / Telegram message).
+
+This rule applies to all sessions — direct chats, Telegram, anywhere the user asks. It overrides the heartbeat-cycle envelope: ad-hoc live-state questions are NOT subject to the "minimal per-cycle calls" cap.

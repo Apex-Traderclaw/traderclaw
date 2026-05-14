@@ -24,6 +24,7 @@ import { readRecoverySecretFromDisk } from "./src/recovery-secret-config.js";
 import { looksLikeTelegramChatId, resolveTelegramRecipientToChatId } from "./src/telegram-resolve.js";
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "os";
 // @ts-ignore — shared ESM X tools module
 import { parseXConfig, registerXTools } from "./lib/x-tools.mjs";
@@ -126,6 +127,34 @@ function getOrCreateAlphaLifetimeState(): AlphaLifetimeState {
   __solanaTraderAlphaSingletonHolder[SOLANA_TRADER_ALPHA_LIFETIME_SINGLETON_KEY] = fresh;
   return fresh;
 }
+
+// =============================================================================
+// Bootstrap content loaded from disk
+//
+// `lib/status-queries.md` is the long-form routing guide injected on every
+// `register()` as a `bootstrapFile`. It complements the inline `live-queries.md`
+// card with full templates, common-mistakes section, and field semantics.
+//
+// We read it once at module init (synchronous, tiny file). When the read fails
+// (e.g. truncated install) we silently fall back to undefined and skip the
+// injection — the inline `live-queries.md` still gives the agent the routing
+// rules, so the agent stays functional.
+//
+// Path resolution: import.meta.url points at `dist/index.js` after esbuild
+// bundling, so we go up one directory to the package root and read `lib/`
+// from there. `lib/` is whitelisted in package.json `files` so it ships with
+// every npm install.
+// =============================================================================
+const __solanaTraderStatusQueriesMd: string | undefined = (() => {
+  try {
+    const distPath = fileURLToPath(import.meta.url);
+    const packageRoot = path.dirname(path.dirname(distPath));
+    const mdPath = path.join(packageRoot, "lib", "status-queries.md");
+    return fs.readFileSync(mdPath, "utf-8");
+  } catch {
+    return undefined;
+  }
+})();
 
 function __solanaTraderDisposePreviousLifecycle(logger: {
   info: (m: string) => void;
@@ -3922,6 +3951,20 @@ const solanaTraderPlugin = {
           "This routing overrides any heartbeat-cycle 'minimal calls' cap: ad-hoc user status questions are NOT subject to per-cycle envelopes.\n",
         source: "solana-trader:live-queries",
       });
+
+      // Full long-form routing document. `live-queries.md` above is a short
+      // routing card; this is the comprehensive reference with templates,
+      // common-mistakes section, and full field semantics. Source-of-truth
+      // is `lib/status-queries.md` in the plugin package (loaded once at
+      // module init — see `__solanaTraderStatusQueriesMd` above).
+      if (__solanaTraderStatusQueriesMd) {
+        context.bootstrapFiles.push({
+          name: "STATUS_QUERIES.md",
+          path: "STATUS_QUERIES.md",
+          content: __solanaTraderStatusQueriesMd,
+          source: "solana-trader:status-queries",
+        });
+      }
 
       api.logger.info(`[solana-trader] Bootstrap: injected ${context.bootstrapFiles.length} files for agent ${bootAgentId}`);
     },
